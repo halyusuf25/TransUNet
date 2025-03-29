@@ -1,0 +1,138 @@
+python train.py --dataset Synapse --student_vit_name R50-ViT-B_16_SHA --teacher_vit_name R50-ViT-B_16 --max_epochs 30
+python test.py --dataset Synapse --vit_name R50-ViT-B_16_SHA
+python train.py --dataset Synapse --vit_name R50-ViT-B_16_SHA --max_epochs 30
+
+CUDA_VISIBLE_DEVICES=0 python train.py --dataset Synapse --vit_name R50-ViT-B_16
+torchrun --nproc_per_node=6 --nnode=1 train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16  \
+         --n_gpu=6
+
+OMP_NUM_THREADS=10 torchrun --nproc_per_node=6 train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16  \
+         --n_gpu=6
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,6 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16  \
+         --max_epochs=30 \
+         --n_gpu=6
+
+https://storage.googleapis.com/vit_models/imagenet21k/R50%2BViT-B_16.npz
+
+https://drive.google.com/file/d/1BvpY0g9mKkkhdHpAX1HqDw8iTJNbFuwq/view?usp=drive_link
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py --dataset Synapse --vit_name R50-ViT-B_16
+
+OMP_NUM_THREADS = 10 torchrun --nproc_per_node=4 --nnode=1 train.py --dataset Synapse --vit_name R50-ViT-B_16 --max_epochs 30
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=5
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=5 \
+    --n_gpu=6
+https://drive.google.com/file/d/1ugXdSGGDJaOM-rOx_boQYoO71tTSe9k6/view?usp=sharing
+
+
+
+training script:
+default training command
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=30 \
+         --ckpt transunet_shsa_12layer \
+         --use_shsa
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=30 \
+         --ckpt transunet_shsa_1layer \
+         --num_layers=1 \
+         --use_shsa
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=30 \
+         --ckpt transunet_shsa_3layer \
+         --num_layers=3 \
+         --use_shsa
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=30 \
+         --ckpt transunet_shsa_6layer \
+         --num_layers=6 \
+         --use_shsa
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --ckpt transunet_12layer_epoch_29.pth 
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --ckpt transunet_shsa_12layer_epoch_29.pth \
+    --use_shsa
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --num_layers=6 \
+    --ckpt transunet_6layer_epoch_29.pth 
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --num_layers=6 \
+    --ckpt transunet_shsa_6layer_epoch_29.pth \
+    --use_shsa
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --num_layers=3 \
+    --ckpt transunet_3layer_epoch_29.pth 
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --num_layers=3 \
+    --ckpt transunet_shsa_3layer_epoch_29.pth \
+    --use_shsa
+
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --num_layers=1 \
+    --ckpt transunet_1layer_epoch_29.pth 
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --num_layers=1 \
+    --ckpt transunet_shsa_1layer_epoch_29.pth \
+    --use_shsa
