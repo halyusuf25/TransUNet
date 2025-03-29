@@ -52,7 +52,7 @@ def trainer_synapse(args, model, snapshot_path):
         for i_batch, sampled_batch in enumerate(trainloader):
             image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
-            outputs = model(image_batch)
+            outputs, _ = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
             loss_dice = dice_loss(outputs, label_batch, softmax=True)
             loss = 0.5 * loss_ce + 0.5 * loss_dice
@@ -83,11 +83,15 @@ def trainer_synapse(args, model, snapshot_path):
         if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), save_mode_path)
+            local_path = os.path.join(args.ckpt_dir, args.ckpt + '_epoch_' + str(epoch_num) + '.pth')
+            torch.save(model.state_dict(), local_path)
             logging.info("save model to {}".format(save_mode_path))
 
         if epoch_num >= max_epoch - 1:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), save_mode_path)
+            local_path = os.path.join(args.ckpt_dir, args.ckpt + '_epoch_' + str(epoch_num) + '.pth')
+            torch.save(model.state_dict(), local_path)
             logging.info("save model to {}".format(save_mode_path))
             iterator.close()
             break
