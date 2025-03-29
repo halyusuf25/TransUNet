@@ -1,0 +1,128 @@
+ckpt: transunet_12layer_epoch_29.pth 
+atten: MHMA
+epochs=30
+num_layers 12
+desc: transunet with MHMA with 12 layers (default config)
+
+Mean class 1 mean_dice 0.833410 mean_hd95 20.086951
+Mean class 2 mean_dice 0.599110 mean_hd95 26.997479
+Mean class 3 mean_dice 0.762665 mean_hd95 63.446957
+Mean class 4 mean_dice 0.673986 mean_hd95 35.507692
+Mean class 5 mean_dice 0.923879 mean_hd95 22.660041
+Mean class 6 mean_dice 0.514109 mean_hd95 15.911714
+Mean class 7 mean_dice 0.823516 mean_hd95 69.558097
+Mean class 8 mean_dice 0.710052 mean_hd95 18.830053
+Testing performance in best val model: mean_dice : 0.730091 mean_hd95 : 34.124873
+
+
+ckpt: transunet_6layer_epoch_29.pth 
+atten: MHMA
+epochs=30
+num_layers 6
+desc: transunet with MHMA with 6 layers
+Mean class 1 mean_dice 0.830118 mean_hd95 13.972798
+Mean class 2 mean_dice 0.601210 mean_hd95 42.996234
+Mean class 3 mean_dice 0.754150 mean_hd95 44.798908
+Mean class 4 mean_dice 0.684117 mean_hd95 67.080883
+Mean class 5 mean_dice 0.929697 mean_hd95 34.521249
+Mean class 6 mean_dice 0.544914 mean_hd95 14.604348
+Mean class 7 mean_dice 0.839795 mean_hd95 65.301478
+Mean class 8 mean_dice 0.749738 mean_hd95 20.173390
+Testing performance in best val model: mean_dice : 0.741717 mean_hd95 : 37.931161
+
+ckpt: transunet_3layer_epoch_29.pth 
+atten: MHMA
+epochs=30
+num_layers 3
+desc: transunet with MHMA with 3 layers
+Mean class 1 mean_dice 0.852985 mean_hd95 11.450214
+Mean class 2 mean_dice 0.614410 mean_hd95 25.613864
+Mean class 3 mean_dice 0.792088 mean_hd95 65.536963
+Mean class 4 mean_dice 0.715065 mean_hd95 12.035539
+Mean class 5 mean_dice 0.930182 mean_hd95 31.993746
+Mean class 6 mean_dice 0.526797 mean_hd95 14.037097
+Mean class 7 mean_dice 0.838130 mean_hd95 49.886866
+Mean class 8 mean_dice 0.731834 mean_hd95 20.935763
+Testing performance in best val model: mean_dice : 0.750186 mean_hd95 : 28.936257
+
+
+ckpt: transunet_1layer_epoch_29.pth 
+atten: MHMA
+epochs=30
+num_layers 1
+desc: transunet with MHMA with 1 layers
+Mean class 1 mean_dice 0.844129 mean_hd95 11.118702
+Mean class 2 mean_dice 0.591202 mean_hd95 26.471122
+Mean class 3 mean_dice 0.818836 mean_hd95 41.418926
+Mean class 4 mean_dice 0.774266 mean_hd95 51.214148
+Mean class 5 mean_dice 0.930668 mean_hd95 36.507581
+Mean class 6 mean_dice 0.552075 mean_hd95 12.878856
+Mean class 7 mean_dice 0.844786 mean_hd95 26.099269
+Mean class 8 mean_dice 0.735203 mean_hd95 17.480326
+Testing performance in best val model: mean_dice : 0.761396 mean_hd95 : 27.898616
+
+
+
+
+
+Below results are for SHSA
+ckpt: transunet_shsa_12layer_epoch_29.pth 
+atten: SHSA
+epochs=30
+desc: transunet with SHSA with 12 layers
+
+Mean class 1 mean_dice 0.833914 mean_hd95 10.800635
+Mean class 2 mean_dice 0.590333 mean_hd95 36.017026
+Mean class 3 mean_dice 0.789835 mean_hd95 62.453713
+Mean class 4 mean_dice 0.732189 mean_hd95 59.425186
+Mean class 5 mean_dice 0.931307 mean_hd95 23.486644
+Mean class 6 mean_dice 0.554046 mean_hd95 14.307810
+Mean class 7 mean_dice 0.825973 mean_hd95 57.164778
+Mean class 8 mean_dice 0.735081 mean_hd95 16.852569
+Testing performance in best val model: mean_dice : 0.749085 mean_hd95 : 35.063545
+
+
+
+ckpt: transunet_shsa_6layer_epoch_29.pth 
+atten: SHSA
+epochs=30
+desc: transunet with SHSA with 6 layers
+
+Mean class 1 mean_dice 0.842697 mean_hd95 9.567586
+Mean class 2 mean_dice 0.588082 mean_hd95 49.275662
+Mean class 3 mean_dice 0.775464 mean_hd95 65.239571
+Mean class 4 mean_dice 0.716327 mean_hd95 41.709610
+Mean class 5 mean_dice 0.930782 mean_hd95 39.334073
+Mean class 6 mean_dice 0.570986 mean_hd95 13.895044
+Mean class 7 mean_dice 0.854260 mean_hd95 34.028650
+Mean class 8 mean_dice 0.742633 mean_hd95 18.361563
+Testing performance in best val model: mean_dice : 0.752654 mean_hd95 : 33.926470
+
+ckpt: transunet_shsa_3layer_epoch_29.pth 
+atten: SHSA
+epochs=30
+desc: transunet with SHSA with 3 layers
+Mean class 1 mean_dice 0.844273 mean_hd95 12.007822
+Mean class 2 mean_dice 0.600310 mean_hd95 19.994772
+Mean class 3 mean_dice 0.792128 mean_hd95 38.054364
+Mean class 4 mean_dice 0.754363 mean_hd95 70.316299
+Mean class 5 mean_dice 0.932608 mean_hd95 29.086194
+Mean class 6 mean_dice 0.559919 mean_hd95 13.908387
+Mean class 7 mean_dice 0.855094 mean_hd95 26.528278
+Mean class 8 mean_dice 0.751354 mean_hd95 16.998534
+Testing performance in best val model: mean_dice : 0.761256 mean_hd95 : 28.361832
+
+
+ckpt: transunet_shsa_1layer_epoch_29.pth 
+atten: SHSA
+epochs=30
+desc: transunet with SHSA with 1 layers
+Mean class 1 mean_dice 0.820622 mean_hd95 44.660393
+Mean class 2 mean_dice 0.568350 mean_hd95 29.813566
+Mean class 3 mean_dice 0.783489 mean_hd95 63.121396
+Mean class 4 mean_dice 0.741607 mean_hd95 62.528540
+Mean class 5 mean_dice 0.928168 mean_hd95 33.864537
+Mean class 6 mean_dice 0.541676 mean_hd95 15.140757
+Mean class 7 mean_dice 0.838074 mean_hd95 46.032965
+Mean class 8 mean_dice 0.737027 mean_hd95 19.700094
+Testing performance in best val model: mean_dice : 0.744877 mean_hd95 : 39.357781
