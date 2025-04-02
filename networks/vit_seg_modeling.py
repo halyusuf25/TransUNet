@@ -71,7 +71,7 @@ class Attention(nn.Module):
         x = x.view(*new_x_shape)
         return x.permute(0, 2, 1, 3)
 
-    def forward(self, hidden_states,):
+    def forward(self, hidden_states):
         mixed_query_layer = self.query(hidden_states)
         mixed_key_layer = self.key(hidden_states)
         mixed_value_layer = self.value(hidden_states)
@@ -174,7 +174,6 @@ class Block(nn.Module):
         self.ffn = Mlp(config)
         
         self.use_shsa = config.use_shsa
-        print(f"Block initialized with use_shsa: {self.use_shsa}")
         if self.use_shsa:
             self.attn = SHSAttention(config, vis)
         else:
@@ -194,10 +193,8 @@ class Block(nn.Module):
 
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
-        print(f"load_from called for block {n_block}, use_shsa: {self.use_shsa}")
         with torch.no_grad():
             if not self.use_shsa:
-                print(f"Loading weights for block {n_block} with multi-head attention")
                 query_weight = np2th(weights[pjoin(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 key_weight = np2th(weights[pjoin(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 value_weight = np2th(weights[pjoin(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
@@ -401,9 +398,8 @@ class VisionTransformer(nn.Module):
 
     def load_from(self, weights):
         with torch.no_grad():
-
             res_weight = weights
-            self.transformer.embeddings.patch_embeddings.weight.copy_(np2th(weights["embedding/kernel"], conv=True))
+            # self.transformer.embeddings.patch_embeddings.weight.copy_(np2th(weights["embedding/kernel"], conv=True))
             self.transformer.embeddings.patch_embeddings.bias.copy_(np2th(weights["embedding/bias"]))
 
             self.transformer.encoder.encoder_norm.weight.copy_(np2th(weights["Transformer/encoder_norm/scale"]))
@@ -437,16 +433,16 @@ class VisionTransformer(nn.Module):
                 for uname, unit in block.named_children():
                     unit.load_from(weights, n_block=uname)
 
-            if self.transformer.embeddings.hybrid:
-                self.transformer.embeddings.hybrid_model.root.conv.weight.copy_(np2th(res_weight["conv_root/kernel"], conv=True))
-                gn_weight = np2th(res_weight["gn_root/scale"]).view(-1)
-                gn_bias = np2th(res_weight["gn_root/bias"]).view(-1)
-                self.transformer.embeddings.hybrid_model.root.gn.weight.copy_(gn_weight)
-                self.transformer.embeddings.hybrid_model.root.gn.bias.copy_(gn_bias)
+            # if self.transformer.embeddings.hybrid:
+            #     self.transformer.embeddings.hybrid_model.root.conv.weight.copy_(np2th(res_weight["conv_root/kernel"], conv=True))
+            #     gn_weight = np2th(res_weight["gn_root/scale"]).view(-1)
+            #     gn_bias = np2th(res_weight["gn_root/bias"]).view(-1)
+            #     self.transformer.embeddings.hybrid_model.root.gn.weight.copy_(gn_weight)
+            #     self.transformer.embeddings.hybrid_model.root.gn.bias.copy_(gn_bias)
 
-                for bname, block in self.transformer.embeddings.hybrid_model.body.named_children():
-                    for uname, unit in block.named_children():
-                        unit.load_from(res_weight, n_block=bname, n_unit=uname)
+            #     for bname, block in self.transformer.embeddings.hybrid_model.body.named_children():
+            #         for uname, unit in block.named_children():
+            #             unit.load_from(res_weight, n_block=bname, n_unit=uname)
 
 CONFIGS = {
     'ViT-B_16': configs.get_b16_config(),
@@ -456,6 +452,7 @@ CONFIGS = {
     'ViT-H_14': configs.get_h14_config(),
     'R50-ViT-B_16': configs.get_r50_b16_config(),
     'R50-ViT-L_16': configs.get_r50_l16_config(),
+    'R50-ViT-L_32': configs.get_r50_l32_config(),
     'testing': configs.get_testing(),
 }
 
