@@ -58,12 +58,13 @@ def calculate_metric_percase(pred, gt):
         return 0, 0
 
 
-def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1):
+def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, dataset='Synapse'):
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()
-    if len(image.shape) == 3:
+    # if len(image.shape) == 3:
+    if dataset == 'Synapse':
         prediction = np.zeros_like(label)
         for ind in range(image.shape[0]):
-            slice = image[ind, :, :]
+            slice = image[ind, :, :]    
             x, y = slice.shape[0], slice.shape[1]
             if x != patch_size[0] or y != patch_size[1]:
                 slice = zoom(slice, (patch_size[0] / x, patch_size[1] / y), order=3)  # previous using 0
@@ -78,13 +79,27 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
                 else:
                     pred = out
                 prediction[ind] = pred
-    else:
-        input = torch.from_numpy(image).unsqueeze(
-            0).unsqueeze(0).float().cuda()
-        net.eval()
+    elif dataset == 'Cataract1k':
+        # Resize each channel to patch_size and stack
+        resized_channels = []
+        H, W, C = image.shape
+        for ch in range(C):
+            slice = image[:, :, ch]
+            # Resize to patch_size
+            resized_slice = zoom(slice, (patch_size[0]/H, patch_size[1]/W), order=3)
+            resized_channels.append(resized_slice)
+        # Convert to tensor (1, 3, H, W)
+        input = torch.from_numpy(np.stack(resized_channels, axis=0)).unsqueeze(0).float().cuda()
+        # Forward pass
         with torch.no_grad():
-            out = torch.argmax(torch.softmax(net(input), dim=1), dim=1).squeeze(0)
-            prediction = out.cpu().detach().numpy()
+            outputs, _ = net(input)
+            out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0).cpu().numpy()
+            # Resize prediction back to original dimensions
+            pred = zoom(out, (H/patch_size[0], W/patch_size[1]), order=0)
+            prediction = pred  # Direct assignment to 2D array
+    else:
+        raise ValueError("Unknown dataset")
+    
     metric_list = []
     for i in range(1, classes):
         metric_list.append(calculate_metric_percase(prediction == i, label == i))
