@@ -174,7 +174,6 @@ class Block(nn.Module):
         self.ffn = Mlp(config)
         
         self.use_shsa = config.use_shsa
-        print(f"Block initialized with use_shsa: {self.use_shsa}")
         if self.use_shsa:
             self.attn = SHSAttention(config, vis)
         else:
@@ -194,10 +193,8 @@ class Block(nn.Module):
 
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
-        print(f"load_from called for block {n_block}, use_shsa: {self.use_shsa}")
         with torch.no_grad():
             if not self.use_shsa:
-                print(f"Loading weights for block {n_block} with multi-head attention")
                 query_weight = np2th(weights[pjoin(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 key_weight = np2th(weights[pjoin(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 value_weight = np2th(weights[pjoin(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
