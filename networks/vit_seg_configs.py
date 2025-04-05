@@ -15,7 +15,7 @@ def get_b16_config():
     config.classifier = 'seg'
     config.representation_size = None
     config.resnet_pretrained_path = None
-    config.pretrained_path = '../model/vit_checkpoint/imagenet21k/ViT-B_16.npz'
+    config.pretrained_path = '../../model/vit_checkpoint/imagenet21k/ViT-B_16.npz'
     config.patch_size = 16
 
     config.decoder_channels = (256, 128, 64, 16)
@@ -48,7 +48,7 @@ def get_r50_b16_config():
     config.resnet.width_factor = 1
 
     config.classifier = 'seg'
-    config.pretrained_path = '../model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
+    config.pretrained_path = '../../model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
     config.decoder_channels = (256, 128, 64, 16)
     config.skip_channels = [512, 256, 64, 16]
     config.n_classes = 2
@@ -62,7 +62,7 @@ def get_b32_config():
     """Returns the ViT-B/32 configuration."""
     config = get_b16_config()
     config.patches.size = (32, 32)
-    config.pretrained_path = '../model/vit_checkpoint/imagenet21k/ViT-B_32.npz'
+    config.pretrained_path = '../../model/vit_checkpoint/imagenet21k/ViT-B_32.npz'
     return config
 
 
@@ -82,7 +82,7 @@ def get_l16_config():
     config.classifier = 'seg'
     config.representation_size = None
     config.resnet_pretrained_path = None
-    config.pretrained_path = '../model/vit_checkpoint/imagenet21k/ViT-L_16.npz'
+    config.pretrained_path = '../../model/vit_checkpoint/imagenet21k/ViT-L_16.npz'
     config.patch_size = 16
         
     config.decoder_channels = (256, 128, 64, 16)
@@ -100,7 +100,7 @@ def get_r50_l16_config():
     config.resnet.width_factor = 1
 
     config.classifier = 'seg'
-    config.resnet_pretrained_path = '../model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
+    config.resnet_pretrained_path = '../../model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
     config.decoder_channels = (256, 128, 64, 16)
     config.skip_channels = [512, 256, 64, 16]
     config.n_classes = 2
@@ -113,7 +113,7 @@ def get_l32_config():
     """Returns the ViT-L/32 configuration."""
     config = get_l16_config()
     config.patches.size = (32, 32)
-    config.pretrained_path = '../model/vit_checkpoint/imagenet21k/ViT-L_32.npz'
+    config.pretrained_path = '../../model/vit_checkpoint/imagenet21k/ViT-L_32.npz'
     return config
 
 
@@ -143,7 +143,7 @@ def get_r50_l32_config():
     config.resnet.width_factor = 1
 
     config.classifier = 'seg'
-    config.resnet_pretrained_path = '../model/vit_checkpoint/imagenet21k/R50+ViT-L_32.npz'
+    config.resnet_pretrained_path = '../../model/vit_checkpoint/imagenet21k/R50+ViT-L_32.npz'
     config.decoder_channels = (256, 128, 64, 16)
     config.skip_channels = [512, 256, 64, 16]
     config.n_classes = 2
