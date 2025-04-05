@@ -8,10 +8,11 @@ import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from trainer import trainer_synapse
+from datasets.dataset_cataract import  Cataract1kDataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str,
-                    default='../data/Synapse/train_npz', help='root dir for data')
+                    default='../../data/Synapse/train_npz', help='root dir for data')
 parser.add_argument('--dataset', type=str,
                     default='Synapse', help='experiment_name')
 parser.add_argument('--list_dir', type=str,
@@ -67,17 +68,23 @@ if __name__ == "__main__":
     dataset_name = args.dataset
     dataset_config = {
         'Synapse': {
-            'root_path': '../data/Synapse/train_npz',
+            'root_path': '../../data/Synapse/train_npz',
             'list_dir': './lists/lists_Synapse',
             'num_classes': 9,
+        },
+        'Cataract1k': {
+            'root_path': '/data/shared/CataractData/',
+            'list_dir': None,  # Not needed for Cataract1k
+            'num_classes': 5,  # Background (0), Pupil (1), Cornea (2)
         },
     }
     args.num_classes = dataset_config[dataset_name]['num_classes']
     args.root_path = dataset_config[dataset_name]['root_path']
     args.list_dir = dataset_config[dataset_name]['list_dir']
     args.is_pretrain = True
+    args.ckpt_filename = args.ckpt 
     args.exp = 'TU_' + dataset_name + str(args.img_size)
-    snapshot_path = "../model/{}/{}".format(args.exp, 'TU')
+    snapshot_path = "../../model/{}/{}".format(args.exp, 'TU')
     snapshot_path = snapshot_path + '_pretrain' if args.is_pretrain else snapshot_path
     snapshot_path += '_' + args.vit_name
     snapshot_path = snapshot_path + '_skip' + str(args.n_skip)
@@ -91,13 +98,17 @@ if __name__ == "__main__":
 
     if not os.path.exists(snapshot_path):
         os.makedirs(snapshot_path)
+    
+
     config_vit = CONFIGS_ViT_seg[args.vit_name]
     config_vit.n_classes = args.num_classes
     config_vit.n_skip = args.n_skip
     if args.num_heads is not None:
         config_vit.transformer.num_heads = args.num_heads
+        args.ckpt_filename +='_head'+str(args.num_heads)
     if args.num_layers is not None:
         config_vit.transformer.num_layers = args.num_layers
+        args.ckpt_filename +='_layer'+str(args.num_layers)
 
     #pass the args use_shsa to the config_vit
     config_vit.use_shsa = args.use_shsa
@@ -107,5 +118,5 @@ if __name__ == "__main__":
     net.load_from(weights=np.load(config_vit.pretrained_path))
     print(f"arguments for training: {args}")
     print(f"configuration of the vit model for training: {config_vit}") 
-    trainer = {'Synapse': trainer_synapse,}
+    trainer = {'Synapse': trainer_synapse, 'Cataract1k': trainer_synapse}
     trainer[dataset_name](args, net, snapshot_path)

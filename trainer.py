@@ -14,9 +14,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import DiceLoss
 from torchvision import transforms
+from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
+from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
 
 def trainer_synapse(args, model, snapshot_path):
-    from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
     logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
@@ -25,10 +26,20 @@ def trainer_synapse(args, model, snapshot_path):
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
     # max_iterations = args.max_iterations
-    db_train = Synapse_dataset(base_dir=args.root_path, list_dir=args.list_dir, split="train",
-                               transform=transforms.Compose(
-                                   [RandomGenerator(output_size=[args.img_size, args.img_size])]))
-    print("The length of train set is: {}".format(len(db_train)))
+    if args.dataset == 'Synapse':
+        db_train = Synapse_dataset(base_dir=args.root_path, list_dir=args.list_dir, split="train",
+                                transform=transforms.Compose(
+                                    [RandomGenerator(output_size=[args.img_size, args.img_size])]))
+        print("The length of train set is: {}".format(len(db_train)))
+    elif args.dataset == 'Cataract1k':
+        db_train = Cataract1kDataset(base_dir=args.root_path, split="train",
+                                    transform=transforms.Compose(
+                                        [RandomGenerator4Cataract(output_size=[args.img_size, args.img_size])]))
+        print("The length of train set is: {}".format(len(db_train)))
+    else:
+        raise ValueError("Unknown dataset: {}".format(args.dataset)) 
+
+    args.ckpt_filename += '_' + args.dataset + '_' + str(args.num_classes) + '_class'
 
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
@@ -83,14 +94,14 @@ def trainer_synapse(args, model, snapshot_path):
         if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), save_mode_path)
-            local_path = os.path.join(args.ckpt_dir, args.ckpt + '_epoch_' + str(epoch_num) + '.pth')
+            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), local_path)
             logging.info("save model to {}".format(save_mode_path))
 
         if epoch_num >= max_epoch - 1:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), save_mode_path)
-            local_path = os.path.join(args.ckpt_dir, args.ckpt + '_epoch_' + str(epoch_num) + '.pth')
+            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), local_path)
             logging.info("save model to {}".format(save_mode_path))
             iterator.close()
