@@ -11,7 +11,7 @@ from trainer import trainer_synapse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str,
-                    default='../data/Synapse/train_npz', help='root dir for data')
+                    default='../../data/Synapse/train_npz', help='root dir for data')
 parser.add_argument('--dataset', type=str,
                     default='Synapse', help='experiment_name')
 parser.add_argument('--list_dir', type=str,
@@ -37,6 +37,14 @@ parser.add_argument('--n_skip', type=int,
                     default=3, help='using number of skip-connect, default is num')
 parser.add_argument('--vit_name', type=str,
                     default='R50-ViT-B_16', help='select one vit model')
+parser.add_argument('--teacher_vit_name', type=str,
+                    default=None, help='load teacher model for kd-training')
+parser.add_argument('--teacher_num_heads', type=int,
+                    default=None, help='number of attention heads for the teacher model (default value sets in the imported CONFIGS_ViT_seg)')
+parser.add_argument('--teacher_num_layers', type=int,
+                    default=None, help='number of layers for the teacher model')
+parser.add_argument('--teacher_pretrained_path', type=str,
+                    default=None, help='load teacher pretrained checkpoint')
 parser.add_argument('--vit_patches_size', type=int,
                     default=16, help='vit_patches_size, default is 16')
 parser.add_argument('--ckpt_dir', type=str, 
@@ -67,7 +75,7 @@ if __name__ == "__main__":
     dataset_name = args.dataset
     dataset_config = {
         'Synapse': {
-            'root_path': '../data/Synapse/train_npz',
+            'root_path': '../../data/Synapse/train_npz',
             'list_dir': './lists/lists_Synapse',
             'num_classes': 9,
         },
@@ -77,7 +85,7 @@ if __name__ == "__main__":
     args.list_dir = dataset_config[dataset_name]['list_dir']
     args.is_pretrain = True
     args.exp = 'TU_' + dataset_name + str(args.img_size)
-    snapshot_path = "../model/{}/{}".format(args.exp, 'TU')
+    snapshot_path = "../../model/{}/{}".format(args.exp, 'TU')
     snapshot_path = snapshot_path + '_pretrain' if args.is_pretrain else snapshot_path
     snapshot_path += '_' + args.vit_name
     snapshot_path = snapshot_path + '_skip' + str(args.n_skip)
@@ -105,7 +113,34 @@ if __name__ == "__main__":
         config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
     net.load_from(weights=np.load(config_vit.pretrained_path))
-    print(f"arguments for training: {args}")
-    print(f"configuration of the vit model for training: {config_vit}") 
+    
+    if args.teacher_vit_name is not None:
+        teacher_config_vit = CONFIGS_ViT_seg[args.teacher_vit_name]
+        teacher_config_vit.n_classes = args.num_classes
+        teacher_config_vit.n_skip = args.n_skip
+        teacher_config_vit.use_shsa = args.use_shsa
+        
+        if args.teacher_num_heads is not None:
+            teacher_config_vit.transformer.num_heads = args.teacher_num_heads
+            
+        if args.teacher_num_layers is not None:
+            teacher_config_vit.transformer.num_layers = args.teacher_num_layers
+            
+        if args.teacher_vit_name.find('R50') != -1:
+            teacher_config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
+                
+        if args.teacher_pretrained_path is not None:
+            ckpt_path = os.path.join(args.ckpt_dir, args.teacher_pretrained_path)
+        else:
+            raise ValueError("Teacher pretrained checkpoint path is not provided. Please specify --teacher_pretrained_path.")
+
+        net_teacher = ViT_seg(teacher_config_vit, img_size=args.img_size, num_classes=teacher_config_vit.n_classes).cuda()
+        net_teacher.load_state_dict(torch.load(ckpt_path))
+    
+    # print(f"arguments for training: {args}")
+    # print(f"configuration of the vit model for training: {config_vit}") 
     trainer = {'Synapse': trainer_synapse,}
-    trainer[dataset_name](args, net, snapshot_path)
+    if args.teacher_vit_name is not None:
+        trainer[dataset_name](args, net, snapshot_path, teacher_model=net_teacher)
+    else:
+        trainer[dataset_name](args, net, snapshot_path)

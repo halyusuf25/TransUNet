@@ -12,10 +12,10 @@ from tensorboardX import SummaryWriter
 from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from utils import DiceLoss
+from utils import DiceLoss, distillation_loss
 from torchvision import transforms
 
-def trainer_synapse(args, model, snapshot_path):
+def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
     logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
@@ -37,7 +37,11 @@ def trainer_synapse(args, model, snapshot_path):
                              worker_init_fn=worker_init_fn)
     if args.n_gpu > 1:
         model = nn.DataParallel(model)
+        teacher_model = nn.DataParallel(teacher_model) if teacher_model is not None else teacher_model
+        
     model.train()
+    if teacher_model: teacher_model.eval()
+    gamma = 0.3 # distillation loss weight
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(num_classes)
     optimizer = optim.SGD(model.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
@@ -52,10 +56,19 @@ def trainer_synapse(args, model, snapshot_path):
         for i_batch, sampled_batch in enumerate(trainloader):
             image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
+                    
             outputs, _ = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
             loss_dice = dice_loss(outputs, label_batch, softmax=True)
-            loss = 0.5 * loss_ce + 0.5 * loss_dice
+            if teacher_model is not None:
+                with torch.no_grad():
+                    teacher_outputs, _ = teacher_model(image_batch)
+                
+                kd_loss = distillation_loss(outputs, teacher_outputs)
+                loss = (1- gamma) * (0.5 * loss_ce + 0.5 * loss_dice) + gamma * kd_loss
+            else:
+                loss = 0.5 * loss_ce + 0.5 * loss_dice
+                
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
