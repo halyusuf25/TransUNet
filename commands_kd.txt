@@ -1,0 +1,12 @@
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=216 \
+         --ckpt transunet_shsa_3layer_kd \
+         --num_layers=3 \
+         --teacher_vit_name R50-ViT-B_16 \
+         --teacher_num_layers=6 \
+         --teacher_pretrained_path transunet_shsa_6layer_epoch_215.pth \
+         --use_shsa

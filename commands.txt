@@ -36,10 +36,9 @@ CUDA_VISIBLE_DEVICES=0 python test.py \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python test.py \
     --dataset Synapse \
     --vit_name R50-ViT-B_16 \
-    --max_epochs=5 \
-    --n_gpu=6
-https://drive.google.com/file/d/1ugXdSGGDJaOM-rOx_boQYoO71tTSe9k6/view?usp=sharing
-
+    --ckpt transunet_shsa_6layer_epoch_215.pth \
+    --num_layers=6 \
+    --use_shsa
 
 
 training script:
@@ -51,10 +50,11 @@ CUDA_VISIBLE_DEVICES=1 python train.py \
          --ckpt transunet_shsa_12layer \
          --use_shsa
 
-CUDA_VISIBLE_DEVICES=2 python train.py \
+CUDA_VISIBLE_DEVICES=5 python train.py \
          --dataset Synapse \
          --vit_name R50-ViT-B_16 \
-         --max_epochs=30 \
+         --max_epochs=216 \
+         --max_iterations=20000 \
          --ckpt transunet_shsa_1layer \
          --num_layers=1 \
          --use_shsa
@@ -121,6 +121,22 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
     --ckpt transunet_shsa_3layer_epoch_29.pth \
     --use_shsa
 
+CUDA_VISIBLE_DEVICES=5 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=30 \
+    --num_layers=3 \
+    --ckpt transunet_shsa_3layer_epoch_29.pth \
+    --use_shsa
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=216 \
+    --num_layers=3 \
+    --ckpt transunet_shsa_3layer_kd_epoch_215.pth \
+    --use_shsa
+
 
 CUDA_VISIBLE_DEVICES=4 python test.py \
     --dataset Synapse \
@@ -136,3 +152,32 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
     --num_layers=1 \
     --ckpt transunet_shsa_1layer_epoch_29.pth \
     --use_shsa
+
+
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-L_32 \
+         --ckpt transunet_shsa_24layer \
+         --max_epochs=216 \
+         --max_iterations=20000 \
+         --use_shsa
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-L_32 \
+    --num_layers=1 \
+    --ckpt transunet_shsa_24layer_epoch_215.pth \
+    --use_shsa
+
+
+
+#custom image size
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=215 \
+         --ckpt transunet_shsa_6layer_img512 \
+         --img_size=512 \
+         --use_shsa
