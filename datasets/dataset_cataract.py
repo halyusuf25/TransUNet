@@ -8,6 +8,7 @@ from scipy import ndimage
 from scipy.ndimage.interpolation import zoom
 from torch.utils.data import Dataset
 from glob import glob
+import pandas as pd
 
 # Existing augmentation functions (unchanged)
 def random_rot_flip(image, label):
@@ -53,9 +54,51 @@ class RandomGenerator4Cataract(object):
         sample = {'image': image, 'label': label.long()}
         return sample
 
+
+def load_split(csv_path, base_dir):
+    """
+    Reads a CSV file and returns lists of image paths and annotation paths.
+    We assume the CSV contains only an 'img' column for the image name
+    (e.g. 'case5013_01.png').
+    
+    Args:
+        csv_path (str): Path to the CSV file (train or test).
+        base_dir (str): Base directory containing 'img' and 'ann' subfolders.
+    
+    Returns:
+        (list, list): Two lists corresponding to image files and annotation files.
+    """
+    df = pd.read_csv(csv_path)
+    
+    image_files = []
+    annotation_files = []
+    for full_img_path in df['imgs']:
+        # Extract just the final part of the path (e.g. "case5013_01.png")
+        file_name = os.path.basename(full_img_path)
+        
+        # Build the full paths for the image and corresponding annotation
+        image_path = os.path.join(base_dir, 'img', file_name)
+        annotation_path = os.path.join(base_dir, 'ann', file_name + ".json")
+        
+        image_files.append(image_path)
+        annotation_files.append(annotation_path)
+
+    # for img_name in df['imgs']:
+    #     # Full path to the image
+    #     img_path = os.path.join(base_dir, 'img', img_name)
+    #     image_files.append(img_path)
+
+    #     # Derive the annotation filename by appending '.json' to the image name
+    #     # e.g. "case5013_01.png" -> "case5013_01.png.json"
+    #     ann_name = img_name + ".json"
+    #     ann_path = os.path.join(base_dir, 'ann', ann_name)
+    #     annotation_files.append(ann_path)
+
+    return image_files, annotation_files
+
 # Updated dataset class for Cataract1k
 class Cataract1kDataset(Dataset):
-    def __init__(self, base_dir, split, transform=None):
+    def __init__(self, base_dir, split, transform=None, train_csv='train.csv', test_csv='test.csv'):
         self.transform = transform
         self.split = split
         self.data_dir = base_dir
@@ -66,10 +109,18 @@ class Cataract1kDataset(Dataset):
         self.annotation_dir = os.path.join(base_dir, "ann")
         print(self.annotation_dir)
         
-        # Load all image and annotation files
-        self.image_files = sorted(glob(os.path.join(self.image_dir, "*.png")))  # Adjust extension if needed
-        self.annotation_files = sorted(glob(os.path.join(self.annotation_dir, "*.json")))
-        
+        # # Load all image and annotation files
+        # self.image_files = sorted(glob(os.path.join(self.image_dir, "*.png")))  # Adjust extension if needed
+        # self.annotation_files = sorted(glob(os.path.join(self.annotation_dir, "*.json")))
+        # Read the appropriate CSV file
+        if self.split.lower() == "train":
+            csv_path = os.path.join(base_dir, train_csv)
+        else:
+            csv_path = os.path.join(base_dir, test_csv)
+
+        # Use the helper function to get the file paths
+        self.image_files, self.annotation_files = load_split(csv_path, base_dir)
+
         # Ensure matching number of images and annotations
         assert len(self.image_files) == len(self.annotation_files), "Mismatch between images and annotations!"
         
@@ -77,22 +128,22 @@ class Cataract1kDataset(Dataset):
         self.class_map = {
             "Pupil": 1,
             "Cornea": 2,
-            # "Lens": 3,
-            # "Instruments": 4,
+            "Lens": 3,
+            "Instruments": 4,
             # Add more classes if present in your dataset
         }
         # instruments
         self.instruments = ['Slit Knife', 'Gauge', 'Capsulorhexis Cystotome', 'Spatula', 'Phacoemulsification Tip', 'Irrigation-Aspiration', 'Lens Injector', 'Incision Knife', 'Katena Forceps', 'Capsulorhexis Forceps']
         
         # Split into train/val (e.g., 80/20)
-        total_samples = len(self.image_files)
-        train_size = int(0.8 * total_samples)
-        if self.split == "train":
-            self.image_files = self.image_files[:train_size]
-            self.annotation_files = self.annotation_files[:train_size]
-        else:  # val
-            self.image_files = self.image_files[train_size:]
-            self.annotation_files = self.annotation_files[train_size:]
+        # total_samples = len(self.image_files)
+        # train_size = int(0.8 * total_samples)
+        # if self.split == "train":
+        #     self.image_files = self.image_files[:train_size]
+        #     self.annotation_files = self.annotation_files[:train_size]
+        # else:  # val
+        #     self.image_files = self.image_files[train_size:]
+        #     self.annotation_files = self.annotation_files[train_size:]
 
     def __len__(self):
         return len(self.image_files)
