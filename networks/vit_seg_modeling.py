@@ -394,7 +394,7 @@ class VisionTransformer(nn.Module):
         x, attn_weights, features = self.transformer(x)  # (B, n_patch, hidden)
         x = self.decoder(x, features)
         logits = self.segmentation_head(x)
-        return logits, attn_weights
+        return logits, features
 
     def load_from(self, weights):
         with torch.no_grad():

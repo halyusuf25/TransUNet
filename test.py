@@ -52,6 +52,7 @@ parser.add_argument('--num_layers', type=int,
                     default=None, help='number of transformer layers (default value sets in the imported CONFIGS_ViT_seg)')
 parser.add_argument('--use_shsa', action='store_true', 
                     help='whether to use single-head self-attention (SHSA) or the default multi-head self-attention')
+parser.add_argument('--n_gpu', type=int, default=1, help='total gpu')
 args = parser.parse_args()
 
 
@@ -143,6 +144,8 @@ if __name__ == "__main__":
     # net.load_state_dict(torch.load(snapshot, weights_only=True))
     # net = nn.DataParallel(net) #added by me to overcome testing error problem
     #get checkpoint path
+    if args.n_gpu > 1:
+        net = nn.DataParallel(net)
     ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
     net.load_state_dict(torch.load(ckpt_path))
     snapshot_name = snapshot_path.split('/')[-1]

@@ -12,7 +12,7 @@ from tensorboardX import SummaryWriter
 from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from utils import DiceLoss, distillation_loss
+from utils import DiceLoss, distillation_loss, dist_loss
 from torchvision import transforms
 
 def trainer_synapse(args, model, snapshot_path, teacher_model=None):
@@ -57,14 +57,15 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
             image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
                     
-            outputs, _ = model(image_batch)
+            outputs, features = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
             loss_dice = dice_loss(outputs, label_batch, softmax=True)
             if teacher_model is not None:
                 with torch.no_grad():
-                    teacher_outputs, _ = teacher_model(image_batch)
+                    teacher_outputs, teachre_features = teacher_model(image_batch)
                 
-                kd_loss = distillation_loss(outputs, teacher_outputs)
+                # kd_loss = distillation_loss(outputs, teacher_outputs)
+                kd_loss = dist_loss(outputs, teacher_outputs, features, teachre_features)
                 loss = (1- gamma) * (0.5 * loss_ce + 0.5 * loss_dice) + gamma * kd_loss
             else:
                 loss = 0.5 * loss_ce + 0.5 * loss_dice
@@ -91,6 +92,10 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
+
+        if epoch_num == 5:
+            local_path = os.path.join(args.ckpt_dir, args.ckpt + '_epoch_' + str(epoch_num) + '.pth')
+            torch.save(model.state_dict(), local_path)
 
         save_interval = 50  # int(max_epoch/6)
         if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
