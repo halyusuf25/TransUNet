@@ -297,7 +297,7 @@ def get_swin_tiny_config():
     config.decoder_channels = (256, 128, 64, 16)
     config.n_classes = 2
     config.n_skip = 0
-    config.skip_channels = [0, 0, 0, 0]
+    config.skip_channels = [512, 256, 64, 16]
     config.activation = 'softmax'
     return config        
 
