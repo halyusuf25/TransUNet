@@ -1,0 +1,25 @@
+CUDA_VISIBLE_DEVICES=2 python test.py                 --dataset Synapse                 --vit_name R50-ViT-B_16                 --ckpt tunet_shsa_1layer_3kd_epoch_199.pth                 --num_layers=1                     --use_shsa
+
+Mean class 1 mean_dice 0.868730 mean_hd95 9.378776
+Mean class 2 mean_dice 0.630788 mean_hd95 8.182780
+Mean class 3 mean_dice 0.820719 mean_hd95 43.564759
+Mean class 4 mean_dice 0.809708 mean_hd95 33.357847
+Mean class 5 mean_dice 0.942421 mean_hd95 18.180525
+Mean class 6 mean_dice 0.504033 mean_hd95 17.670312
+Mean class 7 mean_dice 0.878547 mean_hd95 31.297814
+Mean class 8 mean_dice 0.732666 mean_hd95 19.377332
+Testing performance in best val model: mean_dice : 0.773451 mean_hd95 : 22.626268
+
+
+UDA_VISIBLE_DEVICES=2 python test.py                 --dataset Synapse                 --vit_name R50-ViT-B_16                 --ckpt tunet_shsa_1layer_3kd_epoch_215.pth                 --num_layers=1                     --use_shsa
+
+Mean class 1 mean_dice 0.869095 mean_hd95 9.445881
+Mean class 2 mean_dice 0.638542 mean_hd95 8.309263
+Mean class 3 mean_dice 0.816883 mean_hd95 45.666611
+Mean class 4 mean_dice 0.805032 mean_hd95 46.615143
+Mean class 5 mean_dice 0.942625 mean_hd95 17.423148
+Mean class 6 mean_dice 0.496541 mean_hd95 17.633538
+Mean class 7 mean_dice 0.876012 mean_hd95 31.489565
+Mean class 8 mean_dice 0.728872 mean_hd95 19.364409
+Testing performance in best val model: mean_dice : 0.771700 mean_hd95 : 24.493445
+
