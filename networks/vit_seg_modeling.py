@@ -174,7 +174,6 @@ class Block(nn.Module):
         self.ffn = Mlp(config)
         
         self.use_shsa = config.use_shsa
-        print(f"Block initialized with use_shsa: {self.use_shsa}")
         if self.use_shsa:
             self.attn = SHSAttention(config, vis)
         else:
@@ -355,6 +354,8 @@ class DecoderCup(nn.Module):
 
         else:
             skip_channels=[0,0,0,0]
+        print(f"number of skip connections: {self.config.n_skip}")
+        print(f"skip_channels: {skip_channels}")
 
         blocks = [
             DecoderBlock(in_ch, out_ch, sk_ch) for in_ch, out_ch, sk_ch in zip(in_channels, out_channels, skip_channels)
