@@ -4,7 +4,9 @@ from medpy import metric
 from scipy.ndimage import zoom
 import torch.nn as nn
 import SimpleITK as sitk
-
+from typing import Tuple, Dict
+from thop import profile
+import time
 
 class DiceLoss(nn.Module):
     def __init__(self, n_classes):
@@ -100,3 +102,110 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
         sitk.WriteImage(img_itk, test_save_path + '/'+ case + "_img.nii.gz")
         sitk.WriteImage(lab_itk, test_save_path + '/'+ case + "_gt.nii.gz")
     return metric_list
+
+
+
+
+def evaluate_model_perf(
+    model: torch.nn.Module,
+    input_size: Tuple[int, int, int] = (3, 224, 224),
+    throughput_batch_size: int = 64,
+    warmup: int = 10,
+    iterations: int = 500,
+    device: str = None
+) -> Dict[str, float]:
+    """
+    Evaluate model metrics including Parameters, FLOPs, Latency, and Throughput
+    
+    Args:
+        model: PyTorch model to evaluate
+        input_size: Input tensor dimensions (channels, height, width)
+        throughput_batch_size: Batch size for throughput measurement
+        warmup: Number of warmup runs before timing
+        iterations: Number of iterations for timing measurements
+        device: 'cuda' or 'cpu' (auto-detected if None)
+    
+    Returns:
+        Dictionary with all metrics
+    """
+    # Set device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device).eval()
+    
+    # Generate dummy inputs
+    dummy_input = torch.randn((1, *input_size)).to(device)
+    throughput_input = torch.randn((throughput_batch_size, *input_size)).to(device)
+
+    # --------------------------
+    # 1. Compute Parameters
+    # --------------------------
+    total_params = sum(p.numel() for p in model.parameters())
+    
+    # --------------------------
+    # 2. Compute FLOPs (for single input)
+    # --------------------------
+    # flops = FlopCountAnalysis(model, dummy_input)
+    # total_flops = flops.total()
+
+    # --------------------------
+    # 3. Measure Latency (batch=1)
+    # --------------------------
+    # Warmup
+    for _ in range(warmup):
+        with torch.no_grad():
+            _ = model(dummy_input)
+
+    # Timing
+    total_time = 0.0
+    for _ in range(iterations):
+        if device == "cuda":
+            torch.cuda.synchronize()
+        start = time.time()
+        with torch.no_grad():
+            _ = model(dummy_input)
+        if device == "cuda":
+            torch.cuda.synchronize()
+        total_time += time.time() - start
+    
+    latency_ms = (total_time / iterations) * 1000
+
+    # --------------------------
+    # 4. Measure Throughput
+    # --------------------------
+    # Warmup
+    for _ in range(warmup):
+        with torch.no_grad():
+            _ = model(throughput_input)
+    
+    # Timing
+    total_time = 0.0
+    for _ in range(iterations):
+        if device == "cuda":
+            torch.cuda.synchronize()
+        start = time.time()
+        with torch.no_grad():
+            _ = model(throughput_input)
+        if device == "cuda":
+            torch.cuda.synchronize()
+        total_time += time.time() - start
+    
+    throughput = (throughput_batch_size * iterations) / total_time
+
+    #---------------------------
+    # 5. MACs (Multiply-Accumulate Operations)
+    # --------------------------
+    try:
+        macs, _ = profile(model, inputs=(dummy_input,), verbose=False)
+        macs = macs / 1e9  # Convert to billions
+    except Exception as e:
+        print(f"Warning: Could not compute MACs due to {e}. Setting MACs to 0.")
+        macs = 0.0
+
+    return {
+        "parameters(M)": total_params / 1e6,
+        # "flops(G)": total_flops / 1e9,
+        "latency(ms)": latency_ms,
+        "throughput(images/s)": throughput,
+        "macs(G)": macs
+    }

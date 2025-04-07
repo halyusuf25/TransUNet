@@ -10,13 +10,13 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
-from utils import test_single_volume
+from utils import test_single_volume, evaluate_model_perf
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--volume_path', type=str,
-                    default='../data/Synapse/test_vol_h5', help='root dir for validation volume data')  # for acdc volume_path=root_dir
+                    default='../../data/Synapse/test_vol_h5', help='root dir for validation volume data')  # for acdc volume_path=root_dir
 parser.add_argument('--dataset', type=str,
                     default='Synapse', help='experiment_name')
 parser.add_argument('--num_classes', type=int,
@@ -88,7 +88,7 @@ if __name__ == "__main__":
     dataset_config = {
         'Synapse': {
             'Dataset': Synapse_dataset,
-            'volume_path': '../data/Synapse/test_vol_h5',
+            'volume_path': '../../data/Synapse/test_vol_h5',
             'list_dir': './lists/lists_Synapse',
             'num_classes': 9,
             'z_spacing': 1,
@@ -155,6 +155,15 @@ if __name__ == "__main__":
         os.makedirs(test_save_path, exist_ok=True)
     else:
         test_save_path = None
+        
+        # measure_model_metrics(model=net,)
+    eval_results=evaluate_model_perf(net,
+                        input_size=(3, args.img_size, args.img_size),
+                        throughput_batch_size=12,
+                        warmup=10,
+                        iterations=100,)
+    print(f"performance results: {eval_results}")
+    
     inference(args, net, test_save_path)
 
 
