@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
-from utils import test_single_volume
+from utils import test_single_volume, evaluate_model_perf
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 
@@ -172,6 +172,14 @@ if __name__ == "__main__":
         os.makedirs(test_save_path, exist_ok=True)
     else:
         test_save_path = None
+    
+    eval_results=evaluate_model_perf(net,
+                        input_size=(3, args.img_size,args.img_size),
+                        throughput_batch_size=64,
+                        warmup=20,
+                        iterations=300,)
+    print(f"performance results: {eval_results}")
+
     inference(args, net, test_save_path)
 
 
