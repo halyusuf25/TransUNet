@@ -21,7 +21,7 @@ parser.add_argument('--volume_path', type=str,
 parser.add_argument('--dataset', type=str,
                     default='Synapse', help='experiment_name')
 parser.add_argument('--num_classes', type=int,
-                    default=4, help='output channel of network')
+                    default=None, help='output channel of network')
 parser.add_argument('--list_dir', type=str,
                     default='./lists/lists_Synapse', help='list dir')
 
@@ -109,7 +109,9 @@ if __name__ == "__main__":
     
     dataset_name = args.dataset
     args.volume_path = dataset_config[dataset_name]['volume_path']
-    args.num_classes = dataset_config[dataset_name]['num_classes']
+    if args.num_classes is None:
+        args.num_classes = dataset_config[dataset_name]['num_classes']
+    
     args.Dataset = dataset_config[dataset_name]['Dataset']
     args.z_spacing = dataset_config[dataset_name]['z_spacing']
     if dataset_name == 'Synapse':
