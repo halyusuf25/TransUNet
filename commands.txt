@@ -71,9 +71,10 @@ CUDA_VISIBLE_DEVICES=3 python train.py \
 CUDA_VISIBLE_DEVICES=4 python train.py \
          --dataset Synapse \
          --vit_name R50-ViT-B_16 \
-         --max_epochs=30 \
-         --ckpt transunet_shsa_6layer \
+         --max_epochs=215 \
+         --ckpt skip3_tnet_shsa_6layer \
          --num_layers=6 \
+         --n_skip=3 \
          --use_shsa
 
 
@@ -136,3 +137,83 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
     --num_layers=1 \
     --ckpt transunet_shsa_1layer_epoch_29.pth \
     --use_shsa
+
+
+SKIP
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=215 \
+         --ckpt skip3_tnet_shsa_6layer \
+         --num_layers=6 \
+         --n_skip=3 \
+         --use_shsa
+
+#number of skip connections: 3
+#Decoder initialized with in_channels: [512, 256, 128, 64], out_channels: (256, 128, 64, 16), skip_channels: [512, 256, 64, 0]
+
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=215 \
+         --ckpt skip2_tnet_shsa_6layer \
+         --num_layers=6 \
+         --n_skip=2 \
+         --use_shsa
+
+number of skip connections: 2
+Decoder initialized with in_channels: [512, 256, 128, 64], out_channels: (256, 128, 64, 16), skip_channels: [512, 256, 0, 0]
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=215 \
+         --ckpt skip1_tnet_shsa_6layer \
+         --num_layers=6 \
+         --n_skip=1 \
+         --use_shsa
+
+number of skip connections: 1
+skip_channels: [512, 0, 0, 0]
+
+
+
+Test + results
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=215 \
+         --ckpt skip0_tnet_shsa_6layer_epoch_214.pth \
+         --num_layers=6 \
+         --n_skip=0 \
+         --use_shsa
+
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --ckpt skip1_tnet_shsa_6layer_epoch_214.pth \
+         --num_layers=6 \
+         --n_skip=1 \
+         --use_shsa
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --ckpt skip2_tnet_shsa_6layer_epoch_214.pth \
+         --num_layers=6 \
+         --n_skip=2 \
+         --use_shsa
+
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --ckpt skip3_tnet_shsa_6layer_epoch_214.pth \
+         --num_layers=6 \
+         --n_skip=3 \
+         --use_shsa
