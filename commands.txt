@@ -166,19 +166,27 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
 
 
 
-CUDA_VISIBLE_DEVICES=5 python test.py \
-  --dataset Cataract1k \
-  --num_classes=3 \
-  --vit_name R50-ViT-B_16 \
-  --ckpt transunet_3classes_Cataract1k_5_class_epoch_149.pth
-
-
-CUDA_VISIBLE_DEVICES=5 python train.py \
+CUDA_VISIBLE_DEVICES=4 python test.py \
   --dataset Cataract1k \
   --num_classes=5 \
+  --n_skip=3 \
+  --vit_name R50-ViT-B_16 \
+  --ckpt f1_transck_5classes_layer6_Cataract1k_5_class_epoch_149.pth \
+  --num_layers=6 \
+  --use_shsa
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+  --dataset Cataract1k \
+  --num_classes=4 \
   --max_epochs=216 \
   --n_skip=3 \
   --vit_name R50-ViT-B_16 \
-  --ckpt transck_5classes \
-  --num_layers=6 \
-  --use_shsa
+  --ckpt f1_transck_4classes
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+  --dataset Cataract1k \
+  --num_classes=5 \
+  --n_skip=3 \
+  --vit_name R50-ViT-B_16 \
+  --ckpt f1_transck_4classes_Cataract1k_4_class_epoch_215.pth 

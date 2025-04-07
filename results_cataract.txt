@@ -1,0 +1,14 @@
+
+FOLD_0
+Mean class 1 mean_dice 0.010695 mean_hd95 0.000000
+Mean class 2 mean_dice 0.966336 mean_hd95 16.115413
+Mean class 3 mean_dice 0.700339 mean_hd95 28.342222
+Mean class 4 mean_dice 0.000000 mean_hd95 0.000000
+Testing performance in best val model: mean_dice : 0.419342 mean_hd95 : 11.114409
+
+FOLD_1
+Mean class 1 mean_dice 0.017089 mean_hd95 0.176945
+Mean class 2 mean_dice 0.981743 mean_hd95 9.416799
+Mean class 3 mean_dice 0.732839 mean_hd95 8.999692
+Mean class 4 mean_dice 0.000000 mean_hd95 0.000000
+Testing performance in best val model: mean_dice : 0.432918 mean_hd95 : 4.648359
