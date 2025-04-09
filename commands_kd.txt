@@ -17,26 +17,81 @@ CUDA_VISIBLE_DEVICES=4 python train.py \
                 --vit_name R50-ViT-B_16 \          
                 --max_epochs=216 \          
                 --ckpt tunet_shsa_1layer_kd \          
-                --num_layers=1 \          
+                --num_layers=2 \          
                 --teacher_vit_name R50-ViT-B_16 \         
                 --teacher_num_layers=6 \          
                 --teacher_pretrained_path transunet_shsa_6layer_epoch_215.pth \   
                 --num_classes=9 \           
                 --use_shsa
 
-CUDA_VISIBLE_DEVICES=2,3,4 python test2.py \
-                --dataset Synapse \
-                --vit_name R50-ViT-B_16 \
-                --ckpt transunet_shsa_1layer_kd_epoch_215.pth \
-                --num_layers=1 \
-                --n_gpu=3 \
-                --use_shsa
+
+CUDA_VISIBLE_DEVICES=4 python train.py   
+                    --dataset Synapse          
+                    --vit_name R50-ViT-B_16          
+                    --max_epochs=216          
+                    --ckpt tunet_shsa_1layer_kd          
+                    --num_layers=2          
+                    --teacher_vit_name R50-ViT-B_16          
+                    --teacher_num_layers=6          
+                    --teacher_pretrained_path transunet_shsa_6layer_epoch_215.pth           
+                    --use_shsa
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+                    --dataset Synapse \
+                    --vit_name R50-ViT-B_16 \
+                    --max_epochs=216 \
+                    --ckpt tunet_mhma_1layer_lastkd \
+                    --num_layers=1 \
+                    --teacher_vit_name R50-ViT-B_16 \
+                    --teacher_num_layers=6 \
+                    --teacher_pretrained_path transunet_shsa_6layer_epoch_215.pth \
 
 
 
-CUDA_VISIBLE_DEVICES=4 python train.py   --dataset Synapse          --vit_name R50-ViT-B_16          --max_epochs=216          --ckpt tunet_shsa_1layer_kd          --num_layers=1          --teacher_vit_name R50-ViT-B_16          --teacher_num_layers=6          --teacher_pretrained_path transunet_shsa_6layer_epoch_215.pth           --use_shsa
+CUDA_VISIBLE_DEVICES=5 python test.py \
+                    --dataset Synapse \
+                    --vit_name R50-ViT-B_16 \
+                    --ckpt tunet_shsa_2layer_lastkd_epoch_215.pth \
+                    --num_layers=2 \
+                    --teacher_vit_name R50-ViT-B_16 \
+                    --teacher_num_layers=6 \
+                    --teacher_pretrained_path transunet_shsa_6layer_epoch_215.pth \
+                    --use_shsa
 
 
-CUDA_VISIBLE_DEVICES=4 python train.py          --dataset Synapse          --vit_name R50-ViT-B_16          --max_epochs=216          --ckpt tunet_shsa_1layer_2kd          --num_layers=1          --teacher_vit_name R50-ViT-B_16          --teacher_num_layers=6          --teacher_pretrained_path transunet_shsa_6layer_epoch_215.pth           --use_shsa
+CUDA_VISIBLE_DEVICES=2 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=216 \
+    --ckpt tunet_shsa_1layer_3kd_epoch_215.pth \
+    --num_layers=3 \
+    --use_shsa
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=216 \
+    --ckpt tunet_shsa_2layer_lastkd_epoch_215.pth \
+    --num_layers=2 \
+    --use_shsa
 
 
+CUDA_VISIBLE_DEVICES=5 python test.py \
+    --dataset Synapse \
+    --vit_name R50-ViT-B_16 \
+    --max_epochs=216 \
+    --ckpt tunet_shsa_1layer_lastkd_epoch_215.pth \
+    --num_layers=1 \
+    --use_shsa
+
+
+
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+                    --dataset Synapse \
+                    --vit_name R50-ViT-B_16 \
+                    --max_epochs=216 \
+                    --ckpt tunet_shsa_2layer \
+                    --num_layers=2 \
+                    --use_shsa

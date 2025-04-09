@@ -457,7 +457,7 @@ def distillation_loss(student_logits, teacher_logits):
     Returns:
         torch.Tensor: Scalar loss value
     """
-    temperature = 2.0  # Temperature for softening logits
+    temperature = 3.0  # Temperature for softening logits
     teacher_probs = F.softmax(teacher_logits / temperature, dim=1)
     student_log_probs = F.log_softmax(student_logits / temperature, dim=1)
     
@@ -498,9 +498,8 @@ def pairwise_distillation_loss(student_features, teacher_features):
 
     return loss
 
-
 def dist_loss(student_logits, teacher_logits, student_features, teacher_features):
-    temperature = 2.0  # Temperature for softening logits
+    temperature = 3.0  # Temperature for softening logits
     teacher_probs = F.softmax(teacher_logits / temperature, dim=1)
     student_log_probs = F.log_softmax(student_logits / temperature, dim=1)
     
@@ -539,7 +538,7 @@ def dist_loss(student_logits, teacher_logits, student_features, teacher_features
         pairw_loss += F.mse_loss(student_sim, teacher_sim.detach())
 
 
-    total_kd_loss = 0.5 * total_resp_loss + 0.5 * (pairw_loss / number_layers)
+    total_kd_loss = 0.5 * total_resp_loss + 0.5 * pairw_loss
 
     return total_kd_loss
 
