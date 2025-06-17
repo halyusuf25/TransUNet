@@ -68,14 +68,15 @@ if __name__ == "__main__":
     dataset_name = args.dataset
     dataset_config = {
         'Synapse': {
-            'root_path': '../../data/Synapse/train_npz',
+            # 'root_path': '../../data/Synapse/train_npz',
+            'root_path': '/data/shared/project_TransUNet/data/Synapse/train_npz/',
             'list_dir': './lists/lists_Synapse',
             'num_classes': 9,
         },
         'Cataract1k': {
             'root_path': '/data/shared/CataractData/',
             'list_dir': None,  # Not needed for Cataract1k
-            'num_classes': 5,  # Background (0), Pupil (1), Cornea (2)
+            'num_classes': 4,  # Background (0), Pupil (1), Cornea (2)
         },
     }
     args.num_classes = dataset_config[dataset_name]['num_classes']
@@ -116,7 +117,7 @@ if __name__ == "__main__":
         config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
     net.load_from(weights=np.load(config_vit.pretrained_path))
-    print(f"arguments for training: {args}")
-    print(f"configuration of the vit model for training: {config_vit}") 
+    # print(f"arguments for training: {args}")
+    # print(f"configuration of the vit model for training: {config_vit}") 
     trainer = {'Synapse': trainer_synapse, 'Cataract1k': trainer_synapse}
     trainer[dataset_name](args, net, snapshot_path)
