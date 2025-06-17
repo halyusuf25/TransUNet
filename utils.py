@@ -7,6 +7,8 @@ import SimpleITK as sitk
 import time
 from typing import Tuple, Dict
 from thop import profile
+from fvcore.nn import FlopCountAnalysis
+
 
 class DiceLoss(nn.Module):
     def __init__(self, n_classes):
@@ -159,8 +161,8 @@ def evaluate_model_perf(
     # --------------------------
     # 2. Compute FLOPs (for single input)
     # --------------------------
-    # flops = FlopCountAnalysis(model, dummy_input)
-    # total_flops = flops.total()
+    flops = FlopCountAnalysis(model, dummy_input)
+    total_flops = flops.total()
 
     # --------------------------
     # 3. Measure Latency (batch=1)
@@ -218,7 +220,7 @@ def evaluate_model_perf(
 
     return {
         "parameters(M)": total_params / 1e6,
-        # "flops(G)": total_flops / 1e9,
+        "flops(G)": total_flops / 1e9,
         "latency(ms)": latency_ms,
         "throughput(images/s)": throughput,
         "macs(G)": macs
