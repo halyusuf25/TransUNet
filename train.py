@@ -50,6 +50,11 @@ parser.add_argument('--num_layers', type=int,
                     default=None, help='number of transformer layers (default value sets in the imported CONFIGS_ViT_seg)')
 parser.add_argument('--use_shsa', action='store_true', 
                     help='whether to use single-head self-attention (SHSA) or the default multi-head self-attention')
+parser.add_argument('--use_swin', action='store_true',
+                    help='whether to use Swin Transformer as the backbone')
+parser.add_argument('--use_efficientnet', action='store_true',
+                    help='whether to use EfficientNet as the decoder')
+
 args = parser.parse_args()
 
 
@@ -85,7 +90,7 @@ if __name__ == "__main__":
     args.is_pretrain = True
     args.ckpt_filename = args.ckpt 
     args.exp = 'TU_' + dataset_name + str(args.img_size)
-    snapshot_path = "../../model/{}/{}".format(args.exp, 'TU')
+    snapshot_path = "../model/{}/{}".format(args.exp, 'TU')
     snapshot_path = snapshot_path + '_pretrain' if args.is_pretrain else snapshot_path
     snapshot_path += '_' + args.vit_name
     snapshot_path = snapshot_path + '_skip' + str(args.n_skip)
@@ -113,6 +118,8 @@ if __name__ == "__main__":
 
     #pass the args use_shsa to the config_vit
     config_vit.use_shsa = args.use_shsa
+    config_vit.use_efficientnet = args.use_efficientnet
+    config_vit.use_swin = args.use_swin
     if args.vit_name.find('R50') != -1:
         config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()

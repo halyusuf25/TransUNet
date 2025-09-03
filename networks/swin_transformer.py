@@ -281,11 +281,11 @@ class SwinTransNet(nn.Module):
 def get_swin_tiny_config():
     config = ml_collections.ConfigDict()
     config.patch_size = 4
-    config.hidden_size = 96
+    config.hidden_size = 64
     config.transformer = ml_collections.ConfigDict()
     config.transformer.mlp_ratio = 4.0
-    config.transformer.num_heads = 3
-    config.transformer.num_layers = 12
+    config.transformer.num_heads = 4
+    config.transformer.num_layers = 4
     config.transformer.attention_dropout_rate = 0.0
     config.transformer.dropout_rate = 0.1
     config.window_size = 7

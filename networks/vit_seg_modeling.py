@@ -20,6 +20,8 @@ from . import vit_seg_configs as configs
 from .vit_seg_modeling_resnet_skip import ResNetV2
 
 from .shsa import SHSAttention
+from .swin_transformer import SwinTransformer, get_swin_tiny_config
+from torchvision.models.efficientnet import MBConvConfig, MBConv
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +142,15 @@ class Embeddings(nn.Module):
             self.hybrid = False
 
         if self.hybrid:
-            self.hybrid_model = ResNetV2(block_units=config.resnet.num_layers, width_factor=config.resnet.width_factor)
-            in_channels = self.hybrid_model.width * 16
+            
+            if config.use_swin:
+                config_swin = get_swin_tiny_config()
+                self.hybrid_model = SwinTransformer(config_swin, img_size=img_size, vis=False)
+                in_channels = config_swin.hidden_size * 16
+            else:
+                self.hybrid_model = ResNetV2(block_units=config.resnet.num_layers, width_factor=config.resnet.width_factor)
+                in_channels = self.hybrid_model.width * 16
+
         self.patch_embeddings = Conv2d(in_channels=in_channels,
                                        out_channels=config.hidden_size,
                                        kernel_size=patch_size,
@@ -153,7 +162,10 @@ class Embeddings(nn.Module):
 
     def forward(self, x):
         if self.hybrid:
-            x, features = self.hybrid_model(x)
+            if self.config.use_swin:
+                x, attn_weights, features = self.hybrid_model(x)
+            else:
+                x, features = self.hybrid_model(x)
         else:
             features = None
         x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
@@ -254,10 +266,12 @@ class Transformer(nn.Module):
     def __init__(self, config, img_size, vis):
         super(Transformer, self).__init__()
         self.embeddings = Embeddings(config, img_size=img_size)
+        # self.embeddings = SwinTransformer(get_swin_tiny_config(), img_size=img_size, vis=vis)
         self.encoder = Encoder(config, vis)
 
     def forward(self, input_ids):
         embedding_output, features = self.embeddings(input_ids)
+        # embedding_output, _, features = self.embeddings(input_ids)
         encoded, attn_weights = self.encoder(embedding_output)  # (B, n_patch, hidden)
         return encoded, attn_weights, features
 
@@ -320,6 +334,20 @@ class DecoderBlock(nn.Module):
         x = self.conv2(x)
         return x
 
+class MBConvDecoderBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, expand_ratio=4, drop_rate=0.0):
+        super().__init__()
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        config = MBConvConfig(
+            kernel=3, expand_ratio=expand_ratio,
+            input_channels=in_ch, out_channels=out_ch,
+            stride=1, num_layers=1
+        )
+        self.mbconv = MBConv(config, stochastic_depth_prob=0.1, norm_layer=torch.nn.BatchNorm2d)
+
+    def forward(self, x, skip=None):
+        x = self.upsample(x)
+        return self.mbconv(x)
 
 class SegmentationHead(nn.Sequential):
 
@@ -353,9 +381,15 @@ class DecoderCup(nn.Module):
         else:
             skip_channels=[0,0,0,0]
 
-        blocks = [
-            DecoderBlock(in_ch, out_ch, sk_ch) for in_ch, out_ch, sk_ch in zip(in_channels, out_channels, skip_channels)
+        if self.config.use_efficientnet:
+            blocks = [
+            MBConvDecoderBlock(in_ch, out_ch) for in_ch, out_ch in zip(in_channels, out_channels)
         ]
+        else:
+            blocks = [
+                DecoderBlock(in_ch, out_ch, sk_ch) for in_ch, out_ch, sk_ch in zip(in_channels, out_channels, skip_channels)
+            ]
+
         self.blocks = nn.ModuleList(blocks)
 
     def forward(self, hidden_states, features=None):
