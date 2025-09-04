@@ -171,10 +171,10 @@ class Embeddings(nn.Module):
                 x = x.transpose(-1, -2)  # (B, n_patches, hidden)
 
                 embeddings = x + self.position_embeddings
+                embeddings = self.dropout(embeddings)
         else:
             features = None
         
-        embeddings = self.dropout(embeddings)
         return embeddings, features
 
 
