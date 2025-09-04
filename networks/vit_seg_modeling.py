@@ -146,16 +146,15 @@ class Embeddings(nn.Module):
             if config.use_swin:
                 config_swin = get_swin_tiny_config()
                 self.hybrid_model = SwinTransformer(config_swin, img_size=img_size, vis=False)
-                in_channels = config_swin.hidden_size * 16
+                # in_channels = config_swin.hidden_size * 16
             else:
                 self.hybrid_model = ResNetV2(block_units=config.resnet.num_layers, width_factor=config.resnet.width_factor)
                 in_channels = self.hybrid_model.width * 16
-
-        self.patch_embeddings = Conv2d(in_channels=in_channels,
-                                       out_channels=config.hidden_size,
-                                       kernel_size=patch_size,
-                                       stride=patch_size)
-        self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
+                self.patch_embeddings = Conv2d(in_channels=in_channels,
+                                            out_channels=config.hidden_size,
+                                            kernel_size=patch_size,
+                                            stride=patch_size)
+                self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
 
         self.dropout = Dropout(config.transformer["dropout_rate"])
 
@@ -164,15 +163,17 @@ class Embeddings(nn.Module):
         if self.hybrid:
             if self.config.use_swin:
                 x, attn_weights, features = self.hybrid_model(x)
+                embeddings = x
             else:
                 x, features = self.hybrid_model(x)
+                x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
+                x = x.flatten(2)
+                x = x.transpose(-1, -2)  # (B, n_patches, hidden)
+
+                embeddings = x + self.position_embeddings
         else:
             features = None
-        x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
-        x = x.flatten(2)
-        x = x.transpose(-1, -2)  # (B, n_patches, hidden)
-
-        embeddings = x + self.position_embeddings
+        
         embeddings = self.dropout(embeddings)
         return embeddings, features
 
@@ -432,52 +433,53 @@ class VisionTransformer(nn.Module):
 
     def load_from(self, weights):
         with torch.no_grad():
+            
+            if not self.config.use_swin:
+                res_weight = weights
+                self.transformer.embeddings.patch_embeddings.weight.copy_(np2th(weights["embedding/kernel"], conv=True))
+                self.transformer.embeddings.patch_embeddings.bias.copy_(np2th(weights["embedding/bias"]))
 
-            res_weight = weights
-            self.transformer.embeddings.patch_embeddings.weight.copy_(np2th(weights["embedding/kernel"], conv=True))
-            self.transformer.embeddings.patch_embeddings.bias.copy_(np2th(weights["embedding/bias"]))
+                self.transformer.encoder.encoder_norm.weight.copy_(np2th(weights["Transformer/encoder_norm/scale"]))
+                self.transformer.encoder.encoder_norm.bias.copy_(np2th(weights["Transformer/encoder_norm/bias"]))
 
-            self.transformer.encoder.encoder_norm.weight.copy_(np2th(weights["Transformer/encoder_norm/scale"]))
-            self.transformer.encoder.encoder_norm.bias.copy_(np2th(weights["Transformer/encoder_norm/bias"]))
+                posemb = np2th(weights["Transformer/posembed_input/pos_embedding"])
 
-            posemb = np2th(weights["Transformer/posembed_input/pos_embedding"])
+                posemb_new = self.transformer.embeddings.position_embeddings
+                if posemb.size() == posemb_new.size():
+                    self.transformer.embeddings.position_embeddings.copy_(posemb)
+                elif posemb.size()[1]-1 == posemb_new.size()[1]:
+                    posemb = posemb[:, 1:]
+                    self.transformer.embeddings.position_embeddings.copy_(posemb)
+                else:
+                    logger.info("load_pretrained: resized variant: %s to %s" % (posemb.size(), posemb_new.size()))
+                    ntok_new = posemb_new.size(1)
+                    if self.classifier == "seg":
+                        _, posemb_grid = posemb[:, :1], posemb[0, 1:]
+                    gs_old = int(np.sqrt(len(posemb_grid)))
+                    gs_new = int(np.sqrt(ntok_new))
+                    print('load_pretrained: grid-size from %s to %s' % (gs_old, gs_new))
+                    posemb_grid = posemb_grid.reshape(gs_old, gs_old, -1)
+                    zoom = (gs_new / gs_old, gs_new / gs_old, 1)
+                    posemb_grid = ndimage.zoom(posemb_grid, zoom, order=1)  # th2np
+                    posemb_grid = posemb_grid.reshape(1, gs_new * gs_new, -1)
+                    posemb = posemb_grid
+                    self.transformer.embeddings.position_embeddings.copy_(np2th(posemb))
 
-            posemb_new = self.transformer.embeddings.position_embeddings
-            if posemb.size() == posemb_new.size():
-                self.transformer.embeddings.position_embeddings.copy_(posemb)
-            elif posemb.size()[1]-1 == posemb_new.size()[1]:
-                posemb = posemb[:, 1:]
-                self.transformer.embeddings.position_embeddings.copy_(posemb)
-            else:
-                logger.info("load_pretrained: resized variant: %s to %s" % (posemb.size(), posemb_new.size()))
-                ntok_new = posemb_new.size(1)
-                if self.classifier == "seg":
-                    _, posemb_grid = posemb[:, :1], posemb[0, 1:]
-                gs_old = int(np.sqrt(len(posemb_grid)))
-                gs_new = int(np.sqrt(ntok_new))
-                print('load_pretrained: grid-size from %s to %s' % (gs_old, gs_new))
-                posemb_grid = posemb_grid.reshape(gs_old, gs_old, -1)
-                zoom = (gs_new / gs_old, gs_new / gs_old, 1)
-                posemb_grid = ndimage.zoom(posemb_grid, zoom, order=1)  # th2np
-                posemb_grid = posemb_grid.reshape(1, gs_new * gs_new, -1)
-                posemb = posemb_grid
-                self.transformer.embeddings.position_embeddings.copy_(np2th(posemb))
-
-            # Encoder whole
-            for bname, block in self.transformer.encoder.named_children():
-                for uname, unit in block.named_children():
-                    unit.load_from(weights, n_block=uname)
-
-            if self.transformer.embeddings.hybrid:
-                self.transformer.embeddings.hybrid_model.root.conv.weight.copy_(np2th(res_weight["conv_root/kernel"], conv=True))
-                gn_weight = np2th(res_weight["gn_root/scale"]).view(-1)
-                gn_bias = np2th(res_weight["gn_root/bias"]).view(-1)
-                self.transformer.embeddings.hybrid_model.root.gn.weight.copy_(gn_weight)
-                self.transformer.embeddings.hybrid_model.root.gn.bias.copy_(gn_bias)
-
-                for bname, block in self.transformer.embeddings.hybrid_model.body.named_children():
+                # Encoder whole
+                for bname, block in self.transformer.encoder.named_children():
                     for uname, unit in block.named_children():
-                        unit.load_from(res_weight, n_block=bname, n_unit=uname)
+                        unit.load_from(weights, n_block=uname)
+
+                if self.transformer.embeddings.hybrid:
+                    self.transformer.embeddings.hybrid_model.root.conv.weight.copy_(np2th(res_weight["conv_root/kernel"], conv=True))
+                    gn_weight = np2th(res_weight["gn_root/scale"]).view(-1)
+                    gn_bias = np2th(res_weight["gn_root/bias"]).view(-1)
+                    self.transformer.embeddings.hybrid_model.root.gn.weight.copy_(gn_weight)
+                    self.transformer.embeddings.hybrid_model.root.gn.bias.copy_(gn_bias)
+
+                    for bname, block in self.transformer.embeddings.hybrid_model.body.named_children():
+                        for uname, unit in block.named_children():
+                            unit.load_from(res_weight, n_block=bname, n_unit=uname)
 
 CONFIGS = {
     'ViT-B_16': configs.get_b16_config(),
