@@ -71,13 +71,26 @@ def inference(args, model, test_save_path=None):
         metric_i = test_single_volume(image, label, model, classes=args.num_classes, patch_size=[args.img_size, args.img_size],
                                       test_save_path=test_save_path, case=case_name, z_spacing=args.z_spacing, dataset=args.dataset)
         metric_list += np.array(metric_i)
-        logging.info('idx %d case %s mean_dice %f mean_hd95 %f' % (i_batch, case_name, np.mean(metric_i, axis=0)[0], np.mean(metric_i, axis=0)[1]))
+        logging.info(
+            'idx %d case %s mean_dice %f mean_hd95 %f mean_iou %f' %
+            (i_batch, case_name,
+            np.mean(metric_i, axis=0)[0],
+            np.mean(metric_i, axis=0)[1],
+            np.mean(metric_i, axis=0)[2])
+        )
     metric_list = metric_list / len(db_test)
     for i in range(1, args.num_classes):
-        logging.info('Mean class %d mean_dice %f mean_hd95 %f' % (i, metric_list[i-1][0], metric_list[i-1][1]))
+        logging.info(
+            'Mean class %d mean_dice %f mean_hd95 %f mean_iou %f' %
+            (i, metric_list[i-1][0], metric_list[i-1][1], metric_list[i-1][2])
+        )
     performance = np.mean(metric_list, axis=0)[0]
     mean_hd95 = np.mean(metric_list, axis=0)[1]
-    logging.info('Testing performance in best val model: mean_dice : %f mean_hd95 : %f' % (performance, mean_hd95))
+    mean_iou = np.mean(metric_list, axis=0)[2]
+    logging.info(
+        'Testing performance in best val model: mean_dice : %f mean_hd95 : %f mean_iou : %f' %
+        (performance, mean_hd95, mean_iou)
+    )
     return "Testing Finished!"
 
 

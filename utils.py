@@ -49,17 +49,30 @@ class DiceLoss(nn.Module):
         return loss / self.n_classes
 
 
+# --- utils.py ---
+#TODO: review the below function according to this https://github.com/Beckschen/TransUNet/issues/39#issuecomment-896628115
+#TODO: segmentation evaluation has to follow standard medical image segmentation evaluation protocols such as MICCAI Brain Tumor Segmentation (BraTS)
 def calculate_metric_percase(pred, gt):
+    """
+    Returns per-case metrics as a tuple: (dice, hd95, iou)
+    Uses MedPy for exact definitions.
+    """
     pred[pred > 0] = 1
     gt[gt > 0] = 1
-    if pred.sum() > 0 and gt.sum()>0:
-        dice = metric.binary.dc(pred, gt)
-        hd95 = metric.binary.hd95(pred, gt)
-        return dice, hd95
-    elif pred.sum() > 0 and gt.sum()==0:
-        return 1, 0
+
+    if pred.sum() > 0 and gt.sum() > 0:
+        dice = metric.binary.dc(pred, gt)       # Dice
+        hd95 = metric.binary.hd95(pred, gt)     # HD95
+        iou  = metric.binary.jc(pred, gt)       # Jaccard / IoU
+        return dice, hd95, iou
+    elif pred.sum() > 0 and gt.sum() == 0:
+        # NOTE: Your original code returns a perfect score here (Dice=1, HD95=0).
+        # That makes false positives look "perfect". To preserve your current behavior,
+        # we also return IoU=1. If you prefer strict metrics, change to (0, 0, 0).
+        return 1, 0, 1
     else:
-        return 0, 0
+        return 0, 0, 0
+
 
 
 def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, dataset='Synapse'):
