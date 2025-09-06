@@ -9,3 +9,4 @@ scipy
 h5py
 opencv-python
 pandas
+matplotlib

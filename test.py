@@ -14,6 +14,12 @@ from datasets.dataset_cataract import Cataract1kDataset
 from utils import test_single_volume, evaluate_model_perf
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
+from visualize import (
+    visualize_synapse_sample,
+    visualize_cataract_sample,
+    visualize_synapse_batch,
+    visualize_cataract_batch,
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--volume_path', type=str,
@@ -52,6 +58,12 @@ parser.add_argument('--use_swin', action='store_true',
                     help='whether to use Swin Transformer as the backbone')
 parser.add_argument('--use_efficientnet', action='store_true',
                     help='whether to use EfficientNet as the decoder')
+parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
+parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
+parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
+parser.add_argument('--viz_save', type=str, default=None, help='path to save figure (file or directory)')
+parser.add_argument('--viz_out', type=str, default=None, help='output filename for the saved figure (used if --viz_save is a directory or not provided)')
+parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
 args = parser.parse_args()
 
 
@@ -187,6 +199,107 @@ if __name__ == "__main__":
     logging.info(str(args))
     logging.info(snapshot_name)
 
+    # Optional qualitative visualization before running full inference
+    if args.viz:
+        try:
+            # Helper to resolve save path from args.viz_save and args.viz_out
+            def resolve_save_path(default_name: str):
+                img_exts = {'.png', '.jpg', '.jpeg', '.pdf', '.svg', '.tif', '.tiff'}
+                base = args.viz_save
+                name = args.viz_out or default_name
+                if base is None:
+                    return os.path.join('qualitative', name)
+                ext = os.path.splitext(base)[1].lower()
+                if ext in img_exts:
+                    return base
+                return os.path.join(base, name)
+
+            if dataset_name == 'Synapse':
+                ds_viz = Synapse_dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
+                total = len(ds_viz)
+                start = max(0, min(args.viz_index, total - 1))
+                count = max(1, args.viz_count)
+                end = min(total, start + count)
+
+                if count > 1:
+                    vols, labs, titles = [], [], []
+                    for i in range(start, end):
+                        s = ds_viz[i]
+                        vols.append(s['image'])
+                        labs.append(s['label'])
+                        titles.append(s['case_name'])
+                    slice_indices = None if args.viz_slice is None else [args.viz_slice] * len(vols)
+                    default_name = f"Synapse_grid_{start}-{end-1}.png"
+                    save_path = resolve_save_path(default_name)
+                    figure_title = f"Synapse | cases {start}-{end-1}"
+                    visualize_synapse_batch(
+                        net,
+                        volumes=vols,
+                        labels=labs,
+                        slice_indices=slice_indices,
+                        img_size=args.img_size,
+                        row_titles=titles,
+                        figure_title=figure_title,
+                        save_path=save_path,
+                    )
+                else:
+                    sample = ds_viz[start]
+                    title = f"Synapse | case: {sample['case_name']}"
+                    default_name = f"Synapse_{sample['case_name']}.png"
+                    save_path = resolve_save_path(default_name)
+                    visualize_synapse_sample(
+                        net,
+                        volume=sample['image'],
+                        label=sample['label'],
+                        slice_index=args.viz_slice,
+                        img_size=args.img_size,
+                        figure_title=title,
+                        save_path=save_path,
+                    )
+            elif dataset_name == 'Cataract1k':
+                ds_viz = Cataract1kDataset(base_dir=args.volume_path, split="val")
+                total = len(ds_viz)
+                start = max(0, min(args.viz_index, total - 1))
+                count = max(1, args.viz_count)
+                end = min(total, start + count)
+
+                if count > 1:
+                    imgs, labs, titles = [], [], []
+                    for i in range(start, end):
+                        s = ds_viz[i]
+                        imgs.append(s['image'])
+                        labs.append(s['label'])
+                        titles.append(s['case_name'])
+                    default_name = f"Cataract_grid_{start}-{end-1}.png"
+                    save_path = resolve_save_path(default_name)
+                    figure_title = f"Cataract-101K | cases {start}-{end-1}"
+                    visualize_cataract_batch(
+                        net,
+                        images=imgs,
+                        labels=labs,
+                        img_size=args.img_size,
+                        row_titles=titles,
+                        figure_title=figure_title,
+                        save_path=save_path,
+                    )
+                else:
+                    sample = ds_viz[start]
+                    title = f"Cataract-101K | case: {sample['case_name']}"
+                    default_name = f"Cataract_{sample['case_name']}.png"
+                    save_path = resolve_save_path(default_name)
+                    visualize_cataract_sample(
+                        net,
+                        image=sample['image'],
+                        label=sample['label'],
+                        img_size=args.img_size,
+                        figure_title=title,
+                        save_path=save_path,
+                    )
+        except Exception as e:
+            raise RuntimeError(f"Visualization failed due to: {e}")
+        # Do not continue with testing when --viz is set
+        sys.exit(0)
+
     if args.is_savenii:
         args.test_save_dir = '../predictions'
         test_save_path = os.path.join(args.test_save_dir, args.exp, snapshot_name)
@@ -202,5 +315,3 @@ if __name__ == "__main__":
     print(f"performance results: {eval_results}")
 
     inference(args, net, test_save_path)
-
-
