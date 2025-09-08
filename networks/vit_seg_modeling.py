@@ -179,7 +179,7 @@ class Embeddings(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config, vis):
+    def __init__(self, config, vis, alternate_partial_attn=False):
         super(Block, self).__init__()
         self.hidden_size = config.hidden_size
         self.attention_norm = LayerNorm(config.hidden_size, eps=1e-6)
@@ -188,7 +188,7 @@ class Block(nn.Module):
         
         self.use_shsa = config.use_shsa
         if self.use_shsa:
-            self.attn = SHSAttention(config, vis)
+            self.attn = SHSAttention(config, vis, alternate_partial_attn=alternate_partial_attn)
         else:
             self.attn = Attention(config, vis)    
 
@@ -249,8 +249,14 @@ class Encoder(nn.Module):
         self.vis = vis
         self.layer = nn.ModuleList()
         self.encoder_norm = LayerNorm(config.hidden_size, eps=1e-6)
-        for _ in range(config.transformer["num_layers"]):
-            layer = Block(config, vis)
+        for i in range(config.transformer["num_layers"]):
+            if config.use_alternate_shsa:
+                alternate_partial_attn = (i % 2 == 1) # alternate every other layer
+                logger.info(f"Using alternate partial attention in layer {i}: {alternate_partial_attn}")
+            else: 
+                alternate_partial_attn = False  
+
+            layer = Block(config, vis, alternate_partial_attn=alternate_partial_attn)
             self.layer.append(copy.deepcopy(layer))
 
     def forward(self, hidden_states):

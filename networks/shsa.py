@@ -3,11 +3,12 @@ import torch.nn as nn
 import math
 
 class SHSAttention(nn.Module):
-    def __init__(self, config, vis):
+    def __init__(self, config, vis, alternate_partial_attn=False):
         super(SHSAttention, self).__init__()
         self.vis = vis
         self.hidden_size = config.hidden_size
-        
+        self.alternate_partial_attn = alternate_partial_attn
+
         # Calculate partial dimension (r = 1/4.67 from SHViT paper)
         self.pdim = int(self.hidden_size / 4.67) #as pare the SHViT paper default 
         self.qk_dim = 16  # Fixed per SHViT design
@@ -33,9 +34,13 @@ class SHSAttention(nn.Module):
         B, seq_len, _ = hidden_states.shape
         
         # Split into attended (pdim) and residual channels
-        x1 = hidden_states[..., :self.pdim]  # (B, seq_len, pdim)
-        x2 = hidden_states[..., self.pdim:]   # (B, seq_len, hidden_size-pdim)
-        
+        if self.alternate_partial_attn:
+            x1 = hidden_states[..., -self.pdim:]  # (B, seq_len, pdim)
+            x2 = hidden_states[..., :-self.pdim]   # (B, seq_len, hidden_size-pdim)
+        else:
+            x1 = hidden_states[..., :self.pdim]  # (B, seq_len, pdim)
+            x2 = hidden_states[..., self.pdim:]   # (B, seq_len, hidden_size-pdim)
+
         # Normalize partial channels
         x1 = self.pre_norm(x1)  # (B, seq_len, pdim)
         
@@ -53,7 +58,10 @@ class SHSAttention(nn.Module):
         attended_x1 = torch.matmul(attn_probs, v)  # (B, seq_len, pdim)
         
         # Concatenate with residual channels
-        output = torch.cat([attended_x1, x2], dim=-1)  # (B, seq_len, hidden_size)
+        if self.alternate_partial_attn:
+            output = torch.cat([x2, attended_x1], dim=-1)
+        else:
+            output = torch.cat([attended_x1, x2], dim=-1)  # (B, seq_len, hidden_size)
         
         # Final projection
         output = self.out(output)

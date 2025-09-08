@@ -52,9 +52,10 @@ parser.add_argument('--use_shsa', action='store_true',
                     help='whether to use single-head self-attention (SHSA) or the default multi-head self-attention')
 parser.add_argument('--use_swin', action='store_true',
                     help='whether to use Swin Transformer as the backbone')
-parser.add_argument('--use_efficientnet', action='store_true',
+parser.add_argument('--use_efficientnet', action='store_true', 
                     help='whether to use EfficientNet as the decoder')
-
+parser.add_argument('--use_alternate_shsa', action='store_true',
+                    help='whether to use alternate partial attention')
 args = parser.parse_args()
 
 
@@ -117,7 +118,11 @@ if __name__ == "__main__":
         args.ckpt_filename +='_layer'+str(args.num_layers)
 
     #pass the args use_shsa to the config_vit
+    if args.use_alternate_shsa and not args.use_shsa:
+        raise ValueError("The --use_alternate_shsa flag requires --use_shsa to be set as well.")
+    
     config_vit.use_shsa = args.use_shsa
+    config_vit.use_alternate_shsa = args.use_alternate_shsa
     config_vit.use_efficientnet = args.use_efficientnet
     config_vit.use_swin = args.use_swin
     if args.vit_name.find('R50') != -1:
