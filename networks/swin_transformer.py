@@ -133,13 +133,16 @@ class SwinEncoder(nn.Module):
         x = self.patch_embed(x)
         attn_weights = []
         
+        features = []
         for layer in self.layers:
+            features.append(x)
             x = layer(x)
             if self.vis:
                 attn_weights.append(None)
-            
+                
+
         x = self.norm(x)
-        return x, attn_weights
+        return x, attn_weights, features
 
 class SwinTransformer(nn.Module):
     """ Swin Transformer backbone """
@@ -151,8 +154,8 @@ class SwinTransformer(nn.Module):
     def forward(self, x):
         if x.size(1) == 1:
             x = x.repeat(1, 3, 1, 1)
-        encoded, attn_weights = self.encoder(x)
-        features = None
+        encoded, attn_weights, features = self.encoder(x)
+        # features = None
         return encoded, attn_weights, features
 
 # Decoder Components (moved from vit_seg_modeling.py)

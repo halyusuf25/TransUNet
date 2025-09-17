@@ -22,6 +22,7 @@ from .vit_seg_modeling_resnet_skip import ResNetV2
 from .shsa import SHSAttention
 from .swin_transformer import SwinTransformer, get_swin_tiny_config
 from torchvision.models.efficientnet import MBConvConfig, MBConv
+from .efficientnetpp import EfficientNetppDecoderBlock
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,7 @@ class Embeddings(nn.Module):
             if self.config.use_swin:
                 x, attn_weights, features = self.hybrid_model(x)
                 embeddings = x
+                features = None
             else:
                 x, features = self.hybrid_model(x)
                 x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
@@ -376,6 +378,14 @@ class DecoderCup(nn.Module):
             padding=1,
             use_batchnorm=True,
         )
+        # if self.config.use_swin and not self.config.use_efficientnet:
+        #     self.conv_more_skip = Conv2dReLU(
+        #         config.hidden_size,
+        #         head_channels,
+        #         kernel_size=3,
+        #         padding=1,
+        #         use_batchnorm=True,
+        #     )
         decoder_channels = config.decoder_channels
         in_channels = [head_channels] + list(decoder_channels[:-1])
         out_channels = decoder_channels
@@ -388,9 +398,11 @@ class DecoderCup(nn.Module):
         else:
             skip_channels=[0,0,0,0]
 
+        if self.config.use_swin:
+            skip_channels = [0, 0, 0, 0]
         if self.config.use_efficientnet:
             blocks = [
-            MBConvDecoderBlock(in_ch, out_ch) for in_ch, out_ch in zip(in_channels, out_channels)
+            EfficientNetppDecoderBlock(in_ch, sk_ch, out_ch) for in_ch, sk_ch, out_ch in zip(in_channels, skip_channels, out_channels)
         ]
         else:
             blocks = [
@@ -405,8 +417,19 @@ class DecoderCup(nn.Module):
         x = hidden_states.permute(0, 2, 1)
         x = x.contiguous().view(B, hidden, h, w)
         x = self.conv_more(x)
+        # if self.config.use_swin and not self.config.use_efficientnet and features is not None:
+        #     features_new = []
+        #     for feature in features:
+        #         B, n_patch, hidden = feature.size()  # reshape from (B, n_patch, hidden) to (B, h, w, hidden)
+        #         h, w = int(np.sqrt(n_patch)), int(np.sqrt(n_patch))
+        #         feature = feature.permute(0, 2, 1)
+        #         feature = feature.contiguous().view(B, hidden, h, w)
+        #         features_new.append(feature)
+        #         feature = self.conv_more_skip(feature)
+
         for i, decoder_block in enumerate(self.blocks):
             if features is not None:
+                # print(features, self.config.n_skip)
                 skip = features[i] if (i < self.config.n_skip) else None
             else:
                 skip = None
