@@ -68,3 +68,74 @@ class SHSAttention(nn.Module):
         output = self.proj_dropout(output)
         
         return output, weights
+    
+    
+    
+
+class TopkAttention(nn.Module):
+    """Top-k token selection attention without assuming a CLS token.
+
+    - Computes standard multi-head attention to get attended features `x_attn`.
+    - Scores tokens by the average attention they receive (key centrality):
+      mean over heads and queries of attn_prob to each key.
+    - Selects top-k tokens globally from the full sequence (no CLS special case).
+    - Returns both raw indices `idx` (B, K) and broadcasted `index` (B, K, C)
+      for convenient `torch.gather` on the token dimension.
+    """
+    def __init__(self, config, vis, dim, qkv_bias=False, keep_rate=0.5):
+        super().__init__()
+        self.vis = vis
+        self.num_heads = config.transformer["num_heads"]
+        head_dim = dim // self.num_heads
+        self.scale = head_dim ** -0.5
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
+        self.keep_rate = keep_rate
+        assert 0 < keep_rate <= 1, f"keep_rate must > 0 and <= 1, got {keep_rate}"
+
+    def forward(self, x, keep_rate=None, tokens=None):
+        if keep_rate is None:
+            keep_rate = self.keep_rate
+
+        B, N, C = x.shape
+        # QKV: [B, N, 3, H, C/H] -> [3, B, H, N, C/H]
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        # Attention probabilities
+        attn_logits = (q @ k.transpose(-2, -1)) * self.scale            # [B, H, N, N]
+        attn_prob = attn_logits.softmax(dim=-1)                          # [B, H, N, N]
+        weights = attn_prob if self.vis else None
+        attn = self.attn_drop(attn_prob)
+
+        # Attention output
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+
+        # Default: keep all tokens
+        remain_tokens = N
+
+        # Prune only if keep_rate < 1 or an explicit token count is provided
+        if (self.keep_rate < 1 and keep_rate < 1) or (tokens is not None):
+            remain_tokens = math.ceil(keep_rate * N) if tokens is None else tokens
+            # Clamp to valid range
+            remain_tokens = max(1, min(remain_tokens, N))
+            if remain_tokens == N:
+                return x, None, None, None, remain_tokens, weights
+
+            # CLS-free scoring: average attention received by each key across all queries and heads
+            # attn_prob: [B, H, N_q, N_k] = [B, H, N, N]
+            # 1) mean over heads -> [B, N, N]; 2) mean over queries -> [B, N]
+            key_scores = attn_prob.mean(dim=1).mean(dim=1)  # [B, N]
+
+            # Top-k token indices per batch (absolute in the current sequence)
+            _, idx = torch.topk(key_scores, remain_tokens, dim=1, largest=True, sorted=True)  # [B, K]
+            # Broadcast indices for torch.gather on x (B, N, C) along dim=1
+            index = idx.unsqueeze(-1).expand(-1, -1, C)  # [B, K, C]
+            return x, index, idx, key_scores, remain_tokens, weights
+
+        return x, None, None, None, remain_tokens, weights

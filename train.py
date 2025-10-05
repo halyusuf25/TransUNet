@@ -56,6 +56,8 @@ parser.add_argument('--use_efficientnet', action='store_true',
                     help='whether to use EfficientNet as the decoder')
 parser.add_argument('--use_alternate_shsa', action='store_true',
                     help='whether to use alternate partial attention')
+parser.add_argument('--topk_attn', type=float,
+                    default=0.0, help='keep rate for Top-k attention (0.0 means not using Top-k attention)')
 args = parser.parse_args()
 
 
@@ -121,6 +123,10 @@ if __name__ == "__main__":
     if args.use_alternate_shsa and not args.use_shsa:
         raise ValueError("The --use_alternate_shsa flag requires --use_shsa to be set as well.")
     
+    if args.use_shsa and args.topk_attn > 0.0:
+        raise ValueError("The --use_shsa flag is mutually exclusive with --topk_attn > 0.0.")
+    
+    config_vit.topk_attn = args.topk_attn
     config_vit.use_shsa = args.use_shsa
     config_vit.use_alternate_shsa = args.use_alternate_shsa
     config_vit.use_efficientnet = args.use_efficientnet

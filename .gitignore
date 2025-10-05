@@ -172,3 +172,6 @@ rtdetrv2_pytorch/dataset/
 
 ckpt/
 checkpoints/
+*.json
+*.txt
+*.png

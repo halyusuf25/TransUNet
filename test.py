@@ -61,6 +61,8 @@ parser.add_argument('--use_efficientnet', action='store_true',
                     help='whether to use EfficientNet as the decoder')
 parser.add_argument('--use_alternate_shsa', action='store_true',
                     help='whether to use alternate partial attention')
+parser.add_argument('--topk_attn', type=float, default=0.0, 
+                    help='if >0.0, use top-k attention (fraction of k) instead of full attention (mutually exclusive with --use_shsa)')
 parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
 parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
 parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
@@ -180,6 +182,11 @@ if __name__ == "__main__":
     # pass the args use_shsa to the config_vit
     if args.use_alternate_shsa and not args.use_shsa:
         raise ValueError("The --use_alternate_shsa flag requires --use_shsa to be set as well.")
+    
+    if args.use_shsa and args.topk_attn > 0.0:
+        raise ValueError("The --use_shsa flag is mutually exclusive with --topk_attn > 0.0.")
+    
+    config_vit.topk_attn = args.topk_attn
     config_vit.use_shsa = args.use_shsa
     config_vit.use_alternate_shsa = args.use_alternate_shsa
     config_vit.use_efficientnet = args.use_efficientnet
