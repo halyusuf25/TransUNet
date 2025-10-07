@@ -58,6 +58,21 @@ parser.add_argument('--use_alternate_shsa', action='store_true',
                     help='whether to use alternate partial attention')
 parser.add_argument('--topk_attn', type=float,
                     default=0.0, help='keep rate for Top-k attention (0.0 means not using Top-k attention)')
+
+###Teacher Model Argument:#####
+parser.add_argument('--use_kd', action='store_true', 
+                    help='whether to use knowledge distillation (kd) training')
+parser.add_argument('--teacher_vit_name', type=str,
+                    default='R50-ViT-B_16', help='load teacher model for kd-training')
+parser.add_argument('--teacher_ckpt', type=str,
+                    default=None, help='load teacher model checkpoints for kd-training')
+parser.add_argument('--teacher_num_heads', type=int,
+                    default=None, help='number of attention heads for the teacher model (default value sets in the imported CONFIGS_ViT_seg)')
+parser.add_argument('--teacher_num_layers', type=int,
+                    default=None, help='number of layers for the teacher model')
+parser.add_argument('--teacher_ckpt_path', type=str,
+                    default='ckpt/', help='path for teacher pretrained checkpoints')
+
 args = parser.parse_args()
 
 
@@ -135,7 +150,40 @@ if __name__ == "__main__":
         config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
     net.load_from(weights=np.load(config_vit.pretrained_path))
+    
+    
+    ### Load Teacher Model for KD-Training: ###
+    if args.use_kd:
+        if args.teacher_ckpt is None:
+            raise ValueError("The --teacher_ckpt argument must be provided when --use_kd is set.")
+        
+        if not os.path.isfile(os.path.join(args.teacher_ckpt_path, args.teacher_ckpt)):
+            raise ValueError(f"The specified teacher checkpoint file does not exist: {os.path.join(args.teacher_ckpt_path, args.teacher_ckpt)}")
+        teacher_config_vit = CONFIGS_ViT_seg[args.teacher_vit_name] 
+        teacher_config_vit.n_classes = args.num_classes
+        teacher_config_vit.n_skip = args.n_skip
+        if args.teacher_num_heads is not None:
+            teacher_config_vit.transformer.num_heads = args.teacher_num_heads
+        if args.teacher_num_layers is not None:
+            teacher_config_vit.transformer.num_layers = args.teacher_num_layers
+        teacher_config_vit.use_shsa = args.use_shsa
+        teacher_config_vit.use_alternate_shsa = args.use_alternate_shsa
+        teacher_config_vit.topk_attn = args.topk_attn
+        teacher_config_vit.use_efficientnet = args.use_efficientnet
+        teacher_config_vit.use_swin = args.use_swin
+        if args.teacher_vit_name.find('R50') != -1:
+            teacher_config_vit.patches.grid = config_vit.patches.grid
+        teacher_net = ViT_seg(teacher_config_vit, img_size=args.img_size, num_classes=teacher_config_vit.n_classes).cuda()
+        teacher_net.load_state_dict(torch.load(os.path.join(args.teacher_ckpt_path, args.teacher_ckpt)))
+        teacher_net.eval()  # Set teacher to evaluation mode
+    else:
+        Warning("Knowledge Distillation (KD) training is not enabled. Proceeding without a teacher model.")
+            
+
     # print(f"arguments for training: {args}")
     # print(f"configuration of the vit model for training: {config_vit}") 
     trainer = {'Synapse': trainer_synapse, 'Cataract1k': trainer_synapse}
-    trainer[dataset_name](args, net, snapshot_path)
+    if args.use_kd:
+        trainer[dataset_name](args, net, snapshot_path, teacher_model=teacher_net)
+    else:
+        trainer[dataset_name](args, net, snapshot_path)

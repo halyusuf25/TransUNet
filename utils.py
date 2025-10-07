@@ -50,28 +50,28 @@ class DiceLoss(nn.Module):
 
 
 # --- utils.py ---
-#TODO: review the below function according to this https://github.com/Beckschen/TransUNet/issues/39#issuecomment-896628115
-#TODO: segmentation evaluation has to follow standard medical image segmentation evaluation protocols such as MICCAI Brain Tumor Segmentation (BraTS)
 def calculate_metric_percase(pred, gt):
     """
     Returns per-case metrics as a tuple: (dice, hd95, iou)
     Uses MedPy for exact definitions.
     """
-    pred[pred > 0] = 1
-    gt[gt > 0] = 1
+    pred = np.asarray(pred > 0, dtype=np.bool_)
+    gt = np.asarray(gt > 0, dtype=np.bool_)
 
-    if pred.sum() > 0 and gt.sum() > 0:
-        dice = metric.binary.dc(pred, gt)       # Dice
-        hd95 = metric.binary.hd95(pred, gt)     # HD95
-        iou  = metric.binary.jc(pred, gt)       # Jaccard / IoU
-        return dice, hd95, iou
-    elif pred.sum() > 0 and gt.sum() == 0:
-        # NOTE: Your original code returns a perfect score here (Dice=1, HD95=0).
-        # That makes false positives look "perfect". To preserve your current behavior,
-        # we also return IoU=1. If you prefer strict metrics, change to (0, 0, 0).
-        return 1, 0, 1
-    else:
-        return 0, 0, 0
+    pred_voxels = pred.sum()
+    gt_voxels = gt.sum()
+
+    if pred_voxels == 0 and gt_voxels == 0:
+        return 1.0, 0.0, 1.0
+
+    if pred_voxels == 0 or gt_voxels == 0:
+        max_hd95_mm = 373.128664
+        return 0.0, max_hd95_mm, 0.0
+
+    dice = metric.binary.dc(pred, gt)
+    hd95 = metric.binary.hd95(pred, gt)
+    iou = metric.binary.jc(pred, gt)
+    return dice, hd95, iou
 
 
 
@@ -88,7 +88,7 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
             input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().cuda()
             net.eval()
             with torch.no_grad():
-                outputs, _ = net(input)
+                outputs, _ , _ = net(input)
                 out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
                 out = out.cpu().detach().numpy()
                 if x != patch_size[0] or y != patch_size[1]:
