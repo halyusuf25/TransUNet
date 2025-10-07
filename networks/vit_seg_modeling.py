@@ -165,7 +165,6 @@ class Embeddings(nn.Module):
             if self.config.use_swin:
                 x, attn_weights, features = self.hybrid_model(x)
                 embeddings = x
-                features = None
             else:
                 x, features = self.hybrid_model(x)
                 x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
@@ -398,8 +397,6 @@ class DecoderCup(nn.Module):
         else:
             skip_channels=[0,0,0,0]
 
-        if self.config.use_swin:
-            skip_channels = [0, 0, 0, 0]
         if self.config.use_efficientnet:
             blocks = [
             EfficientNetppDecoderBlock(in_ch, sk_ch, out_ch) for in_ch, sk_ch, out_ch in zip(in_channels, skip_channels, out_channels)

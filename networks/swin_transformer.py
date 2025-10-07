@@ -124,8 +124,38 @@ class SwinEncoder(nn.Module):
                      mlp_ratio=config.transformer["mlp_ratio"],
                      qkv_bias=True,
                      dropout_rate=config.transformer["dropout_rate"])
-            for _ in range(config.transformer["num_layers"])
+            for _ in range(config.transformer["num_layers"] // 3)
         ])
+
+        # self.patch_embed2 = SwinPatchEmbed(img_size=img_size, 
+        #                                 patch_size=config.patch_size,
+        #                                 in_chans=config.hidden_size, 
+        #                                 embed_dim=config.hidden_size)
+        self.transconv1 = nn.ConvTranspose2d(config.hidden_size, 64, kernel_size=config.patch_size // 2, stride=config.patch_size // 2)
+
+        self.layers2 = nn.ModuleList([
+            SwinBlock(dim=config.hidden_size, 
+                     num_heads=config.transformer["num_heads"],
+                     window_size=config.window_size,
+                     mlp_ratio=config.transformer["mlp_ratio"],
+                     qkv_bias=True,
+                     dropout_rate=config.transformer["dropout_rate"])
+            for _ in range(config.transformer["num_layers"] // 3)
+        ])
+
+        self.transconv2 = nn.ConvTranspose2d(config.hidden_size, 256, kernel_size=config.patch_size // 4, stride=config.patch_size // 4)
+
+        self.layers3 = nn.ModuleList([
+            SwinBlock(dim=config.hidden_size, 
+                     num_heads=config.transformer["num_heads"],
+                     window_size=config.window_size,
+                     mlp_ratio=config.transformer["mlp_ratio"],
+                     qkv_bias=True,
+                     dropout_rate=config.transformer["dropout_rate"])
+            for _ in range(config.transformer["num_layers"] // 3)
+        ])
+
+        self.transconv3 = nn.ConvTranspose2d(config.hidden_size, 512, kernel_size=config.patch_size // 8, stride=config.patch_size // 8)
         
         self.norm = LayerNorm(config.hidden_size, eps=1e-6)
         
@@ -135,14 +165,26 @@ class SwinEncoder(nn.Module):
         
         features = []
         for layer in self.layers:
-            features.append(x)
             x = layer(x)
             if self.vis:
                 attn_weights.append(None)
-                
+        f1 = x.contiguous().view(x.size(0), int(np.sqrt(x.size(1))), int(np.sqrt(x.size(1))), -1).permute(0, 3, 1, 2)
+        features.append(self.transconv1(f1))
+        for layer in self.layers2:
+            x = layer(x)
+            if self.vis:
+                attn_weights.append(None)
+        f2 = x.contiguous().view(x.size(0), int(np.sqrt(x.size(1))), int(np.sqrt(x.size(1))), -1).permute(0, 3, 1, 2)
+        features.append(self.transconv2(f2))
+        for layer in self.layers3:
+            x = layer(x)
+            if self.vis:
+                attn_weights.append(None)
+        f3 = x.contiguous().view(x.size(0), int(np.sqrt(x.size(1))), int(np.sqrt(x.size(1))), -1).permute(0, 3, 1, 2)
+        features.append(self.transconv3(f3))
 
         x = self.norm(x)
-        return x, attn_weights, features
+        return x, attn_weights, features[::-1]
 
 class SwinTransformer(nn.Module):
     """ Swin Transformer backbone """
