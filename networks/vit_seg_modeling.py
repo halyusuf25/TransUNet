@@ -19,7 +19,7 @@ from scipy import ndimage
 from . import vit_seg_configs as configs
 from .vit_seg_modeling_resnet_skip import ResNetV2
 
-from .shsa import SHSAttention
+from .attention import SHSAttention, TopkAttention
 from .swin_transformer import SwinTransformer, get_swin_tiny_config
 from torchvision.models.efficientnet import MBConvConfig, MBConv
 from .efficientnetpp import EfficientNetppDecoderBlock
