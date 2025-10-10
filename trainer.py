@@ -13,7 +13,7 @@ from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import DiceLoss
-from networks.distillation import dist_loss
+from networks.distillation import compute_kd_loss
 from torchvision import transforms
 from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
 from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
@@ -72,7 +72,17 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
             if args.use_kd and teacher_model is not None:
                 with torch.no_grad():
                     teacher_outputs, _ , teacher_features = teacher_model(image_batch)
-                kd_loss = dist_loss(outputs, teacher_outputs, features, teacher_features)
+                kd_loss, _ = compute_kd_loss(
+                    kd_points=args.kd_points,
+                    weights=args.kd_weights,
+                    student_logits=outputs,
+                    teacher_logits=teacher_outputs,
+                    student_features=features,
+                    teacher_features=teacher_features,
+                    backbone_pair=None,
+                    mgd_predictor=None,
+                    temperature=args.kd_temperature,
+                )
                 loss = (1-gamma) * (0.5 * loss_ce + 0.5 * loss_dice) + gamma * kd_loss
             else:
                 loss = 0.5 * loss_ce + 0.5 * loss_dice
@@ -103,7 +113,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
 
-        save_interval = 1  # int(max_epoch/6)
+        save_interval = 80  # int(max_epoch/6)
         if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), save_mode_path)

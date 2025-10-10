@@ -72,6 +72,12 @@ parser.add_argument('--teacher_num_layers', type=int,
                     default=None, help='number of layers for the teacher model')
 parser.add_argument('--teacher_ckpt_path', type=str,
                     default='ckpt/', help='path for teacher pretrained checkpoints')
+parser.add_argument('--kd_temperature', type=float,
+                    default=1.0, help='temperature for kd training (default 1.0 means no temperature scaling)')
+parser.add_argument('--kd_points' , type=str,
+                    default='logits', help='"logits", "intermediate", "features", "logits+intermediate", and "all" are options for kd training')
+###########################################
+
 
 args = parser.parse_args()
 
@@ -162,6 +168,7 @@ if __name__ == "__main__":
         teacher_config_vit = CONFIGS_ViT_seg[args.teacher_vit_name] 
         teacher_config_vit.n_classes = args.num_classes
         teacher_config_vit.n_skip = args.n_skip
+        # teacher_config_vit.kd_points = args.kd_points
         if args.teacher_num_heads is not None:
             teacher_config_vit.transformer.num_heads = args.teacher_num_heads
         if args.teacher_num_layers is not None:

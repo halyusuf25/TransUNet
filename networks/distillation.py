@@ -1,99 +1,226 @@
+from __future__ import annotations
+from typing import Dict, Iterable, Tuple, Callable
+from dataclasses import dataclass
+from enum import Enum
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
+import torch.nn.functional as F
+import random
+from typing import Optional, List, Union
+import warnings as Warnings
 
-def distillation_loss(student_logits, teacher_logits):
-    """
-    Computes pixel-wise distillation loss using KL divergence between teacher and student logits.
-    
-    Args:
-        student_logits (torch.Tensor): Student network logits, shape (B, C, H, W)
-        teacher_logits (torch.Tensor): Teacher network logits, shape (B, C, H, W)
-    
-    Returns:
-        torch.Tensor: Scalar loss value
-    """
-    temperature = 3.0  # Temperature for softening logits
-    teacher_probs = F.softmax(teacher_logits / temperature, dim=1)
-    student_log_probs = F.log_softmax(student_logits / temperature, dim=1)
-    
-    # KLDivLoss(reduction='none') returns (B, C, H, W)
-    loss = nn.KLDivLoss(reduction='none')(student_log_probs, teacher_probs.detach())
-    
-    # Sum over classes (dim=1), then average over H, W, and batch
-    loss_per_pixel = loss.sum(dim=1)  # Shape: (B, H, W)
-    loss_per_sample = loss_per_pixel.mean(dim=(1, 2))  # Shape: (B,)
-    total_loss = loss_per_sample.mean()  # Scalar
-    
-    return total_loss
+# ---------- Config ----------
+class KDTarget(str, Enum):
+    LOGITS = "logits"
+    INTERMEDIATE = "intermediate"          # pair-wise (SKD)
+    BACKBONE = "backbone"                  # MGD-style
+    LOGITS_INTERMEDIATE = "logits+intermediate"
+    ALL = "all"
 
-def pairwise_distillation_loss(student_features, teacher_features):
-    """
-    Computes pairwise distillation loss based on similarity matrices of feature maps.
-    
-    Args:
-        student_features (torch.Tensor): Student feature maps, shape (B, C, H, W)
-        teacher_features (torch.Tensor): Teacher feature maps, shape (B, C, H, W)
-    
-    Returns:
-        torch.Tensor: Scalar loss value
-    """
-    B, C, H, W = student_features[0].shape
-    L = H * W  # Total spatial locations
+@dataclass
+class KDWeights:
+    logits: float = 0.5
+    intermediate: float = 0.5
+    backbone: float = 1.0
 
-    # Reshape and L2-normalize features along the channel dimension
-    student_f = F.normalize(student_features.view(B, C, -1), p=2, dim=1)  # (B, C, L)
-    teacher_f = F.normalize(teacher_features.view(B, C, -1), p=2, dim=1)  # (B, C, L)
+# ---------- Individual loss implementations ----------
 
-    # Compute similarity matrices via batch matrix multiplication
-    student_sim = torch.bmm(student_f.transpose(1, 2), student_f)  # (B, L, L)
-    teacher_sim = torch.bmm(teacher_f.transpose(1, 2), teacher_f)  # (B, L, L)
+# -------------------------------------------------------------------------
+# 1) Pixel-wise distillation (PX) — KD with temperature at the pixel level
+#     (Hinton KD, applied per-pixel as in SKD pixel-wise baseline)
+# -------------------------------------------------------------------------
 
-    # MSE loss (mean over B, L, L)
-    loss = F.mse_loss(student_sim, teacher_sim.detach())
+def pixel_wise_distillation_loss(
+    student_logits: torch.Tensor,    # [N, C, H, W]
+    teacher_logits: torch.Tensor,    # [N, C, H, W]
+    temperature: float = 1.0,
+    mask: Optional[torch.Tensor] = None,   # [N, H, W] or [N,1,H,W]
+    reduction: str = "mean",
+) -> torch.Tensor:
+    T = temperature
+
+    # 1) Temperature-scaled probabilities
+    s_logp = F.log_softmax(student_logits / T, dim=1)  # [N,C,H,W]
+    t_prob = F.softmax(teacher_logits / T, dim=1)      # [N,C,H,W]
+
+    # 2) Elementwise KL(q_t || p_s) per class
+    kl_per_class = F.kl_div(s_logp, t_prob, reduction="none")  # [N,C,H,W]
+
+    # 3) Sum over classes → per-pixel KL, then multiply by T^2
+    kl_per_pixel = kl_per_class.sum(dim=1) * (T * T)   # [N,H,W]
+
+    # 4) Optional spatial mask; otherwise mean/sum over all pixels & batch
+    if mask is not None:
+        # broadcast-safe mask: [N,H,W] or [N,1,H,W] → [N,H,W]
+        if mask.dim() == 4 and mask.size(1) == 1:
+            mask = mask.squeeze(1)
+        mask = mask.float()
+        if reduction == "mean":
+            # mean over masked pixels only
+            loss = (kl_per_pixel * mask).sum() / mask.sum().clamp_min(1.)
+        else: # sum
+            # sum over masked pixels only
+            loss = (kl_per_pixel * mask).sum()
+    else:
+        loss = kl_per_pixel.mean() if reduction == "mean" else kl_per_pixel.sum()
 
     return loss
 
-def dist_loss(student_logits, teacher_logits, student_features, teacher_features):
-    temperature = 3.0  # Temperature for softening logits
-    teacher_probs = F.softmax(teacher_logits / temperature, dim=1)
-    student_log_probs = F.log_softmax(student_logits / temperature, dim=1)
+
+# -----------------------------------------------------------------------------------
+# 2) Pair-wise distillation (PR) — match pairwise cosine similarities across pixels
+#     Following SKD Sec. 3.1: a_ij = <fi, fj> / (||fi|| ||fj||), L2 between matrices
+# -----------------------------------------------------------------------------------
+
+def _pairwise_cosine_matrix(feat: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    feat: [N, C, H, W] -> returns [N, HW, HW] cosine similarity matrices.
+    """
+    n, c, h, w = feat.shape
+    x = feat.flatten(2)                                   # [N, C, HW]
+    x = F.normalize(x, p=2, dim=1, eps=eps)              # L2 norm across channels
+    sim = torch.bmm(x.transpose(1, 2), x)                # [N, HW, HW]
+    return sim
+
+def pair_wise_distillation_loss(
+    student_features: Union[torch.Tensor, List[torch.Tensor]],
+    teacher_features: Union[torch.Tensor, List[torch.Tensor]],
+    target_hw_max: int = 4096,      # safety: cap HW for similarity matrix (e.g., <= 64x64)
+    spatial_downsample: Optional[int] = None,  # e.g., 2/4 to reduce H,W before sim
+    reduction: str = "mean"
+) -> torch.Tensor:
+    """
+    Computes the SKD pair-wise similarity loss. If lists are provided,
+    it averages the loss across layers.
+    - If H*W is large, we adaptively pool to keep HW <= target_hw_max.
+    - spatial_downsample optionally avg-pools before computing similarities.
+    """
+    if isinstance(student_features, torch.Tensor):
+        student_features = [student_features]
+    if isinstance(teacher_features, torch.Tensor):
+        teacher_features = [teacher_features]
+    assert len(student_features) == len(teacher_features), "Mismatch in number of feature maps."
+
+    losses = []
+    for s_feat, t_feat in zip(student_features, teacher_features):
+        # Optional spatial pooling
+        if spatial_downsample and spatial_downsample > 1:
+            Warnings.warn(f"Pair-wise distillation: downsampling spatially by {spatial_downsample}")
+            s_feat = F.avg_pool2d(s_feat, kernel_size=spatial_downsample, stride=spatial_downsample)
+            t_feat = F.avg_pool2d(t_feat, kernel_size=spatial_downsample, stride=spatial_downsample)
+
+        # Ensure HW small enough by adaptive pooling
+        n, _, h_s, w_s = s_feat.shape
+        n2, _, h_t, w_t = t_feat.shape
+        
+        # Bring both to the same spatial size (use student’s by default)
+        if (h_s != h_t) or (w_s != w_t):
+            t_feat = F.adaptive_avg_pool2d(t_feat, (h_s, w_s))
+
+        hw = h_s * w_s
+        if hw > target_hw_max:
+            # Try reduce both to (floor(sqrt(target)), floor(sqrt(target)))
+            Warnings.warn(f"Pair-wise distillation: reducing HW={hw} to <= {target_hw_max}")
+            side = int((target_hw_max) ** 0.5)
+            s_feat = F.adaptive_avg_pool2d(s_feat, (side, side))
+            t_feat = F.adaptive_avg_pool2d(t_feat, (side, side))
+
+        As = _pairwise_cosine_matrix(s_feat)   # [N, HW, HW]
+        At = _pairwise_cosine_matrix(t_feat)
+        # L2 between matrices, normalized by (HW^2), averaged over batch
+        diff = (As - At).pow(2)
+        # normalize by matrix size (matches Eq. (2) normalization spirit)
+        denom = diff.shape[1] * diff.shape[2]
+        loss = diff.sum(dim=(1,2)) / float(denom)
+        losses.append(loss.mean())
+
+    total = torch.stack(losses).mean()
+    return total if reduction == "mean" else total * len(losses)
+
+def kd_backbone_mgd_loss(student_feat: torch.Tensor,
+                         teacher_feat: torch.Tensor,
+                         mgd_predictor: nn.Module,
+                         mask_ratio: float = 0.5) -> torch.Tensor:
+    """
+    Minimal MGD-style loss: mask student feature and force predictor to
+    reconstruct teacher feature (teacher detached). See Yang et al. (ECCV'22).
+    """
+    B, Cs, H, W = student_feat.shape
+    Ct = teacher_feat.shape[1]
+    assert hasattr(mgd_predictor, 'forward'), "Pass a 1x1 conv or small head"
+
+    # binary mask over spatial positions
+    with torch.no_grad():
+        mask = (torch.rand(B, 1, H, W, device=student_feat.device) > mask_ratio).float()
+    s_masked = student_feat * mask                   # (B,Cs,H,W) masked student
+    pred_t   = mgd_predictor(s_masked)               # (B,Ct,H,W)
+    return F.mse_loss(pred_t, teacher_feat.detach())
+
+# ---------- Dispatcher ----------
+LossFn = Callable[..., torch.Tensor]
+
+def _targets_to_set(kd_points: str) -> set:
+    kd_points = kd_points.lower()
+    if kd_points in {KDTarget.ALL, "all"}:
+        return {"logits", "intermediate", "backbone"}
+    if kd_points in {KDTarget.LOGITS_INTERMEDIATE, "logits+intermediate", "logits_intermediate"}:
+        return {"logits", "intermediate"}
+    if kd_points in {KDTarget.LOGITS, "logits"}:
+        return {"logits"}
+    if kd_points in {KDTarget.INTERMEDIATE, "intermediate"}:
+        return {"intermediate"}
+    if kd_points in {KDTarget.BACKBONE, "backbone"}:
+        return {"backbone"}
+    raise ValueError(f"Unknown kd_points: {kd_points}")
+
+def compute_kd_loss(
+    *,
+    kd_points: str,
+    weights: KDWeights,
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    student_features: Iterable[torch.Tensor],
+    teacher_features: Iterable[torch.Tensor],
+    backbone_pair: Tuple[torch.Tensor, torch.Tensor] | None = None,
+    mgd_predictor: nn.Module | None = None,
+    temperature: float = 1.0,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    selected = _targets_to_set(kd_points)
+
+    components: Dict[str, torch.Tensor] = {}
+    if "logits" in selected:
+        components["logits"] = pixel_wise_distillation_loss(
+            student_logits, 
+            teacher_logits,
+            temperature=temperature,
+            mask=None,
+            reduction="mean",
+        )
     
-    # KLDivLoss(reduction='none') returns (B, C, H, W)
-    loss = nn.KLDivLoss(reduction='none')(student_log_probs, teacher_probs.detach())
+    if "intermediate" in selected:
+        # components["intermediate"] = kd_pairwise_loss(student_features, teacher_features)
+        components["intermediate"] = pair_wise_distillation_loss(
+            student_features,
+            teacher_features,
+            target_hw_max=16384, #default value is 4096 (i.e., 64x64)
+            spatial_downsample=None,
+            reduction="mean",
+        )
+
+    if "backbone" in selected:
+        assert backbone_pair is not None and mgd_predictor is not None, \
+            "Provide backbone_pair=(student_feat, teacher_feat) and mgd_predictor for MGD"
+        s_back, t_back = backbone_pair
+        components["backbone"] = kd_backbone_mgd_loss(s_back, t_back, mgd_predictor)
+
+    # weighted sum
+    total = (
+        weights.logits       * components.get("logits",       torch.tensor(0., device=student_logits.device)) +
+        weights.intermediate * components.get("intermediate", torch.tensor(0., device=student_logits.device)) +
+        weights.backbone     * components.get("backbone",     torch.tensor(0., device=student_logits.device))
+    )
     
-    # Sum over classes (dim=1), then average over H, W, and batch
-    loss_per_pixel = loss.sum(dim=1)  # Shape: (B, H, W)
-    loss_per_sample = loss_per_pixel.mean(dim=(1, 2))  # Shape: (B,)
-    total_resp_loss = loss_per_sample.mean()  # Scalar
-
-    B, C, H, W = student_features[0].shape
-    # print(f"Student features shape: {student_features[0].shape}")
-    # print(f"length of student features: {len(student_features)}")
-    # print(f"length of teacher features: {len(teacher_features)}")
-    # print(f"Teacher features shape: {teacher_features[0].shape}")
-    number_layers = len(student_features)
-    L = H * W  # Total spatial locations
-    # student_features = student_features[-1]
-    # teacher_features = teacher_features[-1]
-    st_ft = student_features
-    tr_ft = teacher_features
-    # Reshape and L2-normalize features along the channel dimension
-    pairw_loss = 0.0
-    for l in range(number_layers):
-        student_features = st_ft[l]
-        teacher_features = tr_ft[l]
-        student_f = F.normalize(student_features.view(B, C, -1), p=2, dim=1)  # (B, C, L)
-        teacher_f = F.normalize(teacher_features.view(B, C, -1), p=2, dim=1)  # (B, C, L)
-
-        # Compute similarity matrices via batch matrix multiplication
-        student_sim = torch.bmm(student_f.transpose(1, 2), student_f)  # (B, L, L)
-        teacher_sim = torch.bmm(teacher_f.transpose(1, 2), teacher_f)  # (B, L, L)
-
-        # MSE loss (mean over B, L, L)
-        pairw_loss += F.mse_loss(student_sim, teacher_sim.detach())
-
-
-    total_kd_loss = 0.5 * total_resp_loss + 0.5 * pairw_loss
-
-    return total_kd_loss
+    # Report scalars for logging
+    scalars = {k: float(v.detach().item()) for k, v in components.items()}
+    scalars["total_kd"] = float(total.detach().item())
+    return total, scalars
