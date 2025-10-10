@@ -130,6 +130,7 @@ class Embeddings(nn.Module):
         self.hybrid = None
         self.config = config
         img_size = _pair(img_size)
+        self.swin_config = get_swin_tiny_config()
 
         if config.patches.get("grid") is not None:   # ResNet
             grid_size = config.patches["grid"]
@@ -145,9 +146,11 @@ class Embeddings(nn.Module):
         if self.hybrid:
             
             if config.use_swin:
-                config_swin = get_swin_tiny_config()
-                self.hybrid_model = SwinTransformer(config_swin, img_size=img_size, vis=False)
-                # in_channels = config_swin.hidden_size * 16
+                self.hybrid_model = SwinTransformer(self.swin_config, img_size=img_size, vis=False)
+                # in_channels = self.swin_config.hidden_size * 16
+                n_patches = (img_size[0] // self.swin_config.patch_size) * (img_size[1] // self.swin_config.patch_size)
+                # self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
+                self.patch_embeddings = nn.Identity()
             else:
                 self.hybrid_model = ResNetV2(block_units=config.resnet.num_layers, width_factor=config.resnet.width_factor)
                 in_channels = self.hybrid_model.width * 16
@@ -155,7 +158,8 @@ class Embeddings(nn.Module):
                                             out_channels=config.hidden_size,
                                             kernel_size=patch_size,
                                             stride=patch_size)
-                self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
+                
+            self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
 
         self.dropout = Dropout(config.transformer["dropout_rate"])
 
@@ -163,16 +167,19 @@ class Embeddings(nn.Module):
     def forward(self, x):
         if self.hybrid:
             if self.config.use_swin:
-                x, attn_weights, features = self.hybrid_model(x)
-                embeddings = x
-            else:
-                x, features = self.hybrid_model(x)
-                x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
-                x = x.flatten(2)
-                x = x.transpose(-1, -2)  # (B, n_patches, hidden)
-
-                embeddings = x + self.position_embeddings
+                x, _ , features = self.hybrid_model(x) # x: [B, N, hidden]
+                # embeddings = x
+                embeddings = x + self.position_embeddings 
                 embeddings = self.dropout(embeddings)
+                return embeddings, features
+            
+            x, features = self.hybrid_model(x)    
+            x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
+            x = x.flatten(2)
+            x = x.transpose(-1, -2)  # (B, n_patches, hidden)
+
+            embeddings = x + self.position_embeddings
+            embeddings = self.dropout(embeddings)
         else:
             features = None
         
@@ -188,15 +195,21 @@ class Block(nn.Module):
         self.ffn = Mlp(config)
         
         self.use_shsa = config.use_shsa
+        self.topk_attn = config.topk_attn 
         if self.use_shsa:
             self.attn = SHSAttention(config, vis, alternate_partial_attn=alternate_partial_attn)
+        elif self.topk_attn > 0.0:
+            self.attn = TopkAttention(config, vis, config.hidden_size, keep_rate=self.topk_attn)
         else:
             self.attn = Attention(config, vis)    
 
     def forward(self, x):
         h = x
         x = self.attention_norm(x)
-        x, weights = self.attn(x)
+        if self.topk_attn > 0.0:
+            x, _ , _ , _ , _ ,weights = self.attn(x)
+        else:
+            x, weights = self.attn(x)
         x = x + h
 
         h = x
@@ -208,7 +221,7 @@ class Block(nn.Module):
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
         with torch.no_grad():
-            if not self.use_shsa:
+            if not self.use_shsa and self.topk_attn <= 0.0:
                 query_weight = np2th(weights[pjoin(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 key_weight = np2th(weights[pjoin(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 value_weight = np2th(weights[pjoin(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
