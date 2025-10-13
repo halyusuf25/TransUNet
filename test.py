@@ -320,12 +320,12 @@ if __name__ == "__main__":
     else:
         test_save_path = None
     
-    eval_results=evaluate_model_perf(net,
-                        input_size=(3, args.img_size,args.img_size),
-                        throughput_batch_size=64,
-                        warmup=20,
-                        iterations=300,)
-    print(f"performance results: {eval_results}")
+    # eval_results=evaluate_model_perf(net,
+    #                     input_size=(3, args.img_size,args.img_size),
+    #                     throughput_batch_size=64,
+    #                     warmup=20,
+    #                     iterations=300,)
+    # print(f"performance results: {eval_results}")
 
     inference(args, net, test_save_path)
     

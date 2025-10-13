@@ -94,11 +94,11 @@ class TopkAttention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
         self.keep_rate = keep_rate
-        assert 0 < keep_rate <= 1, f"keep_rate must > 0 and <= 1, got {keep_rate}"
+        assert 0 < keep_rate <= 1.0, f"keep_rate must > 0 and <= 1.0, got {keep_rate}"
 
     def forward(self, x, keep_rate=None, tokens=None):
-        if keep_rate is None:
-            keep_rate = self.keep_rate
+        # if keep_rate is None:
+        #     keep_rate = self.keep_rate
 
         B, N, C = x.shape
         # QKV: [B, N, 3, H, C/H] -> [3, B, H, N, C/H]
@@ -120,8 +120,8 @@ class TopkAttention(nn.Module):
         remain_tokens = N
 
         # Prune only if keep_rate < 1 or an explicit token count is provided
-        if (self.keep_rate < 1 and keep_rate < 1) or (tokens is not None):
-            remain_tokens = math.ceil(keep_rate * N) if tokens is None else tokens
+        if (self.keep_rate < 1.0) or (tokens is not None):
+            remain_tokens = math.ceil(self.keep_rate * N) if tokens is None else tokens
             # Clamp to valid range
             remain_tokens = max(1, min(remain_tokens, N))
             if remain_tokens == N:
