@@ -192,6 +192,15 @@ CUDA_VISIBLE_DEVICES=4 python test.py \
   --ckpt f1_transck_4classes_Cataract1k_4_class_epoch_215.pth 
 
 
+Train with swin backbone
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=216 \
+         --ckpt_dir checkpoints/ \
+         --ckpt swin_backbone \
+         --use_swin 
+
 Training script with KD
 
 CUDA_VISIBLE_DEVICES=4 python train.py \
@@ -210,3 +219,54 @@ CUDA_VISIBLE_DEVICES=4 python test.py \
          --max_epochs=2 \
          --ckpt_dir checkpoints/ \
          --ckpt epoch_1.pth
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=2 \
+         --ckpt kd_default \
+         --use_kd \
+         --kd_points intermediate \
+         --batch_size 8 \
+         --teacher_vit_name R50-ViT-B_16 \
+         --teacher_ckpt_path checkpoints/ \
+         --teacher_ckpt transunet_default_config_Synapse_9_class_epoch_214.pth
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=2 \
+         --ckpt kd_default \
+         --use_kd \
+         --kd_points backbone \
+         --teacher_vit_name R50-ViT-B_16 \
+         --teacher_ckpt_path checkpoints/ \
+         --teacher_ckpt transunet_default_config_Synapse_9_class_epoch_214.pth
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=2 \
+         --ckpt kd_default \
+         --use_kd \
+         --kd_points all \
+         --batch_size 8 \
+         --teacher_vit_name R50-ViT-B_16 \
+         --teacher_ckpt_path checkpoints/ \
+         --teacher_ckpt transunet_default_config_Synapse_9_class_epoch_214.pth
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=216 \
+         --topk 0.25
+         --ckpt topk25
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs=216 \
+         --topk 0.25 \
+         --ckpt topk25
