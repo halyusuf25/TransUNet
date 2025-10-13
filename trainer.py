@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+from pyexpat import features
 import random
 import sys
 import time
@@ -13,7 +14,7 @@ from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import DiceLoss
-from networks.distillation import compute_kd_loss
+from networks.distillation import compute_kd_loss, MGD, KDTarget, KDWeights
 from torchvision import transforms
 from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
 from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
@@ -72,15 +73,25 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
             if args.use_kd and teacher_model is not None:
                 with torch.no_grad():
                     teacher_outputs, _ , teacher_features = teacher_model(image_batch)
+                    if args.kd_points in {'backbone', 'all'}:
+                        s_last = features[-1]
+                        t_last = teacher_features[-1]
+                        _mgd_predictor = MGD(c_s=s_last.shape[1], c_t=t_last.shape[1]).to(s_last.device)
+                        _backbone_pair = (s_last, t_last)
+                        optimizer.add_param_group({'params': _mgd_predictor.parameters(), 'lr': base_lr})
+                    else:
+                        _mgd_predictor = None
+                        _backbone_pair = None
+                           
                 kd_loss, _ = compute_kd_loss(
                     kd_points=args.kd_points,
-                    weights=args.kd_weights,
+                    weights=KDWeights(logits=1.0, intermediate=1.0, backbone=1.0),
                     student_logits=outputs,
                     teacher_logits=teacher_outputs,
                     student_features=features,
                     teacher_features=teacher_features,
-                    backbone_pair=None,
-                    mgd_predictor=None,
+                    backbone_pair=_backbone_pair, # (student_feat, teacher_feat) for MGD
+                    mgd_predictor=_mgd_predictor,
                     temperature=args.kd_temperature,
                 )
                 loss = (1-gamma) * (0.5 * loss_ce + 0.5 * loss_dice) + gamma * kd_loss

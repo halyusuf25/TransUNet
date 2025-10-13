@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import random
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Literal
 import warnings as Warnings
 
 # ---------- Config ----------
@@ -137,24 +137,82 @@ def pair_wise_distillation_loss(
     total = torch.stack(losses).mean()
     return total if reduction == "mean" else total * len(losses)
 
-def kd_backbone_mgd_loss(student_feat: torch.Tensor,
-                         teacher_feat: torch.Tensor,
-                         mgd_predictor: nn.Module,
-                         mask_ratio: float = 0.5) -> torch.Tensor:
+# ---------------------------------------------------------------------------------------
+# 3) Masked Generative Distillation (MGD) — adapters + projector trained with the student
+#     Eq. (2)-(5): mask student feat spatially, adapt (1x1), then G=Conv3x3-ReLU-Conv3x3
+# ---------------------------------------------------------------------------------------
+class MGD(nn.Module):
     """
-    Minimal MGD-style loss: mask student feature and force predictor to
-    reconstruct teacher feature (teacher detached). See Yang et al. (ECCV'22).
+    One-stage MGD head for the last backbone feature.
+    - adapter: 1x1 conv to align student channels to teacher channels
+    - projector: 3x3 - ReLU - 3x3 to generate teacher-like features from masked student
+    
     """
-    B, Cs, H, W = student_feat.shape
-    Ct = teacher_feat.shape[1]
-    assert hasattr(mgd_predictor, 'forward'), "Pass a 1x1 conv or small head"
+    def __init__(self, c_s: int, c_t: int):
+        super().__init__()
+        self.c_s = c_s # student channels
+        self.c_t = c_t # teacher channels
+        # 1) Adapter: align channels if needed
+        self.adapter = nn.Conv2d(c_s, c_t, kernel_size=1, bias=True)
+        # 2) Projector: conv layers to generate teacher-like features
+        self.projector = nn.Sequential(
+            nn.Conv2d(c_t, c_t, kernel_size=3, padding=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(c_t, c_t, kernel_size=3, padding=1, bias=True),
+        )
 
-    # binary mask over spatial positions
-    with torch.no_grad():
-        mask = (torch.rand(B, 1, H, W, device=student_feat.device) > mask_ratio).float()
-    s_masked = student_feat * mask                   # (B,Cs,H,W) masked student
-    pred_t   = mgd_predictor(s_masked)               # (B,Ct,H,W)
-    return F.mse_loss(pred_t, teacher_feat.detach())
+    @torch.no_grad()
+    def _make_mask(self, shape, mask_ratio: float, device):
+        N, Ct, H, W = shape
+        keep_prob = 1.0 - mask_ratio
+        # Binary spatial mask shared across channels: [N,1,H,W] → broadcast to Ct
+        M = torch.bernoulli(torch.full((N, 1, H, W), keep_prob, device=device))
+        return M
+
+    def forward(self, student_feat_last: torch.Tensor, mask_ratio: float) -> torch.Tensor:
+        """
+        student_feat_last: [N, C_s, H, W]  (last backbone feature from student)
+        returns generated feature \hat{T}: [N, C_t, H, W]
+        """
+        N, C_s, H, W = student_feat_last.shape
+        # 1) Align channels to teacher space
+        #TODO: check if the size of student and teacher features are same before applying adapter.
+        if self.c_s == self.c_t:
+            f_align = student_feat_last
+        else:
+            f_align = self.adapter(student_feat_last)                   # [N, C_t, H, W]
+        # 2) Random spatial mask
+        M = self._make_mask(f_align.shape, mask_ratio, f_align.device)  # [N,1,H,W]
+        f_masked = f_align * M                                      # zero out masked positions
+        # 3) Generate teacher-like feature
+        f_gen = self.projector(f_masked)                            # [N, C_t, H, W]
+        return f_gen
+
+def masked_generation_distillation_loss(
+    student_feat_last: torch.Tensor,     # [N, C_s, H_s, W_s]
+    teacher_feat_last: torch.Tensor,     # [N, C_t, H_t, W_t]
+    mgd: MGD,
+    mask_ratio: float = 0.5,
+    reduction: Literal["mean", "sum"] = "mean",
+) -> torch.Tensor:
+    """
+    MGD loss on the LAST backbone feature only:
+      L = mean_{n,c,h,w} ( G( A(S_last) ⊙ M ) - T_last )^2
+    """
+    assert reduction in ("mean", "sum")
+    # Generate teacher-like features from masked, aligned student feature
+    gen = mgd(student_feat_last, mask_ratio=mask_ratio)   # [N, C_t, H*, W*]
+
+    # Match teacher spatial size if needed
+    if gen.shape[-2:] != teacher_feat_last.shape[-2:]:
+        teacher_feat_last = F.adaptive_avg_pool2d(teacher_feat_last, gen.shape[-2:])
+
+    # Per-sample MSE over C,H,W
+    per_sample = torch.mean((gen - teacher_feat_last) ** 2, dim=(1, 2, 3))  # [N]
+    # per_sample = F.mse_loss(gen, teacher_feat_last, reduction="none").mean(dim=(1, 2, 3))  # [N]
+
+    return per_sample.mean() if reduction == "mean" else per_sample.sum()
+
 
 # ---------- Dispatcher ----------
 LossFn = Callable[..., torch.Tensor]
@@ -211,7 +269,13 @@ def compute_kd_loss(
         assert backbone_pair is not None and mgd_predictor is not None, \
             "Provide backbone_pair=(student_feat, teacher_feat) and mgd_predictor for MGD"
         s_back, t_back = backbone_pair
-        components["backbone"] = kd_backbone_mgd_loss(s_back, t_back, mgd_predictor)
+        components["backbone"] = masked_generation_distillation_loss(
+            s_back,
+            t_back,
+            mgd=mgd_predictor,
+            mask_ratio=0.5,
+            reduction="mean",
+        )
 
     # weighted sum
     total = (
