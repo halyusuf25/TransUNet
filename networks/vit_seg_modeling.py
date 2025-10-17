@@ -195,7 +195,8 @@ class Block(nn.Module):
         self.ffn = Mlp(config)
         
         self.use_shsa = config.use_shsa
-        self.topk_attn = config.topk_attn 
+        self.topk_attn = config.topk_attn
+         
         if self.use_shsa:
             self.attn = SHSAttention(config, vis, alternate_partial_attn=alternate_partial_attn)
         elif self.topk_attn > 0.0:
@@ -204,19 +205,32 @@ class Block(nn.Module):
             self.attn = Attention(config, vis)    
 
     def forward(self, x):
+        # Pre-norm
         h = x
-        x = self.attention_norm(x)
-        if self.topk_attn > 0.0:
-            x, _ , _ , _ , _ ,weights = self.attn(x)
-        else:
-            x, weights = self.attn(x)
-        x = x + h
+        x_norm = self.attention_norm(x)
 
+        if self.topk_attn > 0.0:
+            # Attention with possible pruning
+            x_attn, index, idx, scores, remain_tokens, weights = self.attn(x_norm)
+            if idx is not None:
+                # Prune tokens consistently for residual and attn output
+                h_kept = torch.gather(h, dim=1, index=index)           # [B, K, C]
+                x_kept = torch.gather(x_attn, dim=1, index=index)      # [B, K, C]
+                x = h_kept + x_kept
+            else:
+                x = h + x_attn
+        else:
+            x_attn, weights = self.attn(x_norm)
+            x = x_attn + h
+
+        # FFN with residual
         h = x
         x = self.ffn_norm(x)
         x = self.ffn(x)
         x = x + h
-        return x, weights
+        # Return pruned indices (None if no pruning happened)
+        pruned_idx = idx if self.topk_attn > 0.0 else None
+        return x, weights, pruned_idx
 
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
@@ -275,12 +289,20 @@ class Encoder(nn.Module):
 
     def forward(self, hidden_states):
         attn_weights = []
+        kept_indices_abs = None  # absolute indices into the original (pre-prune) sequence
         for layer_block in self.layer:
-            hidden_states, weights = layer_block(hidden_states)
+            hidden_states, weights, idx = layer_block(hidden_states)
             if self.vis:
                 attn_weights.append(weights)
+            
+            # Compose kept indices across pruning layers
+            if idx is not None:
+                if kept_indices_abs is None:
+                    kept_indices_abs = idx
+                else:
+                    kept_indices_abs = torch.gather(kept_indices_abs, dim=1, index=idx)
         encoded = self.encoder_norm(hidden_states)
-        return encoded, attn_weights
+        return encoded, attn_weights, kept_indices_abs
 
 
 class Transformer(nn.Module):
@@ -293,9 +315,11 @@ class Transformer(nn.Module):
     def forward(self, input_ids):
         embedding_output, features = self.embeddings(input_ids)
         # embedding_output, _, features = self.embeddings(input_ids)
-        encoded, attn_weights = self.encoder(embedding_output)  # (B, n_patch, hidden)
-        return encoded, attn_weights, features
-
+        # encoded, attn_weights = self.encoder(embedding_output)  # (B, n_patch, hidden)
+        # return encoded, attn_weights, features
+        orig_n_patches = embedding_output.size(1)
+        encoded, attn_weights, kept_indices = self.encoder(embedding_output)  # (B, n_patch, hidden)
+        return encoded, attn_weights, features, kept_indices, orig_n_patches
 
 class Conv2dReLU(nn.Sequential):
     def __init__(
@@ -465,8 +489,17 @@ class VisionTransformer(nn.Module):
     def forward(self, x):
         if x.size()[1] == 1:
             x = x.repeat(1,3,1,1)
-        x, attn_weights, features = self.transformer(x)  # (B, n_patch, hidden)
-        x = self.decoder(x, features)
+        x, attn_weights, features, kept_indices, orig_n_patches = self.transformer(x)  # (B, n_patch, hidden)
+        # If pruning occurred, scatter tokens back to the original grid length
+        if kept_indices is not None:
+            B, K, C = x.size()
+            total_n = orig_n_patches
+            full = x.new_zeros(B, total_n, C)
+            scatter_index = kept_indices.long().unsqueeze(-1).expand(-1, -1, C)  # (B, K, C)
+            full.scatter_(1, scatter_index, x)
+            x = self.decoder(full, features)
+        else:
+            x = self.decoder(x, features)
         logits = self.segmentation_head(x)
         return logits, attn_weights, features
 
