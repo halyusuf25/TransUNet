@@ -5,10 +5,27 @@ from scipy.ndimage import zoom
 import torch.nn as nn
 import SimpleITK as sitk
 import time
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Any
 from thop import profile
 from fvcore.nn import FlopCountAnalysis
 
+def _make_json_safe(value: Any) -> Any:
+    """Recursively convert objects into JSON-serializable types."""
+    if isinstance(value, type):
+        return value.__name__
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_make_json_safe(v) for v in value.tolist()]
+    if torch.is_tensor(value):
+        return _make_json_safe(value.detach().cpu().tolist())
+    if isinstance(value, (list, tuple)):
+        return [_make_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _make_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (torch.device, torch.dtype)):
+        return str(value)
+    return value
 
 class DiceLoss(nn.Module):
     def __init__(self, n_classes):
@@ -50,33 +67,31 @@ class DiceLoss(nn.Module):
 
 
 # --- utils.py ---
-def calculate_metric_percase(pred, gt):
-    """
-    Returns per-case metrics as a tuple: (dice, hd95, iou)
-    Uses MedPy for exact definitions.
-    """
-    pred = np.asarray(pred > 0, dtype=np.bool_)
-    gt = np.asarray(gt > 0, dtype=np.bool_)
+def calculate_metric_percase(pred, gt, voxelspacing=None):
+    # both binary arrays (0/1) on input
+    P, G = pred.sum() > 0, gt.sum() > 0
 
-    pred_voxels = pred.sum()
-    gt_voxels = gt.sum()
+    if P and G:
+        dice = metric.binary.dc(pred, gt)
+        hd95 = metric.binary.hd95(pred, gt, voxelspacing=voxelspacing)  # <<< pass spacing
+        iou = metric.binary.jc(pred, gt)
+        return float(dice), float(hd95), float(iou)
 
-    if pred_voxels == 0 and gt_voxels == 0:
-        return 1.0, 0.0, 1.0
+    if P and not G:
+        # predicted spurious organ
+        return 0.0, np.nan, 0.0  # or np.nan; but DO NOT make it (1,0)
 
-    if pred_voxels == 0 or gt_voxels == 0:
-        max_hd95_mm = 373.128664
-        return 0.0, max_hd95_mm, 0.0
+    if not P and G:
+        # missed organ completely
+        return 0.0, np.nan, 0.0  # or np.nan
 
-    dice = metric.binary.dc(pred, gt)
-    hd95 = metric.binary.hd95(pred, gt)
-    iou = metric.binary.jc(pred, gt)
-    return dice, hd95, iou
-
+    # both empty: agree on absence
+    return 1.0, 0.0, 1.0  # many protocols treat this as perfect agreement for overlap
 
 
 def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, dataset='Synapse'):
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()
+    net.eval()
     # if len(image.shape) == 3:
     if dataset == 'Synapse':
         prediction = np.zeros_like(label)
@@ -86,7 +101,6 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
             if x != patch_size[0] or y != patch_size[1]:
                 slice = zoom(slice, (patch_size[0] / x, patch_size[1] / y), order=3)  # previous using 0
             input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().cuda()
-            net.eval()
             with torch.no_grad():
                 outputs, _ , _ = net(input)
                 out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)

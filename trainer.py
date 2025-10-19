@@ -41,7 +41,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     else:
         raise ValueError("Unknown dataset: {}".format(args.dataset)) 
 
-    args.ckpt_filename += '_' + args.dataset + '_' + str(args.num_classes) + '_class'
+    args.ckpt_filename += '_' + args.dataset + '_'
 
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)

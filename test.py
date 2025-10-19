@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import json
 import random
 import sys
 import numpy as np
@@ -12,9 +13,10 @@ from benchmark import benchmark_segmentation_model, build_benchmark_loader
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
-from utils import test_single_volume, evaluate_model_perf
+from utils import test_single_volume, evaluate_model_perf, _make_json_safe
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
+from datetime import datetime
 from visualize import (
     visualize_synapse_sample,
     visualize_cataract_sample,
@@ -78,7 +80,7 @@ def inference(args, model, test_save_path=None):
     elif args.dataset == 'Cataract1k':
         db_test = args.Dataset(base_dir=args.volume_path, split="val",)
 
-    testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=1)
+    testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=6)
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
     metric_list = 0.0
@@ -108,7 +110,8 @@ def inference(args, model, test_save_path=None):
         'Testing performance in best val model: mean_dice : %f mean_hd95 : %f mean_iou : %f' %
         (performance, mean_hd95, mean_iou)
     )
-    return "Testing Finished!"
+    print("Testing Finished!")
+    return {'mean_dice': performance, 'mean_hd95': mean_hd95, 'mean_iou': mean_iou}
 
 
 if __name__ == "__main__":
@@ -327,38 +330,44 @@ if __name__ == "__main__":
     #                     iterations=300,)
     # print(f"performance results: {eval_results}")
 
-    inference(args, net, test_save_path)
+    performance = inference(args, net, test_save_path)
     
     # ---------------- Benchmark (runs AFTER inference is done) ----------------
-    try:
-        # For throughput, use a reasonable batch size (fixed HxW works best with cudnn.benchmark)
-        # bench_bs = 1 if args.dataset == 'Synapse' else max(1, min(args.batch_size, 16))
-        test_loader_bench = build_benchmark_loader(args, batch_size=36, num_workers=0, shuffle=False)
+    # For throughput, use a reasonable batch size (fixed HxW works best with cudnn.benchmark)
+    # bench_bs = 1 if args.dataset == 'Synapse' else max(1, min(args.batch_size, 16))
+    test_loader_bench = build_benchmark_loader(args, batch_size=36, num_workers=0, shuffle=False)
 
-        results = benchmark_segmentation_model(
-            model=net,
-            test_loader=test_loader_bench,                 # real test samples
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            warmup_steps=20,                               # stabilize kernels
-            measure_batches=50,                            # how many batches to time
-            single_image_latency_samples=200,              # B=1 latency percentiles
-            enable_cudnn_benchmark=True,                   # True if fixed image size
-            autocast=False                                 # set True to benchmark AMP
+    results = benchmark_segmentation_model(
+        model=net,
+        test_loader=test_loader_bench,                 # real test samples
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        warmup_steps=20,                               # stabilize kernels
+        measure_batches=50,                            # how many batches to time
+        single_image_latency_samples=200,              # B=1 latency percentiles
+        enable_cudnn_benchmark=True,                   # True if fixed image size
+        autocast=False                                 # set True to benchmark AMP
+    )
+
+    pretty = "\n" + results.pretty()
+    # print(pretty)
+    logging.info(pretty)
+
+    
+    os.makedirs("bench_logs", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    with open(os.path.join("bench_logs", f"bench_{args.ckpt}_{timestamp}.json"), "w") as f:
+        accuracy_for_json = {k: _make_json_safe(v) for k, v in performance.items()}
+        metrics_for_json = {k: _make_json_safe(v) for k, v in results.metrics.items()}
+        notes_for_json = {k: _make_json_safe(v) for k, v in results.notes.items()}
+        arguments_for_json = {k: _make_json_safe(v) for k, v in vars(args).items()}  # Include all arguments as a dictionary
+
+        json.dump(
+            {
+                "accuracy": accuracy_for_json,
+                "metrics": metrics_for_json,
+                "notes": notes_for_json,
+                "arguments": arguments_for_json,
+            },
+            f,
+            indent=2,
         )
-
-        pretty = "\n" + results.pretty()
-        # print(pretty)
-        logging.info(pretty)
-
-        # (Optional) persist a machine-readable copy
-        try:
-            import json, os
-            os.makedirs("bench_logs", exist_ok=True)
-            with open(os.path.join("bench_logs", f"bench_{args.ckpt}.json"), "w") as f:
-                json.dump({"metrics": results.metrics, "notes": results.notes}, f, indent=2)
-        except Exception:
-            pass
-
-    except Exception as e:
-        logging.warning(f"Benchmarking skipped due to: {e}")
-
