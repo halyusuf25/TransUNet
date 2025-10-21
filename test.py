@@ -80,7 +80,7 @@ def inference(args, model, test_save_path=None):
     elif args.dataset == 'Cataract1k':
         db_test = args.Dataset(base_dir=args.volume_path, split="val",)
 
-    testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=6)
+    testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=1)
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
     metric_list = 0.0
@@ -94,7 +94,7 @@ def inference(args, model, test_save_path=None):
             'idx %d case %s mean_dice %f mean_hd95 %f mean_iou %f' %
             (i_batch, case_name,
             np.mean(metric_i, axis=0)[0],
-            np.mean(metric_i, axis=0)[1],
+            np.nanmean(metric_i, axis=0)[1],
             np.mean(metric_i, axis=0)[2])
         )
     metric_list = metric_list / len(db_test)
@@ -323,12 +323,12 @@ if __name__ == "__main__":
     else:
         test_save_path = None
     
-    # eval_results=evaluate_model_perf(net,
-    #                     input_size=(3, args.img_size,args.img_size),
-    #                     throughput_batch_size=64,
-    #                     warmup=20,
-    #                     iterations=300,)
-    # print(f"performance results: {eval_results}")
+    eval_results=evaluate_model_perf(net,
+                        input_size=(3, args.img_size,args.img_size),
+                        throughput_batch_size=64,
+                        warmup=20,
+                        iterations=300,)
+    print(f"performance results: {eval_results}")
 
     performance = inference(args, net, test_save_path)
     
