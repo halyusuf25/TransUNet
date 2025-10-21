@@ -1,10 +1,11 @@
 import argparse
+import datetime
 import logging
 import os
 from pyexpat import features
 import random
 import sys
-import time
+from datetime import datetime
 import numpy as np
 import torch
 import torch.nn as nn
@@ -124,18 +125,19 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
 
-        save_interval = 80  # int(max_epoch/6)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_interval = 70  # int(max_epoch/6)
         if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), save_mode_path)
-            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '.pth')
+            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
             torch.save(model.state_dict(), local_path)
             logging.info("save model to {}".format(save_mode_path))
 
         if epoch_num >= max_epoch - 1:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
             torch.save(model.state_dict(), save_mode_path)
-            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '.pth')
+            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
             torch.save(model.state_dict(), local_path)
             logging.info("save model to {}".format(save_mode_path))
             iterator.close()
