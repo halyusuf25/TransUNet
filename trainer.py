@@ -113,8 +113,9 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar('info/loss_dice', loss_dice, iter_num)
             if args.use_kd and teacher_model is not None:
                 writer.add_scalar('info/loss_kd', kd_loss, iter_num)
-
-            logging.info('iteration %d : loss : %f, loss_ce: %f' % (iter_num, loss.item(), loss_ce.item()))
+                logging.info('iteration %d : loss : %f, loss_ce: %f, loss_kd: %f' % (iter_num, loss.item(), loss_ce.item(), kd_loss.item()))
+            else:
+                logging.info('iteration %d : loss : %f, loss_ce: %f' % (iter_num, loss.item(), loss_ce.item()))
 
             if iter_num % 20 == 0:
                 image = image_batch[1, 0:1, :, :]
