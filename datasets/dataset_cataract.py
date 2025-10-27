@@ -190,7 +190,7 @@ class Cataract1kDataset(Dataset):
                 # Handle instruments similarly if needed
                 class_id = 4
                 exterior_points = np.array(obj["points"]["exterior"], dtype=np.int32)
-                cv2.fillPoly(mask, [exterior_points], 3)
+                cv2.fillPoly(mask, [exterior_points], class_id)
 
         return mask
 

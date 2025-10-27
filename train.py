@@ -105,7 +105,7 @@ if __name__ == "__main__":
         'Cataract1k': {
             'root_path': '/data/shared/CataractData/',
             'list_dir': None,  # Not needed for Cataract1k
-            'num_classes': 4,  # Background (0), Pupil (1), Cornea (2)
+            'num_classes': 5,  # Background (0), Pupil (1), Cornea (2), Lens (3), Instruments (4)
         },
     }
     args.num_classes = dataset_config[dataset_name]['num_classes']

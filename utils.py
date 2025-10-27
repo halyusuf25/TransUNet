@@ -123,7 +123,7 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
         input = torch.from_numpy(np.stack(resized_channels, axis=0)).unsqueeze(0).float().cuda()
         # Forward pass
         with torch.no_grad():
-            outputs, _ = net(input)
+            outputs, _ , _ = net(input)
             out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0).cpu().numpy()
             # Resize prediction back to original dimensions
             pred = zoom(out, (H/patch_size[0], W/patch_size[1]), order=0)

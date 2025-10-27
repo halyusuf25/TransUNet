@@ -78,7 +78,7 @@ def inference(args, model, test_save_path=None):
     if args.dataset == 'Synapse':
         db_test = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
     elif args.dataset == 'Cataract1k':
-        db_test = args.Dataset(base_dir=args.volume_path, split="val",)
+        db_test = args.Dataset(base_dir=args.volume_path, split="test",)
 
     testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=1)
     logging.info("{} test iterations per epoch".format(len(testloader)))
@@ -139,7 +139,7 @@ if __name__ == "__main__":
             'Dataset': Cataract1kDataset,
             'volume_path': '/data/shared/CataractData/',
             'list_dir': None,  # Not needed for Cataract1k
-            'num_classes': 5,  # Background (0), Pupil (1), Cornea (2)
+            'num_classes': 5,  # Background (0), Pupil (1), Cornea (2), Lens (3), Instruments (4)
             'z_spacing': 1,
         },
     }
