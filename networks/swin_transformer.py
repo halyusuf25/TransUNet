@@ -131,7 +131,8 @@ class SwinEncoder(nn.Module):
         #                                 patch_size=config.patch_size,
         #                                 in_chans=config.hidden_size, 
         #                                 embed_dim=config.hidden_size)
-        self.transconv1 = nn.ConvTranspose2d(config.hidden_size, 64, kernel_size=config.patch_size // 2, stride=config.patch_size // 2)
+        # self.transconv1 = nn.ConvTranspose2d(config.hidden_size, 64, kernel_size=config.patch_size // 2, stride=config.patch_size // 2)
+        self.transconv1 = nn.ConvTranspose2d(config.hidden_size, 64, kernel_size=2, stride=2)
 
         self.layers2 = nn.ModuleList([
             SwinBlock(dim=config.hidden_size, 
@@ -143,7 +144,8 @@ class SwinEncoder(nn.Module):
             for _ in range(config.transformer["num_layers"] // 3)
         ])
 
-        self.transconv2 = nn.ConvTranspose2d(config.hidden_size, 256, kernel_size=config.patch_size // 4, stride=config.patch_size // 4)
+        # self.transconv2 = nn.ConvTranspose2d(config.hidden_size, 256, kernel_size=config.patch_size // 4, stride=config.patch_size // 4)
+        self.transconv2 = nn.Conv2d(config.hidden_size, 256, kernel_size=1, stride=1)
 
         self.layers3 = nn.ModuleList([
             SwinBlock(dim=config.hidden_size, 
@@ -155,8 +157,8 @@ class SwinEncoder(nn.Module):
             for _ in range(config.transformer["num_layers"] // 3)
         ])
 
-        self.transconv3 = nn.ConvTranspose2d(config.hidden_size, 512, kernel_size=config.patch_size // 8, stride=config.patch_size // 8)
-        
+        # self.transconv3 = nn.ConvTranspose2d(config.hidden_size, 512, kernel_size=config.patch_size // 8, stride=config.patch_size // 8)
+        self.transconv3 = nn.Conv2d(config.hidden_size, 512, kernel_size=2, stride=2)
         self.norm = LayerNorm(config.hidden_size, eps=1e-6)
         
     def forward(self, x):
@@ -346,3 +348,25 @@ def get_swin_tiny_config():
     config.activation = 'softmax'
     return config        
 
+def get_swin_large_config():
+    config = ml_collections.ConfigDict()
+    config.patch_size = 4
+    config.hidden_size = 768
+    config.transformer = ml_collections.ConfigDict()
+    config.transformer.mlp_ratio = 4.0
+    config.transformer.num_heads = 4
+    config.transformer.num_layers = 12
+    config.transformer.attention_dropout_rate = 0.0
+    config.transformer.dropout_rate = 0.1
+    config.window_size = 7
+    
+    config.classifier = 'seg'
+    config.representation_size = None
+    config.pretrained_path = None
+    
+    config.decoder_channels = (256, 128, 64, 16)
+    config.n_classes = 2
+    config.n_skip = 0
+    config.skip_channels = [512, 256, 64, 16]
+    config.activation = 'softmax'
+    return config        

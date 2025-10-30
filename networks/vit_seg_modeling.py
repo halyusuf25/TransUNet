@@ -20,7 +20,7 @@ from . import vit_seg_configs as configs
 from .vit_seg_modeling_resnet_skip import ResNetV2
 
 from .attention import SHSAttention, TopkAttention
-from .swin_transformer import SwinTransformer, get_swin_tiny_config
+from .swin_transformer import SwinTransformer, get_swin_tiny_config, get_swin_large_config
 from torchvision.models.efficientnet import MBConvConfig, MBConv
 from .efficientnetpp import EfficientNetppDecoderBlock
 
@@ -130,7 +130,7 @@ class Embeddings(nn.Module):
         self.hybrid = None
         self.config = config
         img_size = _pair(img_size)
-        self.swin_config = get_swin_tiny_config()
+        self.swin_config = get_swin_large_config()
 
         if config.patches.get("grid") is not None:   # ResNet
             grid_size = config.patches["grid"]
@@ -414,6 +414,13 @@ class DecoderCup(nn.Module):
             padding=1,
             use_batchnorm=True,
         )
+        self.conv_more2 = Conv2dReLU(
+            head_channels,
+            head_channels,
+            kernel_size=4,
+            stride=4,
+            use_batchnorm=True,
+        )
         # if self.config.use_swin and not self.config.use_efficientnet:
         #     self.conv_more_skip = Conv2dReLU(
         #         config.hidden_size,
@@ -451,6 +458,7 @@ class DecoderCup(nn.Module):
         x = hidden_states.permute(0, 2, 1)
         x = x.contiguous().view(B, hidden, h, w)
         x = self.conv_more(x)
+        x = self.conv_more2(x)
         # if self.config.use_swin and not self.config.use_efficientnet and features is not None:
         #     features_new = []
         #     for feature in features:
