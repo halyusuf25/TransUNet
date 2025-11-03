@@ -414,13 +414,14 @@ class DecoderCup(nn.Module):
             padding=1,
             use_batchnorm=True,
         )
-        self.conv_more2 = Conv2dReLU(
-            head_channels,
-            head_channels,
-            kernel_size=4,
-            stride=4,
-            use_batchnorm=True,
-        )
+        if config.use_swin:
+            self.conv_more2 = Conv2dReLU(
+                head_channels,
+                head_channels,
+                kernel_size=4,
+                stride=4,
+                use_batchnorm=True,
+            )
         # if self.config.use_swin and not self.config.use_efficientnet:
         #     self.conv_more_skip = Conv2dReLU(
         #         config.hidden_size,
@@ -458,7 +459,8 @@ class DecoderCup(nn.Module):
         x = hidden_states.permute(0, 2, 1)
         x = x.contiguous().view(B, hidden, h, w)
         x = self.conv_more(x)
-        x = self.conv_more2(x)
+        if self.config.use_swin:
+            x = self.conv_more2(x)
         # if self.config.use_swin and not self.config.use_efficientnet and features is not None:
         #     features_new = []
         #     for feature in features:
