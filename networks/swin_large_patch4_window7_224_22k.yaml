@@ -1,0 +1,28 @@
+DATA:
+  DATASET: imagenet22K
+  IMG_SIZE: 224
+MODEL:
+  TYPE: swin
+  NAME: swin_large_patch4_window7_224_22k
+  DROP_RATE: 0.0
+  DROP_PATH_RATE: 0.2
+  NUM_CLASSES: 1000
+  SWIN:
+    PATCH_SIZE: 4
+    IN_CHANS: 3
+    EMBED_DIM: 192
+    DEPTHS: [ 2, 2, 18, 2 ]
+    NUM_HEADS: [ 6, 12, 24, 48 ]
+    WINDOW_SIZE: 7
+    MLP_RATIO: 4.
+    QKV_BIAS: True
+    QK_SCALE: None
+    APE: False
+    PATCH_NORM: True
+TRAIN:
+  EPOCHS: 90
+  WARMUP_EPOCHS: 5
+  WEIGHT_DECAY: 0.05
+  BASE_LR: 1.25e-4 # 4096 batch-size
+  WARMUP_LR: 1.25e-7
+  MIN_LR: 1.25e-6

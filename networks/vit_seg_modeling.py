@@ -20,9 +20,11 @@ from . import vit_seg_configs as configs
 from .vit_seg_modeling_resnet_skip import ResNetV2
 
 from .attention import SHSAttention, TopkAttention
-from .swin_transformer import SwinTransformer, get_swin_tiny_config, get_swin_large_config
+from .swin_transformer_official import SwinTransformer
 from torchvision.models.efficientnet import MBConvConfig, MBConv
 from .efficientnetpp import EfficientNetppDecoderBlock
+import yaml
+from easydict import EasyDict as edict
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +132,8 @@ class Embeddings(nn.Module):
         self.hybrid = None
         self.config = config
         img_size = _pair(img_size)
-        self.swin_config = get_swin_large_config()
+        with open("networks/swin_large_patch4_window7_224_22k.yaml", "r") as f:
+            self.swin_config = edict(yaml.safe_load(f))
 
         if config.patches.get("grid") is not None:   # ResNet
             grid_size = config.patches["grid"]
@@ -144,11 +147,27 @@ class Embeddings(nn.Module):
             self.hybrid = False
 
         if self.hybrid:
-            
             if config.use_swin:
-                self.hybrid_model = SwinTransformer(self.swin_config, img_size=img_size, vis=False)
+                self.hybrid_model = SwinTransformer(img_size=self.swin_config.DATA.IMG_SIZE,
+                                patch_size=self.swin_config.MODEL.SWIN.PATCH_SIZE,
+                                in_chans=self.swin_config.MODEL.SWIN.IN_CHANS,
+                                num_classes=self.swin_config.MODEL.NUM_CLASSES,
+                                embed_dim=self.swin_config.MODEL.SWIN.EMBED_DIM,
+                                depths=self.swin_config.MODEL.SWIN.DEPTHS,
+                                num_heads=self.swin_config.MODEL.SWIN.NUM_HEADS,
+                                window_size=self.swin_config.MODEL.SWIN.WINDOW_SIZE,
+                                mlp_ratio=self.swin_config.MODEL.SWIN.MLP_RATIO,
+                                qkv_bias=self.swin_config.MODEL.SWIN.QKV_BIAS,
+                                qk_scale=self.swin_config.MODEL.SWIN.QK_SCALE,
+                                drop_rate=self.swin_config.MODEL.DROP_RATE,
+                                drop_path_rate=self.swin_config.MODEL.DROP_PATH_RATE,
+                                ape=self.swin_config.MODEL.SWIN.APE,
+                                norm_layer=nn.LayerNorm,
+                                patch_norm=self.swin_config.MODEL.SWIN.PATCH_NORM,
+                                use_checkpoint=True,
+                                fused_window_process=False)
+                self.change_channel = nn.Linear(self.swin_config.MODEL.SWIN.EMBED_DIM * 2 ** (self.swin_config.MODEL.SWIN.DEPTHS.__len__() -1), config.hidden_size)
                 # in_channels = self.swin_config.hidden_size * 16
-                n_patches = (img_size[0] // self.swin_config.patch_size) * (img_size[1] // self.swin_config.patch_size)
                 # self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
                 self.patch_embeddings = nn.Identity()
             else:
@@ -159,7 +178,7 @@ class Embeddings(nn.Module):
                                             kernel_size=patch_size,
                                             stride=patch_size)
                 
-            self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
+                self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
 
         self.dropout = Dropout(config.transformer["dropout_rate"])
 
@@ -169,9 +188,7 @@ class Embeddings(nn.Module):
             if self.config.use_swin:
                 x, _ , features = self.hybrid_model(x) # x: [B, N, hidden]
                 # embeddings = x
-                embeddings = x + self.position_embeddings 
-                embeddings = self.dropout(embeddings)
-                return embeddings, features
+                return self.change_channel(x), features
             
             x, features = self.hybrid_model(x)    
             x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
@@ -407,6 +424,13 @@ class DecoderCup(nn.Module):
         super().__init__()
         self.config = config
         head_channels = 512
+        if self.config.use_swin:
+            self.conv_more_pre = nn.ConvTranspose2d(
+                config.hidden_size,
+                config.hidden_size,
+                kernel_size=2,
+                stride=2,
+            )
         self.conv_more = Conv2dReLU(
             config.hidden_size,
             head_channels,
@@ -414,14 +438,6 @@ class DecoderCup(nn.Module):
             padding=1,
             use_batchnorm=True,
         )
-        if config.use_swin:
-            self.conv_more2 = Conv2dReLU(
-                head_channels,
-                head_channels,
-                kernel_size=4,
-                stride=4,
-                use_batchnorm=True,
-            )
         # if self.config.use_swin and not self.config.use_efficientnet:
         #     self.conv_more_skip = Conv2dReLU(
         #         config.hidden_size,
@@ -458,9 +474,11 @@ class DecoderCup(nn.Module):
         h, w = int(np.sqrt(n_patch)), int(np.sqrt(n_patch))
         x = hidden_states.permute(0, 2, 1)
         x = x.contiguous().view(B, hidden, h, w)
-        x = self.conv_more(x)
         if self.config.use_swin:
-            x = self.conv_more2(x)
+            x = self.conv_more_pre(x)
+        x = self.conv_more(x)
+        # if self.config.use_swin:
+        #     x = self.conv_more2(x)
         # if self.config.use_swin and not self.config.use_efficientnet and features is not None:
         #     features_new = []
         #     for feature in features:
