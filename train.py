@@ -79,6 +79,11 @@ parser.add_argument('--kd_points' , type=str,
 ###########################################
 
 
+#########addtional arguments for debugging#########
+parser.add_argument('--verbose', action='store_true', 
+                    help='whether to print detailed debug information during training')
+###################################################
+
 args = parser.parse_args()
 
 
@@ -131,6 +136,7 @@ if __name__ == "__main__":
     
 
     config_vit = CONFIGS_ViT_seg[args.vit_name]
+    config_vit.verbose = args.verbose
     config_vit.n_classes = args.num_classes
     config_vit.n_skip = args.n_skip
     if args.num_heads is not None:

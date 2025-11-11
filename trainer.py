@@ -107,6 +107,10 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 param_group['lr'] = lr_
 
             iter_num = iter_num + 1
+            if args.verbose and iter_num == 2:
+                print("Verbose mode is ON. Detailed training information were printed and training is stopped after two iterations.")
+                break
+
             writer.add_scalar('info/lr', lr_, iter_num)
             writer.add_scalar('info/total_loss', loss, iter_num)
             writer.add_scalar('info/loss_ce', loss_ce, iter_num)

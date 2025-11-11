@@ -71,6 +71,11 @@ parser.add_argument('--viz_slice', type=int, default=None, help='slice index for
 parser.add_argument('--viz_save', type=str, default=None, help='path to save figure (file or directory)')
 parser.add_argument('--viz_out', type=str, default=None, help='output filename for the saved figure (used if --viz_save is a directory or not provided)')
 parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
+
+#######additional arguments for debugging#########
+parser.add_argument('--verbose', action='store_true', 
+                    help='whether to print detailed debug information during inference')
+###############################################
 args = parser.parse_args()
 
 
@@ -83,29 +88,40 @@ def inference(args, model, test_save_path=None):
     testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=1)
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
-    metric_list = 0.0
+    all_metrics = []
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         h, w = sampled_batch["image"].size()[2:]
         image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch['case_name'][0]
         metric_i = test_single_volume(image, label, model, classes=args.num_classes, patch_size=[args.img_size, args.img_size],
                                       test_save_path=test_save_path, case=case_name, z_spacing=args.z_spacing, dataset=args.dataset)
-        metric_list += np.array(metric_i)
+        metric_i = np.array(metric_i, dtype=np.float32)
+        all_metrics.append(metric_i)
+        with np.errstate(invalid="ignore"):
+            case_dice = np.nanmean(metric_i[:, 0])
+            case_hd95 = np.nanmean(metric_i[:, 1])
+            case_iou = np.nanmean(metric_i[:, 2])
         logging.info(
             'idx %d case %s mean_dice %f mean_hd95 %f mean_iou %f' %
-            (i_batch, case_name,
-            np.mean(metric_i, axis=0)[0],
-            np.nanmean(metric_i, axis=0)[1],
-            np.mean(metric_i, axis=0)[2])
+            (i_batch, case_name, case_dice, case_hd95, case_iou)
         )
-    metric_list = metric_list / len(db_test)
+
+    if not all_metrics:
+        raise RuntimeError("No metrics were collected during inference.")
+
+    metrics_stack = np.stack(all_metrics, axis=0)
+    with np.errstate(invalid="ignore"):
+        mean_metrics = np.nanmean(metrics_stack, axis=0)
+
     for i in range(1, args.num_classes):
+        class_metrics = mean_metrics[i - 1]
         logging.info(
             'Mean class %d mean_dice %f mean_hd95 %f mean_iou %f' %
-            (i, metric_list[i-1][0], metric_list[i-1][1], metric_list[i-1][2])
+            (i, class_metrics[0], class_metrics[1], class_metrics[2])
         )
-    performance = np.mean(metric_list, axis=0)[0]
-    mean_hd95 = np.mean(metric_list, axis=0)[1]
-    mean_iou = np.mean(metric_list, axis=0)[2]
+    with np.errstate(invalid="ignore"):
+        performance = np.nanmean(mean_metrics[:, 0])
+        mean_hd95 = np.nanmean(mean_metrics[:, 1])
+        mean_iou = np.nanmean(mean_metrics[:, 2])
     logging.info(
         'Testing performance in best val model: mean_dice : %f mean_hd95 : %f mean_iou : %f' %
         (performance, mean_hd95, mean_iou)
@@ -174,6 +190,7 @@ if __name__ == "__main__":
     snapshot_path = snapshot_path + '_s'+str(args.seed) if args.seed!=1234 else snapshot_path
 
     config_vit = CONFIGS_ViT_seg[args.vit_name]
+    config_vit.verbose = args.verbose
     config_vit.n_classes = args.num_classes
     config_vit.n_skip = args.n_skip
     config_vit.patches.size = (args.vit_patches_size, args.vit_patches_size)
@@ -323,12 +340,12 @@ if __name__ == "__main__":
     else:
         test_save_path = None
     
-    eval_results=evaluate_model_perf(net,
-                        input_size=(3, args.img_size,args.img_size),
-                        throughput_batch_size=64,
-                        warmup=20,
-                        iterations=300,)
-    print(f"performance results: {eval_results}")
+    # eval_results=evaluate_model_perf(net,
+    #                     input_size=(3, args.img_size,args.img_size),
+    #                     throughput_batch_size=64,
+    #                     warmup=20,
+    #                     iterations=300,)
+    # print(f"performance results: {eval_results}")
 
     performance = inference(args, net, test_save_path)
     

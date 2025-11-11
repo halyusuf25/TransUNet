@@ -25,6 +25,7 @@ from torchvision.models.efficientnet import MBConvConfig, MBConv
 from .efficientnetpp import EfficientNetppDecoderBlock
 import yaml
 from easydict import EasyDict as edict
+from .lib import topk_indices
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,8 @@ class Attention(nn.Module):
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         attention_probs = self.softmax(attention_scores)
-        weights = attention_probs if self.vis else None
+        # weights = attention_probs if self.vis else None
+        weights = attention_probs #always output attention score
         attention_probs = self.attn_dropout(attention_probs)
 
         context_layer = torch.matmul(attention_probs, value_layer)
@@ -206,6 +208,7 @@ class Embeddings(nn.Module):
 class Block(nn.Module):
     def __init__(self, config, vis, alternate_partial_attn=False):
         super(Block, self).__init__()
+        self.args = config
         self.hidden_size = config.hidden_size
         self.attention_norm = LayerNorm(config.hidden_size, eps=1e-6)
         self.ffn_norm = LayerNorm(config.hidden_size, eps=1e-6)
@@ -216,38 +219,30 @@ class Block(nn.Module):
          
         if self.use_shsa:
             self.attn = SHSAttention(config, vis, alternate_partial_attn=alternate_partial_attn)
-        elif self.topk_attn > 0.0:
-            self.attn = TopkAttention(config, vis, config.hidden_size, keep_rate=self.topk_attn)
+        # elif self.topk_attn > 0.0:
+        #     self.attn = TopkAttention(config, vis, config.hidden_size, keep_rate=self.topk_attn)
         else:
             self.attn = Attention(config, vis)    
 
     def forward(self, x):
         # Pre-norm
+        if self.args.verbose:
+            print(f"Block input x shape: {x.shape}")
+        # Multi-head self-attention with residual
         h = x
-        x_norm = self.attention_norm(x)
-
-        if self.topk_attn > 0.0:
-            # Attention with possible pruning
-            x_attn, index, idx, scores, remain_tokens, weights = self.attn(x_norm)
-            if idx is not None:
-                # Prune tokens consistently for residual and attn output
-                h_kept = torch.gather(h, dim=1, index=index)           # [B, K, C]
-                x_kept = torch.gather(x_attn, dim=1, index=index)      # [B, K, C]
-                x = h_kept + x_kept
-            else:
-                x = h + x_attn
-        else:
-            x_attn, weights = self.attn(x_norm)
-            x = x_attn + h
-
+        x = self.attention_norm(x)
+        x, weights = self.attn(x)
+        x = x + h
+        if self.args.verbose:
+            print(f"Block output x shape after attention and residual: {x.shape}")
         # FFN with residual
         h = x
         x = self.ffn_norm(x)
         x = self.ffn(x)
         x = x + h
-        # Return pruned indices (None if no pruning happened)
-        pruned_idx = idx if self.topk_attn > 0.0 else None
-        return x, weights, pruned_idx
+        if self.args.verbose:
+            print(f"Block output x shape after FFN and residual: {x.shape}")
+        return x, weights
 
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
@@ -291,6 +286,7 @@ class Block(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, config, vis):
         super(Encoder, self).__init__()
+        self.args = config
         self.vis = vis
         self.layer = nn.ModuleList()
         self.encoder_norm = LayerNorm(config.hidden_size, eps=1e-6)
@@ -304,37 +300,73 @@ class Encoder(nn.Module):
             layer = Block(config, vis, alternate_partial_attn=alternate_partial_attn)
             self.layer.append(copy.deepcopy(layer))
 
+
     def forward(self, hidden_states):
         attn_weights = []
-        kept_indices_abs = None  # absolute indices into the original (pre-prune) sequence
+        kept_indices = None  # absolute indices into the original (pre-prune) sequence
+        layer_block_id = 0
+        if self.args.verbose:
+            print(f"input shape for the Encoder Transformer Layers: {hidden_states.shape}")
+            if self.args.topk_attn > 0.0:
+                print(f"Top-k attention with keep rate {self.args.topk_attn} is enabled.")
+        
+        topk_idx = None  # Initialize idx for pruning
+            
         for layer_block in self.layer:
-            hidden_states, weights, idx = layer_block(hidden_states)
+            if self.args.verbose:
+                print(f"Encoder layer#{layer_block_id} input hidden_states shape: {hidden_states.shape}")
+
+            if topk_idx is not None:
+                # Prune tokens consistently for residual and attn output
+                hidden_states = torch.gather(hidden_states, dim=1, index=topk_idx)      # [B, K, C]
+
+            hidden_states, weights = layer_block(hidden_states)
+
+            if self.args.verbose:
+                print(f"Encoder layer#{layer_block_id} output hidden_states shape: {hidden_states.shape}")
+                print(f"Encoder layer#{layer_block_id} attention weights shape: {weights.shape}")
+
             if self.vis:
                 attn_weights.append(weights)
             
-            # Compose kept indices across pruning layers
-            if idx is not None:
-                if kept_indices_abs is None:
-                    kept_indices_abs = idx
-                else:
-                    kept_indices_abs = torch.gather(kept_indices_abs, dim=1, index=idx)
+            # # Compose kept indices across pruning layers
+            # if idx is not None:
+            #     if kept_indices_abs is None:
+            #         kept_indices_abs = idx
+            #     else:
+            #         kept_indices_abs = torch.gather(kept_indices_abs, dim=1, index=idx)
+            
+            layer_block_id += 1
+            if self.args.topk_attn > 0.0 and layer_block_id == 1: # only apply top-k pruning at the first layer
+                kept_indices, topk_idx = topk_indices(hidden_states, weights, self.args.topk_attn)
+            else:
+                topk_idx = None
+
         encoded = self.encoder_norm(hidden_states)
-        return encoded, attn_weights, kept_indices_abs
+        return encoded, attn_weights, kept_indices
 
 
 class Transformer(nn.Module):
     def __init__(self, config, img_size, vis):
         super(Transformer, self).__init__()
+        self.config = config
         self.embeddings = Embeddings(config, img_size=img_size)
         # self.embeddings = SwinTransformer(get_swin_tiny_config(), img_size=img_size, vis=vis)
         self.encoder = Encoder(config, vis)
 
     def forward(self, input_ids):
+        if self.config.verbose:
+            print(f"Backbone input shape: {input_ids.shape}")
+            #torch.Size([2, 3, 224, 224]) = [batch, channels, height, width] → batch size 2, RGB 3 channels, 224×224 input images.
+
+
         embedding_output, features = self.embeddings(input_ids)
         # embedding_output, _, features = self.embeddings(input_ids)
         # encoded, attn_weights = self.encoder(embedding_output)  # (B, n_patch, hidden)
         # return encoded, attn_weights, features
         orig_n_patches = embedding_output.size(1)
+        if self.config.verbose:
+            print(f"Embedding output and Input to encoder transformer layer(0) shape: {embedding_output.shape}")
         encoded, attn_weights, kept_indices = self.encoder(embedding_output)  # (B, n_patch, hidden)
         return encoded, attn_weights, features, kept_indices, orig_n_patches
 
@@ -470,10 +502,16 @@ class DecoderCup(nn.Module):
         self.blocks = nn.ModuleList(blocks)
 
     def forward(self, hidden_states, features=None):
+        if self.config.verbose:
+            print(f"Decoder input hidden_states shape: {hidden_states.size()}")
         B, n_patch, hidden = hidden_states.size()  # reshape from (B, n_patch, hidden) to (B, h, w, hidden)
         h, w = int(np.sqrt(n_patch)), int(np.sqrt(n_patch))
         x = hidden_states.permute(0, 2, 1)
+        if self.config.verbose:
+            print(f"Decoder input hidden_states permuted shape: {x.size()}")
         x = x.contiguous().view(B, hidden, h, w)
+        if self.config.verbose:
+            print(f"Decoder input hidden_states reshaped to image grid shape: {x.size()}")
         if self.config.use_swin:
             x = self.conv_more_pre(x)
         x = self.conv_more(x)
@@ -491,17 +529,22 @@ class DecoderCup(nn.Module):
 
         for i, decoder_block in enumerate(self.blocks):
             if features is not None:
-                # print(features, self.config.n_skip)
                 skip = features[i] if (i < self.config.n_skip) else None
             else:
                 skip = None
+            if self.config.verbose:
+                print(f"Decoder block {i}, x shape: {x.shape}, skip shape: {skip.shape if skip is not None else None}, features shape: {features[i].shape if features is not None and i < len(features) else None}")
             x = decoder_block(x, skip=skip)
+
+        if self.config.verbose:
+            print(f"Decoder output shape: {x.shape}")
         return x
 
 
 class VisionTransformer(nn.Module):
     def __init__(self, config, img_size=224, num_classes=21843, zero_head=False, vis=False):
         super(VisionTransformer, self).__init__()
+        self.args = config
         self.num_classes = num_classes
         self.zero_head = zero_head
         self.classifier = config.classifier
@@ -517,6 +560,7 @@ class VisionTransformer(nn.Module):
     def forward(self, x):
         if x.size()[1] == 1:
             x = x.repeat(1,3,1,1)
+        
         x, attn_weights, features, kept_indices, orig_n_patches = self.transformer(x)  # (B, n_patch, hidden)
         # If pruning occurred, scatter tokens back to the original grid length
         if kept_indices is not None:

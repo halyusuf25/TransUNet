@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import torch
 from medpy import metric
@@ -68,9 +69,13 @@ class DiceLoss(nn.Module):
 
 # --- utils.py ---
 def calculate_metric_percase(pred, gt, voxelspacing=None):
+    """
+    General metric helper matching the original Synapse evaluation protocol,
+    which treats mutually absent classes as a perfect overlap.
+    """
     # both binary arrays (0/1) on input
     P, G = pred.sum() > 0, gt.sum() > 0
-
+    
     if P and G:
         dice = metric.binary.dc(pred, gt)
         hd95 = metric.binary.hd95(pred, gt, voxelspacing=voxelspacing)  # <<< pass spacing
@@ -89,6 +94,32 @@ def calculate_metric_percase(pred, gt, voxelspacing=None):
     return 1.0, 0.0, 1.0  # many protocols treat this as perfect agreement for overlap
 
 
+def calculate_metric_percase_cataract(pred, gt, voxelspacing=None):
+    """
+    Metric helper that avoids rewarding absent classes with perfect scores.
+    Returns NaNs when both prediction and ground-truth are empty so downstream
+    aggregation can ignore them via nan-aware reductions.
+    """
+    P, G = pred.sum() > 0, gt.sum() > 0
+
+    if P and G:
+        dice = metric.binary.dc(pred, gt)
+        hd95 = metric.binary.hd95(pred, gt, voxelspacing=voxelspacing)
+        iou = metric.binary.jc(pred, gt)
+        return float(dice), float(hd95), float(iou)
+    # elif P > 0 and G==0:
+    #     return 1, 0, 1
+    # else:
+    #     return 0, 0, 0
+
+    if P and not G:
+        return 0.0, np.nan, 0.0
+
+    if not P and G:
+        return 0.0, np.nan, 0.0
+
+    return np.nan, np.nan, np.nan
+    
 def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, dataset='Synapse'):
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()
     net.eval()
@@ -132,8 +163,9 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
         raise ValueError("Unknown dataset")
     
     metric_list = []
+    metric_fn = calculate_metric_percase_cataract if dataset == 'Cataract1k' else calculate_metric_percase
     for i in range(1, classes):
-        metric_list.append(calculate_metric_percase(prediction == i, label == i))
+        metric_list.append(metric_fn(prediction == i, label == i))
 
     if test_save_path is not None:
         img_itk = sitk.GetImageFromArray(image.astype(np.float32))
@@ -252,3 +284,4 @@ def evaluate_model_perf(
         "throughput(images/s)": throughput,
         "macs(G)": macs
     }
+
