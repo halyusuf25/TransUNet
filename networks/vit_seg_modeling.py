@@ -168,6 +168,25 @@ class Embeddings(nn.Module):
                                 patch_norm=self.swin_config.MODEL.SWIN.PATCH_NORM,
                                 use_checkpoint=True,
                                 fused_window_process=False)
+                checkpoint_path = "networks/swin_large_patch4_window7_224_22k.pth"
+                checkpoint = torch.load(checkpoint_path, map_location='cpu')
+
+                if "model" in checkpoint:
+                    state_dict = checkpoint["model"]
+                else:
+                    state_dict = checkpoint
+
+                model_dict = self.hybrid_model.state_dict()
+                filtered_dict = {}
+
+                for k, v in state_dict.items():
+                    if k in model_dict and v.shape == model_dict[k].shape:
+                        filtered_dict[k] = v
+                    else:
+                        print(f"⚠️ Skip key: {k}")
+
+                self.hybrid_model.load_state_dict(filtered_dict, strict=False)
+
                 self.change_channel = nn.Linear(self.swin_config.MODEL.SWIN.EMBED_DIM * 2 ** (self.swin_config.MODEL.SWIN.DEPTHS.__len__() -1), config.hidden_size)
                 # in_channels = self.swin_config.hidden_size * 16
                 # self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))
