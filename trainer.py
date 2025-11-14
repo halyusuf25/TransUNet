@@ -107,9 +107,9 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 param_group['lr'] = lr_
 
             iter_num = iter_num + 1
-            if args.verbose and iter_num == 2:
+            if args.verbose and iter_num >= 2:
                 print("Verbose mode is ON. Detailed training information were printed and training is stopped after two iterations.")
-                break
+                sys.exit(0)
 
             writer.add_scalar('info/lr', lr_, iter_num)
             writer.add_scalar('info/total_loss', loss, iter_num)
@@ -129,7 +129,8 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
-
+        
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_interval = 70  # int(max_epoch/6)
         if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
