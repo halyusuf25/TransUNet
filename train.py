@@ -58,6 +58,8 @@ parser.add_argument('--use_alternate_shsa', action='store_true',
                     help='whether to use alternate partial attention')
 parser.add_argument('--topk_attn', type=float,
                     default=0.0, help='keep rate for Top-k attention (0.0 means not using Top-k attention)')
+parser.add_argument('--adaptive_attn_threshold', type=float,
+                    default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
 
 ###Teacher Model Argument:#####
 parser.add_argument('--use_kd', action='store_true', 
@@ -153,9 +155,13 @@ if __name__ == "__main__":
     if args.use_shsa and args.topk_attn > 0.0:
         raise ValueError("The --use_shsa flag is mutually exclusive with --topk_attn > 0.0.")
     
+    if args.adaptive_attn_threshold > 0.0 and (args.use_shsa or args.topk_attn > 0.0):
+        raise ValueError("The --adaptive_attn_threshold argument is mutually exclusive with --use_shsa and --topk_attn > 0.0.")
+    
     config_vit.topk_attn = args.topk_attn
     config_vit.use_shsa = args.use_shsa
     config_vit.use_alternate_shsa = args.use_alternate_shsa
+    config_vit.adaptive_attn_threshold = args.adaptive_attn_threshold
     config_vit.use_efficientnet = args.use_efficientnet
     config_vit.use_swin = args.use_swin
     if args.vit_name.find('R50') != -1:

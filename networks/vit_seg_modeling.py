@@ -19,7 +19,7 @@ from scipy import ndimage
 from . import vit_seg_configs as configs
 from .vit_seg_modeling_resnet_skip import ResNetV2
 
-from .attention import SHSAttention, TopkAttention
+from .attention import SHSAttention, TopkAttention, AdaptiveSpatialAttention
 from .swin_transformer_official import SwinTransformer
 from torchvision.models.efficientnet import MBConvConfig, MBConv
 from .efficientnetpp import EfficientNetppDecoderBlock
@@ -168,6 +168,7 @@ class Embeddings(nn.Module):
                                 patch_norm=self.swin_config.MODEL.SWIN.PATCH_NORM,
                                 use_checkpoint=True,
                                 fused_window_process=False)
+                
                 checkpoint_path = "networks/swin_large_patch4_window7_224_22k.pth"
                 checkpoint = torch.load(checkpoint_path, map_location='cpu')
 
@@ -183,7 +184,9 @@ class Embeddings(nn.Module):
                     if k in model_dict and v.shape == model_dict[k].shape:
                         filtered_dict[k] = v
                     else:
-                        print(f"⚠️ Skip key: {k}")
+                        logger.warning(f"Skipping checkpoint key '{k}': shape mismatch or key not in model. "
+                                     f"Expected shape {model_dict[k].shape if k in model_dict else 'N/A'}, "
+                                     f"got shape {v.shape}")
 
                 self.hybrid_model.load_state_dict(filtered_dict, strict=False)
 
@@ -240,6 +243,8 @@ class Block(nn.Module):
             self.attn = SHSAttention(config, vis, alternate_partial_attn=alternate_partial_attn)
         # elif self.topk_attn > 0.0:
         #     self.attn = TopkAttention(config, vis, config.hidden_size, keep_rate=self.topk_attn)
+        elif self.args.adaptive_attn_threshold > 0.0:
+            self.attn = AdaptiveSpatialAttention(config, alpha=self.args.adaptive_attn_threshold)
         else:
             self.attn = Attention(config, vis)    
 
@@ -266,7 +271,7 @@ class Block(nn.Module):
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
         with torch.no_grad():
-            if not self.use_shsa and self.topk_attn <= 0.0:
+            if not self.use_shsa and self.topk_attn <= 0.0 and self.args.adaptive_attn_threshold <= 0.0:
                 query_weight = np2th(weights[pjoin(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 key_weight = np2th(weights[pjoin(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 value_weight = np2th(weights[pjoin(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
@@ -345,8 +350,8 @@ class Encoder(nn.Module):
                 print(f"Encoder layer#{layer_block_id} output hidden_states shape: {hidden_states.shape}")
                 print(f"Encoder layer#{layer_block_id} attention weights shape: {weights.shape}")
 
-            if self.vis:
-                attn_weights.append(weights)
+            
+            attn_weights.append(weights)
             
             # # Compose kept indices across pruning layers
             # if idx is not None:

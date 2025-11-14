@@ -108,7 +108,8 @@ class TopkAttention(nn.Module):
         # Attention probabilities
         attn_logits = (q @ k.transpose(-2, -1)) * self.scale            # [B, H, N, N]
         attn_prob = attn_logits.softmax(dim=-1)                          # [B, H, N, N]
-        weights = attn_prob if self.vis else None
+        # weights = attn_prob if self.vis else None
+        weights = attn_prob
         attn = self.attn_drop(attn_prob)
 
         # Attention output
@@ -139,3 +140,123 @@ class TopkAttention(nn.Module):
             return x, index, idx, key_scores, remain_tokens, weights
 
         return x, None, None, None, remain_tokens, weights
+
+
+class AdaptiveSpatialAttention(nn.Module):
+    """Adaptive spatial attention that only attends to high-scoring tokens.
+
+    The module compresses tokens with channel-wise statistics, predicts an
+    attention mask with a light convolutional head, selects tokens whose scores
+    exceed a threshold, applies self-attention on the selected subset, and
+    leaves the remaining tokens untouched so the output shape stays (B, N, C).
+    """
+
+    def __init__(
+        self,
+        config,
+        alpha=0.5,
+        conv_kernel_size=1,
+        use_bn=True,
+        activation=nn.Sigmoid(),
+        min_tokens=1, #minimum number of tokens to keep per sample
+        vis=True,
+    ):
+        super().__init__()
+        self.args = config
+        # self.dim = dim if dim is not None else getattr(config, "hidden_size", None)
+        self.dim = self.args.hidden_size
+        if conv_kernel_size % 2 == 0:
+            raise ValueError("conv_kernel_size must be odd to preserve length.")
+        self.alpha = alpha
+        self.min_tokens = max(1, min_tokens)
+        self.vis = vis
+
+        padding = conv_kernel_size // 2
+        self.conv = nn.Conv1d(
+            in_channels=2,
+            out_channels=1,
+            kernel_size=conv_kernel_size,
+            padding=padding,
+            bias=not use_bn,
+        )
+        self.bn = nn.BatchNorm1d(1) if use_bn else None
+        # self.activation = activation if activation is not None else nn.Sigmoid()
+        self.activation = activation
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=self.dim,
+            num_heads=self.args.transformer["num_heads"],
+            dropout=self.args.transformer["attention_dropout_rate"],
+            batch_first=True,
+        )
+
+    def _compute_scores(self, x):
+        if self.args.verbose:
+            print(f"[AdaptiveSpatialAttention] input x shape to _compute_scores: {x.shape}")
+        x_tokens_first = x.transpose(1, 2)  # (B, C, N)
+        avg_map = torch.mean(x_tokens_first, dim=1, keepdim=True)
+        max_map, _ = torch.max(x_tokens_first, dim=1, keepdim=True)
+        pooled = torch.cat([avg_map, max_map], dim=1)
+        mask = self.conv(pooled)
+        if self.bn is not None:
+            mask = self.bn(mask)
+        mask = self.activation(mask)
+        if self.args.verbose:
+            print(f"[AdaptiveSpatialAttention] mask shape: {mask.shape}")
+        squeezed = mask.squeeze(1)  # (B, N)
+        if self.args.verbose:
+            print(f"[AdaptiveSpatialAttention] scores shape after squeeze: {squeezed.shape}")
+        return squeezed
+
+    def _select_indices(self, scores, threshold):
+        B, N = scores.shape
+        idx_list = []
+        if self.args.verbose:
+            print(f"[AdaptiveSpatialAttention] selecting indices from scores shape: {scores.shape}")
+        for b in range(B):
+            idx = torch.nonzero(scores[b] >= threshold, as_tuple=False).squeeze(-1)
+            if idx.numel() < self.min_tokens:
+                k = min(max(self.min_tokens, 1), N)
+                idx = torch.topk(scores[b], k=k, dim=0).indices
+            idx, _ = torch.sort(idx)
+            idx_list.append(idx)
+            if self.args.verbose:
+                print(f"[AdaptiveSpatialAttention] batch {b} selected tokens: {idx.shape} (count={idx.numel()})")
+        return idx_list
+
+    def forward(self, x, alpha=None, return_indices=False):
+        B, _, _ = x.shape
+        if self.args.verbose:
+            print(f"[AdaptiveSpatialAttention] forward input shape: {x.shape}")
+        scores = self._compute_scores(x)
+        threshold = self.alpha if alpha is None else alpha
+        if isinstance(threshold, torch.Tensor):
+            if threshold.numel() != 1:
+                raise ValueError("alpha must be a float or 0-d tensor.")
+            threshold = threshold.item()
+        idx_list = self._select_indices(scores, threshold)
+        if self.args.verbose:
+            print(f"[AdaptiveSpatialAttention] idx_list length: {len(idx_list)}")
+
+        updated = x.clone()
+        attn_weights = []
+        for b, idx in enumerate(idx_list):
+            tokens = x[b : b + 1, idx, :]
+            if self.args.verbose:
+                print(f"[AdaptiveSpatialAttention] batch {b} token subset shape: {tokens.shape}")
+            attn_out, weights = self.self_attn(tokens, tokens, tokens, need_weights=True)
+            if self.args.verbose:
+                print(f"[AdaptiveSpatialAttention] batch {b} attn_out shape: {attn_out.shape}")
+            updated[b, idx, :] = attn_out.squeeze(0)
+            if self.args.verbose:
+                print(f"[AdaptiveSpatialAttention] batch {b} updated slice idx: {idx}")
+                print(f"[AdaptiveSpatialAttention] batch {b} updated slice shape: {updated[b, idx, :].shape}")
+            attn_weights.append(weights)
+            if self.args.verbose:
+                print(f"[AdaptiveSpatialAttention] batch {b} attention weights shape: {weights.shape}")
+
+        idx_return = idx_list if return_indices else None
+        if self.args.verbose:
+            print(f"[AdaptiveSpatialAttention] forward output shape: {updated.shape}")
+        # return updated, idx_return, attn_weights
+        return updated, weights
+
