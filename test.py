@@ -65,6 +65,8 @@ parser.add_argument('--use_alternate_shsa', action='store_true',
                     help='whether to use alternate partial attention')
 parser.add_argument('--topk_attn', type=float, default=0.0, 
                     help='if >0.0, use top-k attention (fraction of k) instead of full attention (mutually exclusive with --use_shsa)')
+parser.add_argument('--adaptive_attn_threshold', type=float,
+                    default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
 parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
 parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
 parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
@@ -112,12 +114,24 @@ def inference(args, model, test_save_path=None):
     with np.errstate(invalid="ignore"):
         mean_metrics = np.nanmean(metrics_stack, axis=0)
 
+    class_names = getattr(args, "class_names", None)
+    per_class_metrics = {}
     for i in range(1, args.num_classes):
         class_metrics = mean_metrics[i - 1]
-        logging.info(
-            'Mean class %d mean_dice %f mean_hd95 %f mean_iou %f' %
-            (i, class_metrics[0], class_metrics[1], class_metrics[2])
+        class_label = (
+            class_names[i]
+            if class_names is not None and i < len(class_names)
+            else f"class_{i}"
         )
+        logging.info(
+            'Mean class %s (idx %d) mean_dice %f mean_hd95 %f mean_iou %f' %
+            (class_label, i, class_metrics[0], class_metrics[1], class_metrics[2])
+        )
+        per_class_metrics[class_label] = {
+            'dice': float(class_metrics[0]),
+            'hd95': float(class_metrics[1]),
+            'iou': float(class_metrics[2]),
+        }
     with np.errstate(invalid="ignore"):
         performance = np.nanmean(mean_metrics[:, 0])
         mean_hd95 = np.nanmean(mean_metrics[:, 1])
@@ -127,7 +141,12 @@ def inference(args, model, test_save_path=None):
         (performance, mean_hd95, mean_iou)
     )
     print("Testing Finished!")
-    return {'mean_dice': performance, 'mean_hd95': mean_hd95, 'mean_iou': mean_iou}
+    return {
+        'mean_dice': float(performance),
+        'mean_hd95': float(mean_hd95),
+        'mean_iou': float(mean_iou),
+        'per_class': per_class_metrics,
+    }
 
 
 if __name__ == "__main__":
@@ -150,6 +169,17 @@ if __name__ == "__main__":
             'list_dir': './lists/lists_Synapse',
             'num_classes': 9,
             'z_spacing': 1,
+            'class_names': [
+                'Background',
+                'Aorta',
+                'Gallbladder',
+                'Kidney(L)',
+                'Kidney(R)',
+                'Liver',
+                'Pancreas',
+                'Spleen',
+                'Stomach',
+            ],
         },
         'Cataract1k': {
             'Dataset': Cataract1kDataset,
@@ -157,6 +187,13 @@ if __name__ == "__main__":
             'list_dir': None,  # Not needed for Cataract1k
             'num_classes': 5,  # Background (0), Pupil (1), Cornea (2), Lens (3), Instruments (4)
             'z_spacing': 1,
+            'class_names': [
+                'Background',
+                'Pupil',
+                'Cornea',
+                'Lens',
+                'Instruments',
+            ],
         },
     }
     
@@ -167,6 +204,7 @@ if __name__ == "__main__":
     
     args.Dataset = dataset_config[dataset_name]['Dataset']
     args.z_spacing = dataset_config[dataset_name]['z_spacing']
+    args.class_names = dataset_config[dataset_name].get('class_names')
     if dataset_name == 'Synapse':
         args.list_dir = dataset_config[dataset_name]['list_dir']
         
@@ -206,9 +244,13 @@ if __name__ == "__main__":
     if args.use_shsa and args.topk_attn > 0.0:
         raise ValueError("The --use_shsa flag is mutually exclusive with --topk_attn > 0.0.")
     
+    if args.adaptive_attn_threshold > 0.0 and (args.use_shsa or args.topk_attn > 0.0):
+        raise ValueError("The --adaptive_attn_threshold argument is mutually exclusive with --use_shsa and --topk_attn > 0.0.")
+    
     config_vit.topk_attn = args.topk_attn
     config_vit.use_shsa = args.use_shsa
     config_vit.use_alternate_shsa = args.use_alternate_shsa
+    config_vit.adaptive_attn_threshold = args.adaptive_attn_threshold
     config_vit.use_efficientnet = args.use_efficientnet
     config_vit.use_swin = args.use_swin
     
