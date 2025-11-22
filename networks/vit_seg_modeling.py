@@ -149,7 +149,7 @@ class Embeddings(nn.Module):
             self.hybrid = False
 
         if self.hybrid:
-            if config.use_swin:
+            if self.config.use_swin:
                 self.hybrid_model = SwinTransformer(img_size=self.swin_config.DATA.IMG_SIZE,
                                 patch_size=self.swin_config.MODEL.SWIN.PATCH_SIZE,
                                 in_chans=self.swin_config.MODEL.SWIN.IN_CHANS,
@@ -169,7 +169,7 @@ class Embeddings(nn.Module):
                                 use_checkpoint=True,
                                 fused_window_process=False)
                 
-                checkpoint_path = "networks/swin_large_patch4_window7_224_22k.pth"
+                checkpoint_path = self.config.swin_pretrained_path
                 checkpoint = torch.load(checkpoint_path, map_location='cpu')
 
                 if "model" in checkpoint:
@@ -259,6 +259,7 @@ class Block(nn.Module):
         x = x + h
         if self.args.verbose:
             print(f"Block output x shape after attention and residual: {x.shape}")
+            print(f"Block attention weights shape: {weights.shape}")
         # FFN with residual
         h = x
         x = self.ffn_norm(x)
@@ -596,7 +597,12 @@ class VisionTransformer(nn.Module):
             x = self.decoder(full, features)
         else:
             x = self.decoder(x, features)
+
+        if self.args.verbose:
+            print(f"Segmentation head input shape: {x.size()}")
         logits = self.segmentation_head(x)
+        if self.args.verbose:
+            print(f"Segmentation head output logits shape: {logits.size()}")
         return logits, attn_weights, features
 
     def load_from(self, weights):

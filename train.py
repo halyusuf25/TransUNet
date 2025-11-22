@@ -81,6 +81,12 @@ parser.add_argument('--kd_points' , type=str,
 ###########################################
 
 
+##########swin config arguments##########
+parser.add_argument('--swin_pretrained_path', type=str,
+                    default='/data/shared/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')
+#########################################
+
+
 #########addtional arguments for debugging#########
 parser.add_argument('--verbose', action='store_true', 
                     help='whether to print detailed debug information during training')
@@ -169,6 +175,13 @@ if __name__ == "__main__":
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
     net.load_from(weights=np.load(config_vit.pretrained_path))
     
+    if args.verbose:
+        print(f"Model parameters: {sum(p.numel() for p in net.parameters())}")
+        for name, param in net.named_parameters():
+            print(f"{name}: shape={param.shape}, dtype={param.dtype}")
+            if param.numel() < 20:  # Only print values for small parameters
+                print(f"  values: {param.data}")
+
     
     ### Load Teacher Model for KD-Training: ###
     if args.use_kd:

@@ -74,6 +74,12 @@ parser.add_argument('--viz_save', type=str, default=None, help='path to save fig
 parser.add_argument('--viz_out', type=str, default=None, help='output filename for the saved figure (used if --viz_save is a directory or not provided)')
 parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
 
+##########swin config arguments##########
+parser.add_argument('--swin_pretrained_path', type=str,
+                    default='/data/shared/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')
+#########################################
+
+
 #######additional arguments for debugging#########
 parser.add_argument('--verbose', action='store_true', 
                     help='whether to print detailed debug information during inference')
