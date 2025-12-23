@@ -171,6 +171,9 @@ rtdetrv2_pytorch/output/
 rtdetrv2_pytorch/dataset/
 
 ckpt/
+ckpt_/
+ckpt__/
+myckpt/
 checkpoints/
 *.json
 *.txt

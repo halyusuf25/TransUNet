@@ -67,6 +67,8 @@ parser.add_argument('--topk_attn', type=float, default=0.0,
                     help='if >0.0, use top-k attention (fraction of k) instead of full attention (mutually exclusive with --use_shsa)')
 parser.add_argument('--adaptive_attn_threshold', type=float,
                     default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
+
+##################### visualization arguments ####################
 parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
 parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
 parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
@@ -295,6 +297,7 @@ if __name__ == "__main__":
                     return base
                 return os.path.join(base, name)
 
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             if dataset_name == 'Synapse':
                 ds_viz = Synapse_dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
                 total = len(ds_viz)
@@ -310,7 +313,7 @@ if __name__ == "__main__":
                         labs.append(s['label'])
                         titles.append(s['case_name'])
                     slice_indices = None if args.viz_slice is None else [args.viz_slice] * len(vols)
-                    default_name = f"Synapse_grid_{start}-{end-1}.png"
+                    default_name = f"Synapse_grid_{start}-{end-1}_{timestamp}.png"
                     save_path = resolve_save_path(default_name)
                     figure_title = f"Synapse | cases {start}-{end-1}"
                     visualize_synapse_batch(
@@ -326,7 +329,7 @@ if __name__ == "__main__":
                 else:
                     sample = ds_viz[start]
                     title = f"Synapse | case: {sample['case_name']}"
-                    default_name = f"Synapse_{sample['case_name']}.png"
+                    default_name = f"Synapse_{sample['case_name']}_{timestamp}.png"
                     save_path = resolve_save_path(default_name)
                     visualize_synapse_sample(
                         net,
@@ -351,7 +354,7 @@ if __name__ == "__main__":
                         imgs.append(s['image'])
                         labs.append(s['label'])
                         titles.append(s['case_name'])
-                    default_name = f"Cataract_grid_{start}-{end-1}.png"
+                    default_name = f"Cataract_grid_{start}-{end-1}_{timestamp}.png"
                     save_path = resolve_save_path(default_name)
                     figure_title = f"Cataract-101K | cases {start}-{end-1}"
                     visualize_cataract_batch(
@@ -366,7 +369,7 @@ if __name__ == "__main__":
                 else:
                     sample = ds_viz[start]
                     title = f"Cataract-101K | case: {sample['case_name']}"
-                    default_name = f"Cataract_{sample['case_name']}.png"
+                    default_name = f"Cataract_{sample['case_name']}_{timestamp}.png"
                     save_path = resolve_save_path(default_name)
                     visualize_cataract_sample(
                         net,
@@ -418,9 +421,9 @@ if __name__ == "__main__":
     logging.info(pretty)
 
     
-    os.makedirs("bench_logs", exist_ok=True)
+    os.makedirs("bench_logs_", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    with open(os.path.join("bench_logs", f"bench_{args.ckpt}_{timestamp}.json"), "w") as f:
+    with open(os.path.join("bench_logs_", f"bench_{args.ckpt}_{timestamp}.json"), "w") as f:
         accuracy_for_json = {k: _make_json_safe(v) for k, v in performance.items()}
         metrics_for_json = {k: _make_json_safe(v) for k, v in results.metrics.items()}
         notes_for_json = {k: _make_json_safe(v) for k, v in results.notes.items()}
