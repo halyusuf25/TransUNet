@@ -409,6 +409,7 @@ def benchmark_segmentation_model(
     enable_cudnn_benchmark: bool = True,
     autocast: bool = False,
     amp_dtype: Optional[torch.dtype] = torch.float16,
+    args: Any = None,
 ) -> BenchmarkResults:
     """
     Benchmarks using real samples from `test_loader`.
@@ -516,7 +517,7 @@ def benchmark_segmentation_model(
         "batch_size_first": float(B),
     }
     notes = {
-        # "experiment_name" : args.ckpt,
+        "checkpoint" : args.ckpt if args is not None else "N/A",
         "device": device,
         "warmup_steps": n_warm,
         "measure_batches": measure_batches,
