@@ -199,6 +199,7 @@ def _plot_triplet_grid(
         if dirpath:
             os.makedirs(dirpath, exist_ok=True)
         fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved visualization grid to: {save_path}")
 
     plt.show()
 
