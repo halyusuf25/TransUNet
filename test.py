@@ -10,12 +10,14 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from benchmark import benchmark_segmentation_model, build_benchmark_loader
+from benchmark_quantize import benchmark_segmentation_quantize_model
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
-from utils import test_single_volume, evaluate_model_perf, _make_json_safe
+from utils import test_single_volume, evaluate_model_perf, _make_json_safe, model_size_mb_benchmark
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
+from networks.quantizer import AWQViTSegQuantizer
 from datetime import datetime
 from visualize import (
     visualize_synapse_sample,
@@ -81,6 +83,10 @@ parser.add_argument('--swin_pretrained_path', type=str,
                     default='/data/shared/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')
 #########################################
 
+################ Quantization arguments ################
+parser.add_argument('--quantize', action='store_true', help='whether to quantize the model')
+parser.add_argument('--quantize_calibrate_batch_size', type=int, default=8, help='batch size for calibration (default: 8)')
+#####################################################
 
 #######additional arguments for debugging#########
 parser.add_argument('--verbose', action='store_true', 
@@ -100,7 +106,6 @@ def inference(args, model, test_save_path=None):
     model.eval()
     all_metrics = []
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
-        h, w = sampled_batch["image"].size()[2:]
         image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch['case_name'][0]
         metric_i = test_single_volume(image, label, model, classes=args.num_classes, patch_size=[args.img_size, args.img_size],
                                       test_save_path=test_save_path, case=case_name, z_spacing=args.z_spacing, dataset=args.dataset)
@@ -275,6 +280,28 @@ if __name__ == "__main__":
     net.load_state_dict(torch.load(ckpt_path))
     snapshot_name = snapshot_path.split('/')[-1]
 
+    if args.quantize:
+        if args.dataset == 'Synapse':
+            db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
+        elif args.dataset == 'Cataract1k':
+            db_calib = args.Dataset(base_dir=args.volume_path, split="test",)
+
+        calib_loader = DataLoader(db_calib, batch_size=1, shuffle=False, num_workers=1)
+ 
+        quantizer = AWQViTSegQuantizer(
+            model = net,
+            calib_loader = calib_loader,
+            w_bit=4,
+            q_group_size=128,
+            n_calib_batches=args.quantize_calibrate_batch_size,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            args=args,
+        )
+        
+        logging.info(f"Calibrating model on {len(calib_loader)} batches from test set.")
+        net = quantizer.quantize()  
+        logging.info(f"Model quantized successfully.")
+
     log_folder = './test_log/test_log_' + args.exp
     os.makedirs(log_folder, exist_ok=True)
     logging.basicConfig(filename=log_folder + '/'+snapshot_name+".txt", level=logging.INFO, format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
@@ -405,20 +432,36 @@ if __name__ == "__main__":
     # bench_bs = 1 if args.dataset == 'Synapse' else max(1, min(args.batch_size, 16))
     test_loader_bench = build_benchmark_loader(args, batch_size=36, num_workers=0, shuffle=False)
 
-    results = benchmark_segmentation_model(
-        model=net,
-        test_loader=test_loader_bench,                 # real test samples
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        warmup_steps=20,                               # stabilize kernels
-        measure_batches=50,                            # how many batches to time
-        single_image_latency_samples=200,              # B=1 latency percentiles
-        enable_cudnn_benchmark=True,                   # True if fixed image size
-        autocast=False                                 # set True to benchmark AMP
-    )
+    if args.quantize:
+        results = benchmark_segmentation_quantize_model(
+            model=net,
+            test_loader=test_loader_bench,                 # real test samples
+            device="cuda",
+            warmup_steps=20,                               # stabilize kernels
+            measure_batches=50,                            # how many batches to time
+            single_image_latency_samples=200,              # B=1 latency percentiles
+            enable_cudnn_benchmark=True,                   # True if fixed image size
+            autocast=False,                                 # set True to benchmark AMP
+            args=args,
+        )
+    else:
+        results = benchmark_segmentation_model(
+            model=net,
+            test_loader=test_loader_bench,                 # real test samples
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            warmup_steps=20,                               # stabilize kernels
+            measure_batches=50,                            # how many batches to time
+            single_image_latency_samples=200,              # B=1 latency percentiles
+            enable_cudnn_benchmark=True,                   # True if fixed image size
+            autocast=False,                        # set True to benchmark AMP      
+            args=args,    
+        )
 
     pretty = "\n" + results.pretty()
     # print(pretty)
     logging.info(pretty)
+    
+    model_size = model_size_mb_benchmark(net)
 
     
     os.makedirs("bench_logs_", exist_ok=True)
@@ -428,6 +471,7 @@ if __name__ == "__main__":
         metrics_for_json = {k: _make_json_safe(v) for k, v in results.metrics.items()}
         notes_for_json = {k: _make_json_safe(v) for k, v in results.notes.items()}
         arguments_for_json = {k: _make_json_safe(v) for k, v in vars(args).items()}  # Include all arguments as a dictionary
+        model_size_for_json = {k: _make_json_safe(v) for k, v in model_size.items()}  # Include model size info
 
         json.dump(
             {
@@ -435,6 +479,7 @@ if __name__ == "__main__":
                 "metrics": metrics_for_json,
                 "notes": notes_for_json,
                 "arguments": arguments_for_json,
+                "model_size": model_size_for_json,
             },
             f,
             indent=2,
