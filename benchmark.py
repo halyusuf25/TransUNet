@@ -336,17 +336,17 @@ def count_flops_gflops(model: nn.Module, example: torch.Tensor) -> Tuple[float, 
 
     Convention: FLOPs ≈ 2 × MACs (multiply + add per MAC), which matches many CV papers.
     """
-    # THOP first
-    thop_res = _try_count_macs_and_params_with_thop(model, example)
-    if thop_res is not None:
-        macs, params = thop_res
-        return (2.0 * macs) / 1e9, params
+    # # THOP first
+    # thop_res = _try_count_macs_and_params_with_thop(model, example)
+    # if thop_res is not None:
+    #     macs, params = thop_res
+    #     return (2.0 * macs) / 1e9, params
 
-    # fvcore next
-    fv_res = _try_count_macs_with_fvcore(model, example)
-    if fv_res is not None:
-        macs, params = fv_res
-        return (2.0 * macs) / 1e9, params
+    # # fvcore next
+    # fv_res = _try_count_macs_with_fvcore(model, example)
+    # if fv_res is not None:
+    #     macs, params = fv_res
+    #     return (2.0 * macs) / 1e9, params
 
     # hook fallback
     macs = _fallback_hook_macs_vit(model, example)

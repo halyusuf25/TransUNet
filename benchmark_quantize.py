@@ -24,7 +24,8 @@ from benchmark import (
     _set_cudnn_benchmark,
     _timed_forward_gpu,
     count_parameters,
-)
+    count_flops_gflops,
+    )
 
 # try:
 #     from awq.quantize.qmodule import WQLinear
@@ -166,17 +167,17 @@ def _fallback_hook_macs_vit_quantized(model: nn.Module, example: torch.Tensor) -
 
 
 def count_flops_gflops_quantized(model: nn.Module, example: torch.Tensor) -> Tuple[float, int]:
-    thop_res = _try_count_macs_and_params_with_thop_quantized(model, example)
-    if thop_res is not None:
-        print(f"THOB result used for quantized model FLOPs and Params counting.")
-        macs, params = thop_res
-        return (2.0 * macs) / 1e9, params
+    # thop_res = _try_count_macs_and_params_with_thop_quantized(model, example)
+    # if thop_res is not None:
+    #     print(f"THOB result used for quantized model FLOPs and Params counting.")
+    #     macs, params = thop_res
+    #     return (2.0 * macs) / 1e9, params
 
-    fv_res = _try_count_macs_with_fvcore_quantized(model, example)
-    if fv_res is not None:
-        print(f"FVCore result used for quantized model FLOPs and Params counting.")
-        macs, params = fv_res
-        return (2.0 * macs) / 1e9, params
+    # fv_res = _try_count_macs_with_fvcore_quantized(model, example)
+    # if fv_res is not None:
+    #     print(f"FVCore result used for quantized model FLOPs and Params counting.")
+    #     macs, params = fv_res
+    #     return (2.0 * macs) / 1e9, params
 
     macs = _fallback_hook_macs_vit_quantized(model, example)
     params = count_parameters(model)
@@ -224,7 +225,8 @@ def benchmark_segmentation_quantize_model(
 
     # Count FLOPs & params on a real example (1 image)
     example = first_imgs[:1].contiguous().to(device, non_blocking=True)
-    gflops, n_params = count_flops_gflops_quantized(model, example)
+    # gflops, n_params = count_flops_gflops_quantized(model, example)
+    gflops, n_params = count_flops_gflops(model, example)
 
     # ---------------- Warm-up ----------------
     n_warm = max(0, warmup_steps)
