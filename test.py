@@ -89,6 +89,7 @@ parser.add_argument('--quantize_calibrate_batch_size', type=int, default=8, help
 #####################################################
 
 #######additional arguments for debugging#########
+parser.add_argument('--description', type=str, default='no description for this test run', help='description for the experiment')
 parser.add_argument('--verbose', action='store_true', 
                     help='whether to print detailed debug information during inference')
 ###############################################
@@ -466,6 +467,7 @@ if __name__ == "__main__":
     
     os.makedirs("bench_logs_", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    date, time = timestamp.split("_")
     with open(os.path.join("bench_logs_", f"bench_{args.ckpt}_{timestamp}.json"), "w") as f:
         accuracy_for_json = {k: _make_json_safe(v) for k, v in performance.items()}
         metrics_for_json = {k: _make_json_safe(v) for k, v in results.metrics.items()}
@@ -475,6 +477,8 @@ if __name__ == "__main__":
 
         json.dump(
             {
+                "description": args.description,
+                "date_time": date + " " + time,
                 "accuracy": accuracy_for_json,
                 "metrics": metrics_for_json,
                 "notes": notes_for_json,
