@@ -225,9 +225,8 @@ def benchmark_segmentation_quantize_model(
 
     # Count FLOPs & params on a real example (1 image)
     example = first_imgs[:1].contiguous().to(device, non_blocking=True)
-    # gflops, n_params = count_flops_gflops_quantized(model, example)
-    gflops, n_params = count_flops_gflops(model, example)
-
+    gflops, n_params = count_flops_gflops_quantized(model, example)
+    
     # ---------------- Warm-up ----------------
     n_warm = max(0, warmup_steps)
     ctx = (

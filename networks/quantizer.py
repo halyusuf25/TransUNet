@@ -130,6 +130,7 @@ class AWQViTSegQuantizer:
 
         # AWQ's quantizer expects zero_point True (see quantizer.py / real_quantize_model_weight).
         self.q_config = {"zero_point": True, "q_group_size": self.q_group_size}
+        self._se_scales_cache: Optional[List[torch.Tensor]] = None
 
     # -------------------------------------------------------------------------
     # Public API
@@ -154,12 +155,46 @@ class AWQViTSegQuantizer:
         #      - q/k/v linears (post attention_norm)
         #      - fc1 (post ffn_norm)
         block_inputs = self._collect_block_inputs(blocks)
+        if self.args.verbose:
+            print(f"Collected calibration inputs for {len(blocks)} blocks.")
+            print(f"Block 0 attn_in shape: {block_inputs[0].attn_in.shape}, ffn_in shape: {block_inputs[0].ffn_in.shape}")
+            # Collected calibration inputs for 12 blocks.
+            # Block 0 attn_in shape: torch.Size([148, 196, 768]), ffn_in shape: torch.Size([148, 196, 768])
+            # sanity check
+            for i, bi in enumerate(block_inputs):
+                if bi.attn_in is None or bi.ffn_in is None:
+                    raise RuntimeError(f"Missing calibration inputs for block {i}.")
 
+        se_scales = None
+        if self.args.verbose:
+            se_scales = self._se_scales_cache
+            if se_scales is not None and len(se_scales) == 0:
+                print("SE scales list is empty; skipping SE-vs-AWQ comparison.")
+                se_scales = None
+                
         # 3) For each block:
         #    (a) auto-scale (AWQ)
         #    (b) replace selected nn.Linear with WQLinear
-        for blk, inputs in zip(blocks, block_inputs):
-            self._auto_scale_block_dispatch(blk, inputs)
+        for block_idx, (blk, inputs) in enumerate(zip(blocks, block_inputs)):
+            # self._auto_scale_block_dispatch(blk, inputs)
+            scales_list = self._auto_scale_block_vit(blk, inputs)
+            
+            if self.args.verbose:
+                print(f"scale list type is {type(scales_list)} and length is {len(scales_list)}")
+                print(f"First element of scales_list is {type(scales_list[0])}")
+                print(f"second element of scales_list is {type(scales_list[1])}")
+                print(f"ViT-specific scales shape: {scales_list[0][2].shape}")
+                if se_scales is not None:
+                    if block_idx < len(se_scales):
+                        self._print_se_vs_awq(block_idx, se_scales[block_idx], scales_list)
+                    else:
+                        print(
+                            f"[SE vs AWQ] block {block_idx}: no SE scale available "
+                            f"(se_scales length={len(se_scales)})."
+                        )
+            
+            self._apply_scales(blk, scales_list)    
+            
             self._convert_selected_linears_in_block(blk)
 
             # Help release memory between blocks.
@@ -260,6 +295,12 @@ class AWQViTSegQuantizer:
         for i_batch, batch in enumerate(self.calib_loader):
             image = batch["image"]     
             input = self._extract_input_tensor(image).to(self.device)
+            if self.args.verbose and hasattr(self.model, "get_se_scales") and self._se_scales_cache is None:
+                try:
+                    self._se_scales_cache = self.model.get_se_scales(input)
+                except Exception as exc:
+                    print(f"Warning: failed to capture SE scales for comparison: {exc}")
+                    self._se_scales_cache = []
             _ = self.model(input)
             # for i in range(input.shape[0]):
             #     _ = self.model(input[i])
@@ -356,16 +397,19 @@ class AWQViTSegQuantizer:
                 q_config=self.q_config,
                 input_feat=input_feat,
             )
-
+            
+            print(f"auto_scale_block succeeded for block {blk} with scales_list: {scales_list}")
             # If it didn't raise, we can apply it.
             self._apply_scales(blk, scales_list)
             return
         except NotImplementedError:
             # Expected for ViT blocks.
             pass
+            # raise RuntimeError("auto_scale_block raised NotImplementedError unexpectedly.")  # for debugging
 
         # ViT-specific: search scales for LN->(q,k,v) and LN->fc1.
         scales_list = self._auto_scale_block_vit(blk, inputs)
+        print(f"ViT-specific auto-scaling for block {blk} with scales shape: {scales_list[0][2].shape}")
         self._apply_scales(blk, scales_list)
 
     @torch.no_grad()
@@ -440,6 +484,56 @@ class AWQViTSegQuantizer:
         scales_list.append(("ffn_norm", ("ffn.fc1",), scales_fc1.cpu()))
 
         return scales_list
+
+    @torch.no_grad()
+    def _print_se_vs_awq(self, block_idx: int, se_scale: torch.Tensor, scales_list) -> None:
+        """Verbose comparison between SE scales and AWQ per-channel scaling."""
+        se_vec = se_scale
+        if se_scale.dim() == 3:  # (B, 1, C)
+            se_vec = se_scale.mean(dim=0).squeeze(0)
+        elif se_scale.dim() == 4:  # (B, C, 1, 1)
+            se_vec = se_scale.mean(dim=0).squeeze(-1).squeeze(-1)
+        elif se_scale.dim() == 2:  # (B, C)
+            se_vec = se_scale.mean(dim=0)
+        else:
+            se_vec = se_scale.view(-1)
+
+        attn_scales = scales_list[0][2].to(se_vec.device, dtype=se_vec.dtype)
+        ffn_scales = scales_list[1][2].to(se_vec.device, dtype=se_vec.dtype)
+
+        if se_vec.numel() != attn_scales.numel() or se_vec.numel() != ffn_scales.numel():
+            print(
+                f"[SE vs AWQ] block {block_idx}: shape mismatch "
+                f"se_vec={tuple(se_vec.shape)}, attn={tuple(attn_scales.shape)}, ffn={tuple(ffn_scales.shape)}"
+            )
+            return
+
+        def _stats(t: torch.Tensor):
+            return (
+                t.mean().item(),
+                t.min().item(),
+                t.max().item(),
+                t.std(unbiased=False).item(),
+            )
+
+        def _cos_sim(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+            denom = (a.norm() * b.norm()).clamp_min(1e-12)
+            return (a * b).sum() / denom
+
+        se_mean, se_min, se_max, se_std = _stats(se_vec)
+        attn_mean, attn_min, attn_max, attn_std = _stats(attn_scales)
+        ffn_mean, ffn_min, ffn_max, ffn_std = _stats(ffn_scales)
+        cos_attn = _cos_sim(se_vec, attn_scales).item()
+        cos_ffn = _cos_sim(se_vec, ffn_scales).item()
+
+        print(
+            f"[SE vs AWQ] block {block_idx}: "
+            f"se_scale{tuple(se_scale.shape)} -> vec{tuple(se_vec.shape)} | "
+            f"se(mean/min/max/std)={se_mean:.4g}/{se_min:.4g}/{se_max:.4g}/{se_std:.4g} | "
+            f"attn(mean/min/max/std)={attn_mean:.4g}/{attn_min:.4g}/{attn_max:.4g}/{attn_std:.4g} | "
+            f"ffn(mean/min/max/std)={ffn_mean:.4g}/{ffn_min:.4g}/{ffn_max:.4g}/{ffn_std:.4g} | "
+            f"cos(se,attn)={cos_attn:.4f}, cos(se,ffn)={cos_ffn:.4f}"
+        )
 
     @torch.no_grad()
     def _search_best_scales(
