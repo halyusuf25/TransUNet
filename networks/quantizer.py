@@ -155,45 +155,18 @@ class AWQViTSegQuantizer:
         #      - q/k/v linears (post attention_norm)
         #      - fc1 (post ffn_norm)
         block_inputs = self._collect_block_inputs(blocks)
-        if self.args.verbose:
-            print(f"Collected calibration inputs for {len(blocks)} blocks.")
-            print(f"Block 0 attn_in shape: {block_inputs[0].attn_in.shape}, ffn_in shape: {block_inputs[0].ffn_in.shape}")
-            # Collected calibration inputs for 12 blocks.
-            # Block 0 attn_in shape: torch.Size([148, 196, 768]), ffn_in shape: torch.Size([148, 196, 768])
-            # sanity check
-            for i, bi in enumerate(block_inputs):
-                if bi.attn_in is None or bi.ffn_in is None:
-                    raise RuntimeError(f"Missing calibration inputs for block {i}.")
-
-        se_scales = None
-        if self.args.verbose:
-            se_scales = self._se_scales_cache
-            if se_scales is not None and len(se_scales) == 0:
-                print("SE scales list is empty; skipping SE-vs-AWQ comparison.")
-                se_scales = None
                 
         # 3) For each block:
         #    (a) auto-scale (AWQ)
         #    (b) replace selected nn.Linear with WQLinear
         for block_idx, (blk, inputs) in enumerate(zip(blocks, block_inputs)):
             # self._auto_scale_block_dispatch(blk, inputs)
-            scales_list = self._auto_scale_block_vit(blk, inputs)
-            
-            if self.args.verbose:
-                print(f"scale list type is {type(scales_list)} and length is {len(scales_list)}")
-                print(f"First element of scales_list is {type(scales_list[0])}")
-                print(f"second element of scales_list is {type(scales_list[1])}")
-                print(f"ViT-specific scales shape: {scales_list[0][2].shape}")
-                if se_scales is not None:
-                    if block_idx < len(se_scales):
-                        self._print_se_vs_awq(block_idx, se_scales[block_idx], scales_list)
-                    else:
-                        print(
-                            f"[SE vs AWQ] block {block_idx}: no SE scale available "
-                            f"(se_scales length={len(se_scales)})."
-                        )
-            
-            self._apply_scales(blk, scales_list)    
+            if getattr(self.args, "use_se_block", False):
+                scales_list = self._auto_se_scale(blk, inputs, block_idx)
+            else:
+                scales_list = self._auto_scale_block_vit(blk, inputs)
+                                
+            self._apply_scales(blk, scales_list)
             
             self._convert_selected_linears_in_block(blk)
 
@@ -249,6 +222,19 @@ class AWQViTSegQuantizer:
     # Calibration input collection
     # -------------------------------------------------------------------------
 
+    def _extract_se_scales_from_output(
+        self,
+        output: Any,
+        expected_len: int,
+    ) -> Optional[List[torch.Tensor]]:
+        if not isinstance(output, (list, tuple)) or not output:
+            raise ValueError(f"Unable to extract SE scales from output. Expected output to be a non-empty list/tuple, got {type(output)}")
+        candidate = output[-1]
+        if isinstance(candidate, (list, tuple)) and len(candidate) == expected_len:
+            if all(torch.is_tensor(t) for t in candidate):
+                return [t.detach() for t in candidate]
+        raise ValueError("Unable to extract SE scales from output. Expected output to be a non-empty list/tuple.")
+
     @torch.no_grad()
     def _collect_block_inputs(self, blocks: List[nn.Module]) -> List[BlockCalibInputs]:
         """Cache per-block inputs needed for scaling search using forward pre-hooks."""
@@ -295,13 +281,14 @@ class AWQViTSegQuantizer:
         for i_batch, batch in enumerate(self.calib_loader):
             image = batch["image"]     
             input = self._extract_input_tensor(image).to(self.device)
-            if self.args.verbose and hasattr(self.model, "get_se_scales") and self._se_scales_cache is None:
-                try:
-                    self._se_scales_cache = self.model.get_se_scales(input)
-                except Exception as exc:
-                    print(f"Warning: failed to capture SE scales for comparison: {exc}")
-                    self._se_scales_cache = []
-            _ = self.model(input)
+
+            output = self.model(input)
+            if getattr(self.args, "use_se_block", False) and self._se_scales_cache is None:
+                se_scales = self._extract_se_scales_from_output(output, expected_len=len(blocks))
+                if se_scales is not None:
+                    self._se_scales_cache = se_scales
+                else:
+                    raise RuntimeError("SE scales not found in model output during calibration.")
             # for i in range(input.shape[0]):
             #     _ = self.model(input[i])
                 
@@ -412,9 +399,19 @@ class AWQViTSegQuantizer:
         print(f"ViT-specific auto-scaling for block {blk} with scales shape: {scales_list[0][2].shape}")
         self._apply_scales(blk, scales_list)
 
+    def _se_scale_to_vec(self, se_scale: torch.Tensor) -> torch.Tensor:
+        if se_scale.dim() == 3:  # (B, 1, C)
+            return se_scale.mean(dim=0).squeeze(0)
+        if se_scale.dim() == 4:  # (B, C, 1, 1)
+            return se_scale.mean(dim=0).squeeze(-1).squeeze(-1)
+        if se_scale.dim() == 2:  # (B, C)
+            return se_scale.mean(dim=0)
+        return se_scale.view(-1)
+
     @torch.no_grad()
     def _apply_scales(self, blk: nn.Module, scales_list) -> None:
         """Apply scales without moving modules across devices."""
+
         for prev_op_name, layer_names, scales in scales_list:
             prev_op = self._get_op_by_name(blk, prev_op_name)
             layers = [self._get_op_by_name(blk, n) for n in layer_names]
@@ -486,17 +483,36 @@ class AWQViTSegQuantizer:
         return scales_list
 
     @torch.no_grad()
+    def _auto_se_scale(self, blk: nn.Module, inputs: BlockCalibInputs, block_idx: int):
+        """Build the `scales_list` for a ViT `Block` using SE-derived scales."""
+        if self._se_scales_cache is None:
+            raise RuntimeError("SE scales were not captured; ensure the model outputs SE scales during calibration.")
+        if block_idx >= len(self._se_scales_cache):
+            raise RuntimeError(
+                f"SE scales missing for block index {block_idx} (cache has {len(self._se_scales_cache)} entries)."
+            )
+
+        se_scale = self._se_scales_cache[block_idx]
+        se_vec = self._se_scale_to_vec(se_scale).detach()
+
+        scales_list = []
+
+        # 1) attention_norm -> q/k/v
+        if not (hasattr(blk, "attention_norm") and hasattr(blk, "attn")):
+            raise AttributeError("Expected ViT Block to have attention_norm and attn.")
+        scales_list.append(("attention_norm", ("attn.query", "attn.key", "attn.value"), se_vec.cpu()))
+
+        # 2) ffn_norm -> fc1
+        if not (hasattr(blk, "ffn_norm") and hasattr(blk, "ffn") and hasattr(blk.ffn, "fc1")):
+            raise AttributeError("Expected ViT Block to have ffn_norm and ffn.fc1.")
+        scales_list.append(("ffn_norm", ("ffn.fc1",), se_vec.cpu()))
+
+        return scales_list
+
+    @torch.no_grad()
     def _print_se_vs_awq(self, block_idx: int, se_scale: torch.Tensor, scales_list) -> None:
         """Verbose comparison between SE scales and AWQ per-channel scaling."""
-        se_vec = se_scale
-        if se_scale.dim() == 3:  # (B, 1, C)
-            se_vec = se_scale.mean(dim=0).squeeze(0)
-        elif se_scale.dim() == 4:  # (B, C, 1, 1)
-            se_vec = se_scale.mean(dim=0).squeeze(-1).squeeze(-1)
-        elif se_scale.dim() == 2:  # (B, C)
-            se_vec = se_scale.mean(dim=0)
-        else:
-            se_vec = se_scale.view(-1)
+        se_vec = self._se_scale_to_vec(se_scale)
 
         attn_scales = scales_list[0][2].to(se_vec.device, dtype=se_vec.dtype)
         ffn_scales = scales_list[1][2].to(se_vec.device, dtype=se_vec.dtype)
@@ -567,11 +583,14 @@ class AWQViTSegQuantizer:
 
         # Baseline output.
         with torch.no_grad():
-            org_out = module2inspect(x, **kwargs)
+            org_out= module2inspect(x, **kwargs)
             if isinstance(org_out, tuple):
                 org_out = org_out[0]
+        
 
-        x_max = _get_act_scale(x)
+        # Get per-channel activation scale.
+        x_max = _get_act_scale(x) # AWQ's per-channel mean abs activation
+        
 
         best_error = float("inf")
         best_scales: Optional[torch.Tensor] = None
@@ -626,6 +645,8 @@ class AWQViTSegQuantizer:
         """
         # Collect targets (module-local dotted names)
         to_replace = []
+        quantized = []
+        verbose = getattr(self.args, "verbose", False)
 
         # Attention projections
         if hasattr(blk, "attn"):
@@ -656,6 +677,15 @@ class AWQViTSegQuantizer:
 
             qlin = self._linear_to_wqlinear(lin)
             setattr(parent_mod, leaf, qlin)
+            quantized.append(dotted)
+
+        if verbose and quantized:
+            print(
+                f"[quantize] Replaced linears in {type(blk).__name__}: {', '.join(quantized)}"
+            )
+        else: 
+            if verbose:
+                print(f"[quantize] No linears replaced in {type(blk).__name__}.")
 
     def _linear_to_wqlinear(self, lin: nn.Linear) -> nn.Module:
         """Convert a torch.nn.Linear to AWQ's WQLinear with real (scale/zero) quantization."""
