@@ -67,13 +67,13 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
         for i_batch, sampled_batch in enumerate(trainloader):
             image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
-            outputs, _ , features = model(image_batch)
+            outputs, _ , features, _ = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
             loss_dice = dice_loss(outputs, label_batch, softmax=True)
             
             if args.use_kd and teacher_model is not None:
                 with torch.no_grad():
-                    teacher_outputs, _ , teacher_features = teacher_model(image_batch)
+                    teacher_outputs, _ , teacher_features, _ = teacher_model(image_batch)
                     if args.kd_points in {'backbone', 'all'}:
                         s_last = features[-1]
                         t_last = teacher_features[-1]

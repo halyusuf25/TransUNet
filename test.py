@@ -69,6 +69,7 @@ parser.add_argument('--topk_attn', type=float, default=0.0,
                     help='if >0.0, use top-k attention (fraction of k) instead of full attention (mutually exclusive with --use_shsa)')
 parser.add_argument('--adaptive_attn_threshold', type=float,
                     default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
+parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
 
 ##################### visualization arguments ####################
 parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
@@ -120,6 +121,10 @@ def inference(args, model, test_save_path=None):
             'idx %d case %s mean_dice %f mean_hd95 %f mean_iou %f' %
             (i_batch, case_name, case_dice, case_hd95, case_iou)
         )
+        if args.verbose:
+            break;  # for debugging, run only one batch
+        
+        
 
     if not all_metrics:
         raise RuntimeError("No metrics were collected during inference.")
@@ -245,6 +250,8 @@ if __name__ == "__main__":
     config_vit.verbose = args.verbose
     config_vit.n_classes = args.num_classes
     config_vit.n_skip = args.n_skip
+    config_vit.use_se_block = args.use_se_block
+    
     config_vit.patches.size = (args.vit_patches_size, args.vit_patches_size)
     if args.num_heads is not None:
         config_vit.transformer.num_heads = args.num_heads
@@ -281,6 +288,14 @@ if __name__ == "__main__":
     net.load_state_dict(torch.load(ckpt_path))
     snapshot_name = snapshot_path.split('/')[-1]
 
+    log_folder = './test_log/test_log_' + args.exp
+    os.makedirs(log_folder, exist_ok=True)
+    logging.basicConfig(filename=log_folder + '/'+snapshot_name+".txt", level=logging.INFO, format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    logging.info(str(args))
+    logging.info(snapshot_name)
+
+
     if args.quantize:
         if args.dataset == 'Synapse':
             db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
@@ -302,14 +317,7 @@ if __name__ == "__main__":
         logging.info(f"Calibrating model on {len(calib_loader)} batches from test set.")
         net = quantizer.quantize()  
         logging.info(f"Model quantized successfully.")
-
-    log_folder = './test_log/test_log_' + args.exp
-    os.makedirs(log_folder, exist_ok=True)
-    logging.basicConfig(filename=log_folder + '/'+snapshot_name+".txt", level=logging.INFO, format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    logging.info(str(args))
-    logging.info(snapshot_name)
-
+        
     # Optional qualitative visualization before running full inference
     if args.viz:
         try:

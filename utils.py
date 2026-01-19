@@ -67,6 +67,47 @@ class DiceLoss(nn.Module):
         return loss / self.n_classes
 
 
+def flatten(input, target, ignore_index):
+    num_class = input.size(1)
+    input = input.permute(0, 2, 3, 1).contiguous()
+    
+    input_flatten = input.view(-1, num_class)
+    target_flatten = target.view(-1)
+    
+    mask = (target_flatten != ignore_index)
+    input_flatten = input_flatten[mask]
+    target_flatten = target_flatten[mask]
+    
+    return input_flatten, target_flatten
+
+
+class JaccardLoss(nn.Module):
+    def __init__(self, ignore_index=255, smooth=1.0):
+        super(JaccardLoss, self).__init__()
+        self.ignore_index = ignore_index
+        self.smooth = smooth
+      
+    def forward(self, input, target):
+        input, target = flatten(input, target, self.ignore_index)
+        input = torch.nn.functional.softmax(input, dim=1)
+        num_classes = input.size(1)
+        losses = []
+        for c in range(num_classes):
+            target_c = (target == c).float()
+            input_c = input[:, c]
+            
+            intersection = (input_c * target_c).sum()
+            total = (input_c + target_c).sum()
+            union = total - intersection
+            IoU = (intersection + self.smooth)/(union + self.smooth)
+            
+            losses.append(1-IoU)
+        
+        losses = torch.stack(losses)
+        loss = losses.mean()
+        return loss
+
+
 # --- utils.py ---
 def calculate_metric_percase(pred, gt, voxelspacing=None):
     """
@@ -126,6 +167,7 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
     # if len(image.shape) == 3:
     if dataset == 'Synapse':
         prediction = np.zeros_like(label)
+        print(f"Processing case {case}, image shape: {image.shape}")
         for ind in range(image.shape[0]):
             slice = image[ind, :, :]    
             x, y = slice.shape[0], slice.shape[1]
@@ -133,7 +175,7 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
                 slice = zoom(slice, (patch_size[0] / x, patch_size[1] / y), order=3)  # previous using 0
             input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().cuda()
             with torch.no_grad():
-                outputs, _ , _ = net(input)
+                outputs, _ , _ ,_= net(input)
                 out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
                 out = out.cpu().detach().numpy()
                 if x != patch_size[0] or y != patch_size[1]:
@@ -285,3 +327,175 @@ def evaluate_model_perf(
         "macs(G)": macs
     }
 
+
+# compute model size in MB/MiB
+def model_size_mb_benchmark(
+    model: nn.Module,
+    *,
+    include_buffers: bool = True,
+    use_state_dict: bool = False,
+    binary_mebibytes: bool = True,   # True: MiB (1024^2). False: MB (10^6).
+    deduplicate_shared_tensors: bool = True,
+) -> Dict[str, Any]:
+    """
+    Estimate the *model size / weight footprint* used in benchmarking,
+    following the convention commonly adopted in quantization and
+    model-compression research papers.
+
+    --------------------------------------------------------------------
+    WHAT THIS FUNCTION MEASURES
+    --------------------------------------------------------------------
+    This function estimates how many BYTES are required to store the
+    model's weights (and optionally buffers) by summing:
+
+        bytes = num_elements × element_size_in_bytes
+
+    across all counted tensors.
+
+    This corresponds to the commonly reported metric:
+        "Model size (MB)"  or  "Weight footprint (MB)"
+
+    It reflects changes in numeric precision (e.g., FP32 → INT8 / INT4),
+    while keeping the architecture fixed.
+
+    --------------------------------------------------------------------
+    OUTPUT DICTIONARY (DETAILED DESCRIPTION)
+    --------------------------------------------------------------------
+    The function returns a dictionary with the following keys:
+
+    1) total_bytes : int
+       ------------------------------------------------------------
+       The TOTAL number of bytes required to store all counted tensors.
+
+       Computation:
+           sum(t.numel() × t.element_size())  over all counted tensors
+
+       This is the most fundamental quantity; all other size metrics
+       are derived from this value.
+
+    2) total_mb : float
+       ------------------------------------------------------------
+       The same total size expressed in MB or MiB.
+
+       If binary_mebibytes=True (default):
+           total_bytes / (1024^2)   → MiB
+
+       If binary_mebibytes=False:
+           total_bytes / (10^6)     → MB
+
+       This is the value typically reported in benchmarking tables as:
+           "Model size (MB)" or "Model size (MiB)"
+
+    3) unit : str
+       ------------------------------------------------------------
+       The unit used for total_mb and dtype_mb.
+
+       Possible values:
+           - "MiB"  (binary, 1024^2 bytes)
+           - "MB"   (decimal, 10^6 bytes)
+
+       Important for paper clarity: always specify which unit you use.
+
+    4) num_tensors_counted : int
+       ------------------------------------------------------------
+       The number of tensors that were *iterated over* during counting.
+
+       NOTE:
+       - This is counted BEFORE deduplication.
+       - If the model contains shared/tied weights and
+         deduplicate_shared_tensors=True, fewer unique tensors may
+         actually contribute to total_bytes.
+
+       This field is mostly diagnostic/debugging information.
+
+    5) dtype_bytes : Dict[str, int]
+       ------------------------------------------------------------
+       A breakdown of storage size grouped by tensor dtype.
+
+       Example:
+           {
+               "torch.float32": 84_934_656,
+               "torch.int8":     12_345_678
+           }
+
+       This is extremely useful for quantization analysis, as it
+       explicitly shows how much of the model footprint is coming
+       from low-precision vs high-precision tensors.
+
+    6) dtype_mb : Dict[str, float]
+       ------------------------------------------------------------
+       Same as dtype_bytes, but converted to MB or MiB using the same
+       unit as total_mb.
+
+       This is often useful for directly reporting per-dtype memory
+       contributions in ablation tables or appendices.
+
+    7) counted_via : str
+       ------------------------------------------------------------
+       Indicates WHICH tensors were used for counting.
+
+       Possible values:
+           - "state_dict"
+               Counted tensors from model.state_dict(), which includes:
+                 • parameters
+                 • persistent buffers (e.g., BatchNorm running stats)
+
+               This is the recommended default for benchmarking,
+               especially for quantized models.
+
+           - "parameters(+buffers)"
+               Counted model.parameters() and model.buffers().
+
+           - "parameters_only"
+               Counted only trainable parameters.
+
+       In most research papers, "state_dict" best matches the notion of
+       "model size" as what must be stored or shipped.
+     --------------------------------------------------------------------"""
+
+    # Collect tensors
+    tensors = []
+    if use_state_dict:
+        # state_dict contains params + buffers needed for inference
+        sd = model.state_dict()
+        for _, v in sd.items():
+            if torch.is_tensor(v):
+                tensors.append(v)
+    else:
+        tensors.extend(list(model.parameters()))
+        if include_buffers:
+            tensors.extend(list(model.buffers()))
+
+    # Sum bytes
+    total_bytes = 0
+    dtype_bytes: Dict[str, int] = {}
+
+    seen = set()
+    for t in tensors:
+        # bytes for THIS tensor's values
+        b = int(t.numel()) * int(t.element_size())
+
+        if deduplicate_shared_tensors:
+            # Best-effort: if exact tensor storage is shared, avoid double counting.
+            # (Works well for tied weights; rare false negatives for complex views.)
+            key = (int(t.data_ptr()), int(t.numel()), int(t.element_size()))
+            if key in seen:
+                continue
+            seen.add(key)
+
+        total_bytes += b
+        k = str(t.dtype)
+        dtype_bytes[k] = dtype_bytes.get(k, 0) + b
+
+    denom = (1024 ** 2) if binary_mebibytes else (10 ** 6)
+    total_mb = total_bytes / denom
+
+    return {
+        "total_bytes": total_bytes,
+        "total_mb": total_mb,
+        "unit": "MiB" if binary_mebibytes else "MB",
+        "num_tensors_counted": len(tensors),
+        "dtype_bytes": dtype_bytes,
+        "dtype_mb": {k: v / denom for k, v in dtype_bytes.items()},
+        "counted_via": "state_dict" if use_state_dict else ("parameters(+buffers)" if include_buffers else "parameters_only"),
+    }

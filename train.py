@@ -60,6 +60,7 @@ parser.add_argument('--topk_attn', type=float,
                     default=0.0, help='keep rate for Top-k attention (0.0 means not using Top-k attention)')
 parser.add_argument('--adaptive_attn_threshold', type=float,
                     default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
+parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
 
 ###Teacher Model Argument:#####
 parser.add_argument('--use_kd', action='store_true', 
@@ -170,6 +171,7 @@ if __name__ == "__main__":
     config_vit.adaptive_attn_threshold = args.adaptive_attn_threshold
     config_vit.use_efficientnet = args.use_efficientnet
     config_vit.use_swin = args.use_swin
+    config_vit.use_se_block = args.use_se_block
     if args.vit_name.find('R50') != -1:
         config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()

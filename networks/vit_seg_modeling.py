@@ -26,6 +26,7 @@ from .efficientnetpp import EfficientNetppDecoderBlock
 import yaml
 from easydict import EasyDict as edict
 from .lib import topk_indices
+from .se_block import SELayer
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +315,7 @@ class Encoder(nn.Module):
         self.args = config
         self.vis = vis
         self.layer = nn.ModuleList()
+        self.SELayer = nn.ModuleList() if self.args.use_se_block else None
         self.encoder_norm = LayerNorm(config.hidden_size, eps=1e-6)
         for i in range(config.transformer["num_layers"]):
             if config.use_alternate_shsa:
@@ -323,21 +325,30 @@ class Encoder(nn.Module):
                 alternate_partial_attn = False  
 
             layer = Block(config, vis, alternate_partial_attn=alternate_partial_attn)
+            
             self.layer.append(copy.deepcopy(layer))
+            
+            if self.SELayer is not None:
+                se = SELayer(config.hidden_size)
+                self.SELayer.append(copy.deepcopy(se))
 
+    
 
     def forward(self, hidden_states):
         attn_weights = []
         kept_indices = None  # absolute indices into the original (pre-prune) sequence
-        layer_block_id = 0
+        # layer_block_id = 0
         if self.args.verbose:
             print(f"input shape for the Encoder Transformer Layers: {hidden_states.shape}")
             if self.args.topk_attn > 0.0:
                 print(f"Top-k attention with keep rate {self.args.topk_attn} is enabled.")
         
         topk_idx = None  # Initialize idx for pruning
-            
-        for layer_block in self.layer:
+        se_scale = []
+        se_layers = self.SELayer if self.SELayer is not None else [None] * len(self.layer)
+        
+        # for layer_block in self.layer:
+        for layer_block_id, (layer_block, se_layer) in enumerate(zip(self.layer, se_layers)):
             if self.args.verbose:
                 print(f"Encoder layer#{layer_block_id} input hidden_states shape: {hidden_states.shape}")
 
@@ -346,6 +357,7 @@ class Encoder(nn.Module):
                 hidden_states = torch.gather(hidden_states, dim=1, index=topk_idx)      # [B, K, C]
 
             hidden_states, weights = layer_block(hidden_states)
+            
 
             if self.args.verbose:
                 print(f"Encoder layer#{layer_block_id} output hidden_states shape: {hidden_states.shape}")
@@ -361,16 +373,27 @@ class Encoder(nn.Module):
             #     else:
             #         kept_indices_abs = torch.gather(kept_indices_abs, dim=1, index=idx)
             
-            layer_block_id += 1
+            # layer_block_id += 1
             if self.args.topk_attn > 0.0 and layer_block_id == 1: # only apply top-k pruning at the first layer
                 kept_indices, topk_idx = topk_indices(hidden_states, weights, self.args.topk_attn)
             else:
                 topk_idx = None
-
+            
+            if se_layer is not None:
+                # se_in = hidden_states.transpose(1, 2).unsqueeze(2)  # [B, C, 1, N]
+                # se_out, _ = se_layer(se_in)
+                # hidden_states = se_out.squeeze(2).transpose(1, 2)   # [B, N, C]
+                # se_in = hidden_states.transpose(1, 2).unsqueeze(2)  # [B, C, 1, N]
+                h_se, scale = se_layer(hidden_states)
+                if self.args.verbose:
+                    print(f"SE Layer scale shape at Encoder layer#{layer_block_id}: {scale.shape}")
+                    print(f"Encoder layer#{layer_block_id} hidden_states shape after SE block: {h_se.shape}")
+                    
+                se_scale.append(scale)
+            
         encoded = self.encoder_norm(hidden_states)
-        return encoded, attn_weights, kept_indices
-
-
+        return encoded, attn_weights, kept_indices, se_scale
+    
 class Transformer(nn.Module):
     def __init__(self, config, img_size, vis):
         super(Transformer, self).__init__()
@@ -392,8 +415,17 @@ class Transformer(nn.Module):
         orig_n_patches = embedding_output.size(1)
         if self.config.verbose:
             print(f"Embedding output and Input to encoder transformer layer(0) shape: {embedding_output.shape}")
-        encoded, attn_weights, kept_indices = self.encoder(embedding_output)  # (B, n_patch, hidden)
-        return encoded, attn_weights, features, kept_indices, orig_n_patches
+            
+        encoded, attn_weights, kept_indices, se_scale = self.encoder(embedding_output)  # (B, n_patch, hidden)
+        # output ={ # to be used instead of the current return statement
+        #     "encoded": encoded,
+        #     "attn_weights": attn_weights,
+        #     "features": features,
+        #     "kept_indices": kept_indices,
+        #     "orig_n_patches": orig_n_patches,
+        #     "se_scale": se_scale,
+        # }
+        return encoded, attn_weights, features, kept_indices, orig_n_patches, se_scale
 
 class Conv2dReLU(nn.Sequential):
     def __init__(
@@ -507,6 +539,9 @@ class DecoderCup(nn.Module):
         in_channels = [head_channels] + list(decoder_channels[:-1])
         out_channels = decoder_channels
 
+        if config.verbose:
+            print(f"skip channels before n_skip adjustment: {self.config.n_skip}")
+        
         if self.config.n_skip != 0:
             skip_channels = self.config.skip_channels
             for i in range(4-self.config.n_skip):  # re-select the skip channels according to n_skip
@@ -514,7 +549,11 @@ class DecoderCup(nn.Module):
 
         else:
             skip_channels=[0,0,0,0]
+            Warning("n_skip is set to 0, no skip connection is used in the decoder.")
 
+        if config.verbose:
+            print(f"skip channels after n_skip adjustment: {skip_channels}")
+        
         if self.config.use_efficientnet:
             blocks = [
             EfficientNetppDecoderBlock(in_ch, sk_ch, out_ch) for in_ch, sk_ch, out_ch in zip(in_channels, skip_channels, out_channels)
@@ -585,8 +624,8 @@ class VisionTransformer(nn.Module):
     def forward(self, x):
         if x.size()[1] == 1:
             x = x.repeat(1,3,1,1)
-        
-        x, attn_weights, features, kept_indices, orig_n_patches = self.transformer(x)  # (B, n_patch, hidden)
+
+        x, attn_weights, features, kept_indices, orig_n_patches, se_scale = self.transformer(x)  # (B, n_patch, hidden)
         # If pruning occurred, scatter tokens back to the original grid length
         if kept_indices is not None:
             B, K, C = x.size()
@@ -603,7 +642,16 @@ class VisionTransformer(nn.Module):
         logits = self.segmentation_head(x)
         if self.args.verbose:
             print(f"Segmentation head output logits shape: {logits.size()}")
-        return logits, attn_weights, features
+        
+        # output = { # to be used instead of the current return statement
+        #     "logits": logits,
+        #     "attn_weights": attn_weights,
+        #     "features": features,
+        #     "kept_indices": kept_indices,
+        #     "orig_n_patches": orig_n_patches,
+        #     "se_scale": se_scale,
+        # }
+        return logits, attn_weights, features, se_scale
 
     def load_from(self, weights):
         with torch.no_grad():
@@ -640,9 +688,10 @@ class VisionTransformer(nn.Module):
                     self.transformer.embeddings.position_embeddings.copy_(np2th(posemb))
 
                 # Encoder whole
-                for bname, block in self.transformer.encoder.named_children():
-                    for uname, unit in block.named_children():
-                        unit.load_from(weights, n_block=uname)
+                if not self.config.use_se_block:
+                    for bname, block in self.transformer.encoder.named_children():
+                        for uname, unit in block.named_children():
+                            unit.load_from(weights, n_block=uname)
 
                 if self.transformer.embeddings.hybrid:
                     self.transformer.embeddings.hybrid_model.root.conv.weight.copy_(np2th(res_weight["conv_root/kernel"], conv=True))
@@ -665,5 +714,3 @@ CONFIGS = {
     'R50-ViT-L_16': configs.get_r50_l16_config(),
     'testing': configs.get_testing(),
 }
-
-
