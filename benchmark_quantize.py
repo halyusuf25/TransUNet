@@ -40,6 +40,41 @@ def _linear_like_macs(x: torch.Tensor, in_features: int, out_features: int) -> i
     return int(n_instances * in_features * out_features)
 
 
+def count_parameters_quantized(model: nn.Module) -> int:
+    """Count logical parameters for quantized models (treat WQLinear as dense)."""
+    total_params = sum(p.numel() for p in model.parameters())
+    if WQLinear is None:
+        return int(total_params)
+
+    def _logical_wqlinear_params(wq: nn.Module) -> int:
+        in_features = getattr(wq, "in_features", None)
+        out_features = getattr(wq, "out_features", None)
+        if in_features is None or out_features is None:
+            return sum(p.numel() for p in wq.parameters(recurse=False))
+        count = int(in_features) * int(out_features)
+        bias = getattr(wq, "bias", None)
+        if bias is not None:
+            count += int(bias.numel())
+        return count
+
+    adjusted = int(total_params)
+    seen: set[int] = set()
+    for mod in model.modules():
+        wq = None
+        if isinstance(mod, WQLinear):
+            wq = mod
+        elif hasattr(mod, "inner") and isinstance(getattr(mod, "inner"), WQLinear):
+            wq = getattr(mod, "inner")
+        if wq is None or id(wq) in seen:
+            continue
+        seen.add(id(wq))
+        stored = sum(p.numel() for p in wq.parameters(recurse=False))
+        logical = _logical_wqlinear_params(wq)
+        adjusted += logical - int(stored)
+
+    return int(adjusted)
+
+
 def _build_thop_custom_ops_for_vit_quantized(model: nn.Module) -> Dict[type, Any]:
     custom_ops = _build_thop_custom_ops_for_vit(model)
     if WQLinear is None:
@@ -180,7 +215,7 @@ def count_flops_gflops_quantized(model: nn.Module, example: torch.Tensor) -> Tup
     #     return (2.0 * macs) / 1e9, params
 
     macs = _fallback_hook_macs_vit_quantized(model, example)
-    params = count_parameters(model)
+    params = count_parameters_quantized(model)
     return (2.0 * macs) / 1e9, params
 
 
