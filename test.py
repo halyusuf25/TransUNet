@@ -14,7 +14,7 @@ from benchmark_quantize import benchmark_segmentation_quantize_model
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
-from utils import test_single_volume, evaluate_model_perf, _make_json_safe, model_size_mb_benchmark
+from utils import test_single_volume, _make_json_safe, model_size_mb_benchmark, runtime_memory_mb_benchmark
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from networks.quantizer import AWQViTSegQuantizer
@@ -427,12 +427,6 @@ if __name__ == "__main__":
     else:
         test_save_path = None
     
-    # eval_results=evaluate_model_perf(net,
-    #                     input_size=(3, args.img_size,args.img_size),
-    #                     throughput_batch_size=64,
-    #                     warmup=20,
-    #                     iterations=300,)
-    # print(f"performance results: {eval_results}")
 
     performance = inference(args, net, test_save_path)
     
@@ -471,7 +465,7 @@ if __name__ == "__main__":
     logging.info(pretty)
     
     model_size = model_size_mb_benchmark(net)
-
+    model_runtime_memory = runtime_memory_mb_benchmark(net)
     
     os.makedirs("bench_logs_", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -482,6 +476,7 @@ if __name__ == "__main__":
         notes_for_json = {k: _make_json_safe(v) for k, v in results.notes.items()}
         arguments_for_json = {k: _make_json_safe(v) for k, v in vars(args).items()}  # Include all arguments as a dictionary
         model_size_for_json = {k: _make_json_safe(v) for k, v in model_size.items()}  # Include model size info
+        model_runtime_memory_for_json = {k: _make_json_safe(v) for k, v in model_runtime_memory.items()}  # Include runtime memory info
 
         json.dump(
             {
@@ -492,6 +487,7 @@ if __name__ == "__main__":
                 "notes": notes_for_json,
                 "arguments": arguments_for_json,
                 "model_size": model_size_for_json,
+                "model_runtime_memory": model_runtime_memory_for_json,
             },
             f,
             indent=2,

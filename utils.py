@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import numpy as np
 import torch
@@ -6,7 +7,7 @@ from scipy.ndimage import zoom
 import torch.nn as nn
 import SimpleITK as sitk
 import time
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 from thop import profile
 from fvcore.nn import FlopCountAnalysis
 
@@ -333,7 +334,7 @@ def model_size_mb_benchmark(
     model: nn.Module,
     *,
     include_buffers: bool = True,
-    use_state_dict: bool = False,
+    use_state_dict: bool = True,
     binary_mebibytes: bool = True,   # True: MiB (1024^2). False: MB (10^6).
     deduplicate_shared_tensors: bool = True,
 ) -> Dict[str, Any]:
@@ -498,4 +499,105 @@ def model_size_mb_benchmark(
         "dtype_bytes": dtype_bytes,
         "dtype_mb": {k: v / denom for k, v in dtype_bytes.items()},
         "counted_via": "state_dict" if use_state_dict else ("parameters(+buffers)" if include_buffers else "parameters_only"),
+    }
+
+
+def runtime_memory_mb_benchmark(
+    model: nn.Module,
+    input_size: Tuple[int, int, int] = (3, 224, 224),
+    batch_size: int = 1,
+    warmup: int = 10,
+    iterations: int = 50,
+    device: Optional[str] = None,
+    autocast: bool = False,
+    amp_dtype: torch.dtype = torch.float16,
+    binary_mebibytes: bool = True,
+) -> Dict[str, Any]:
+    """
+    Measure peak CUDA runtime memory during inference.
+
+    Metrics returned (all sizes are bytes and MB/MiB):
+    - peak_allocated_bytes / peak_allocated_mb:
+        Maximum *allocated* device memory observed during the timed loop.
+        Computed from torch.cuda.max_memory_allocated() after running iterations.
+        This reflects tensors actually in use (weights, buffers, activations).
+    - peak_reserved_bytes / peak_reserved_mb:
+        Maximum *reserved* memory held by the CUDA caching allocator during
+        the timed loop. Computed from torch.cuda.max_memory_reserved().
+        This can exceed allocated memory due to allocator caching behavior.
+    - current_allocated_bytes / current_allocated_mb:
+        Memory currently allocated at the end of the measurement window.
+        Computed from torch.cuda.memory_allocated().
+    - current_reserved_bytes / current_reserved_mb:
+        Memory currently reserved at the end of the measurement window.
+        Computed from torch.cuda.memory_reserved().
+
+    Additional fields:
+    - unit: "MiB" (binary, 1024^2) or "MB" (decimal, 10^6)
+    - device: CUDA device used
+    - batch_size, input_size: input tensor shape used for the run
+    - warmup, iterations: loop counts used for stabilization and measurement
+    - amp_autocast, amp_dtype: autocast configuration used during runs
+
+    Computation flow:
+    1) Run warmup forward passes (not counted).
+    2) torch.cuda.reset_peak_memory_stats() to zero the peak counters.
+    3) Run the timed forward loop.
+    4) Read allocator stats and convert to MB/MiB.
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device_obj = torch.device(device)
+    if device_obj.type != "cuda":
+        raise RuntimeError("runtime_memory_mb_benchmark requires CUDA to measure runtime memory.")
+
+    model = model.to(device_obj).eval()
+    input_size = tuple(int(v) for v in input_size)
+    batch_size = int(max(1, batch_size))
+    warmup = int(max(0, warmup))
+    iterations = int(max(1, iterations))
+
+    dummy_input = torch.randn((batch_size, *input_size), device=device_obj)
+
+    def _autocast_context():
+        if autocast:
+            return torch.autocast(device_type="cuda", dtype=amp_dtype)
+        return contextlib.nullcontext()
+
+    with torch.inference_mode():
+        with _autocast_context():
+            for _ in range(warmup):
+                _ = model(dummy_input)
+        torch.cuda.synchronize(device_obj)
+        torch.cuda.reset_peak_memory_stats(device_obj)
+        with _autocast_context():
+            for _ in range(iterations):
+                _ = model(dummy_input)
+        torch.cuda.synchronize(device_obj)
+
+    peak_alloc = int(torch.cuda.max_memory_allocated(device_obj))
+    peak_reserved = int(torch.cuda.max_memory_reserved(device_obj))
+    cur_alloc = int(torch.cuda.memory_allocated(device_obj))
+    cur_reserved = int(torch.cuda.memory_reserved(device_obj))
+
+    denom = (1024 ** 2) if binary_mebibytes else (10 ** 6)
+    unit = "MiB" if binary_mebibytes else "MB"
+
+    return {
+        "peak_allocated_bytes": peak_alloc,
+        "peak_reserved_bytes": peak_reserved,
+        "current_allocated_bytes": cur_alloc,
+        "current_reserved_bytes": cur_reserved,
+        "peak_allocated_mb": peak_alloc / denom,
+        "peak_reserved_mb": peak_reserved / denom,
+        "current_allocated_mb": cur_alloc / denom,
+        "current_reserved_mb": cur_reserved / denom,
+        "unit": unit,
+        "device": str(device_obj),
+        "batch_size": batch_size,
+        "input_size": input_size,
+        "warmup": warmup,
+        "iterations": iterations,
+        "amp_autocast": bool(autocast),
+        "amp_dtype": str(amp_dtype),
     }
