@@ -33,16 +33,6 @@ from scipy.ndimage import zoom
 # to local files next to this script.
 # -----------------------------------------------------------------------------
 
-# try:
-#     from awq.quantize.auto_scale import auto_scale_block, apply_scale
-#     from awq.quantize.quantizer import pseudo_quantize_tensor
-#     from awq.quantize.qmodule import WQLinear
-# except Exception:
-#     # Fallback: assume the files live in the same folder as this script.
-#     # (You can also adjust sys.path to point at your local awq/quantize folder.)
-#     from auto_scale import auto_scale_block, apply_scale
-#     from quantizer import pseudo_quantize_tensor
-#     from qmodule import WQLinear
 from awq.quantize.auto_scale import auto_scale_block
 from awq.quantize.quantizer import pseudo_quantize_tensor
 from awq.quantize.qmodule import WQLinear
@@ -130,7 +120,6 @@ class AWQViTSegQuantizer:
 
         # AWQ's quantizer expects zero_point True (see quantizer.py / real_quantize_model_weight).
         self.q_config = {"zero_point": True, "q_group_size": self.q_group_size}
-        self._se_scales_cache: Optional[List[torch.Tensor]] = None
 
     # -------------------------------------------------------------------------
     # Public API
@@ -154,16 +143,25 @@ class AWQViTSegQuantizer:
         #    For AWQ-style scaling we need the inputs to:
         #      - q/k/v linears (post attention_norm)
         #      - fc1 (post ffn_norm)
-        block_inputs = self._collect_block_inputs(blocks)
+        # use_se_block = getattr(self.args, "use_se_block", False)
+        block_inputs = None
+        if not self.args.use_se_block:
+            block_inputs = self._collect_block_inputs(blocks)
+        scales_list_by_block = None
+        if self.args.use_se_block:
+            scales_list_by_block = self._auto_se_scale(blocks)
                 
         # 3) For each block:
         #    (a) auto-scale (AWQ)
         #    (b) replace selected nn.Linear with WQLinear
-        for block_idx, (blk, inputs) in enumerate(zip(blocks, block_inputs)):
+        for block_idx, blk in enumerate(blocks):
             # self._auto_scale_block_dispatch(blk, inputs)
-            if getattr(self.args, "use_se_block", False):
-                scales_list = self._auto_se_scale(blk, inputs, block_idx)
+            if self.args.use_se_block:
+                assert scales_list_by_block is not None
+                scales_list = scales_list_by_block[block_idx]
             else:
+                assert block_inputs is not None
+                inputs = block_inputs[block_idx]
                 scales_list = self._auto_scale_block_vit(blk, inputs)
                                 
             self._apply_scales(blk, scales_list)
@@ -227,9 +225,18 @@ class AWQViTSegQuantizer:
         output: Any,
         expected_len: int,
     ) -> Optional[List[torch.Tensor]]:
-        if not isinstance(output, (list, tuple)) or not output:
-            raise ValueError(f"Unable to extract SE scales from output. Expected output to be a non-empty list/tuple, got {type(output)}")
-        candidate = output[-1]
+        candidate = None
+        if isinstance(output, dict):
+            candidate = output.get("se_scale")
+        elif hasattr(output, "se_scale"):
+            candidate = getattr(output, "se_scale")
+        elif isinstance(output, (list, tuple)) and output:
+            candidate = output[-1]
+        else:
+            raise ValueError(
+                "Unable to extract SE scales from output. "
+                f"Expected output to be a non-empty list/tuple, dict, or object with se_scale, got {type(output)}"
+            )
         if isinstance(candidate, (list, tuple)) and len(candidate) == expected_len:
             if all(torch.is_tensor(t) for t in candidate):
                 return [t.detach() for t in candidate]
@@ -281,17 +288,7 @@ class AWQViTSegQuantizer:
         for i_batch, batch in enumerate(self.calib_loader):
             image = batch["image"]     
             input = self._extract_input_tensor(image).to(self.device)
-
-            output = self.model(input)
-            if getattr(self.args, "use_se_block", False) and self._se_scales_cache is None:
-                se_scales = self._extract_se_scales_from_output(output, expected_len=len(blocks))
-                if se_scales is not None:
-                    self._se_scales_cache = se_scales
-                else:
-                    raise RuntimeError("SE scales not found in model output during calibration.")
-            # for i in range(input.shape[0]):
-            #     _ = self.model(input[i])
-                
+            _ = self.model(input)
             n_seen += 1
             if n_seen >= self.n_calib_batches:
                 break
@@ -483,31 +480,144 @@ class AWQViTSegQuantizer:
         return scales_list
 
     @torch.no_grad()
-    def _auto_se_scale(self, blk: nn.Module, inputs: BlockCalibInputs, block_idx: int):
-        """Build the `scales_list` for a ViT `Block` using SE-derived scales."""
-        if self._se_scales_cache is None:
-            raise RuntimeError("SE scales were not captured; ensure the model outputs SE scales during calibration.")
-        if block_idx >= len(self._se_scales_cache):
+    def _quantize_full_model_with_se_scales(
+        self,
+        blocks: List[nn.Module],
+        se_scales: Sequence[torch.Tensor],
+        w_quantize_func,
+    ) -> None:
+        """Temporarily quantize weights using SE scales (full-model eval only)."""
+        if len(se_scales) != len(blocks):
             raise RuntimeError(
-                f"SE scales missing for block index {block_idx} (cache has {len(self._se_scales_cache)} entries)."
+                f"SE scales length {len(se_scales)} does not match number of blocks {len(blocks)}."
             )
 
-        se_scale = self._se_scales_cache[block_idx]
-        se_vec = self._se_scale_to_vec(se_scale).detach()
+        def _should_quantize(fc: nn.Linear) -> bool:
+            if self.q_group_size > 0 and (fc.in_features % self.q_group_size != 0):
+                return False
+            if fc.out_features % (32 // self.w_bit) != 0:
+                return False
+            return True
 
-        scales_list = []
+        for blk, se_scale in zip(blocks, se_scales):
+            se_vec = self._se_scale_to_vec(se_scale).detach()
 
-        # 1) attention_norm -> q/k/v
-        if not (hasattr(blk, "attention_norm") and hasattr(blk, "attn")):
-            raise AttributeError("Expected ViT Block to have attention_norm and attn.")
-        scales_list.append(("attention_norm", ("attn.query", "attn.key", "attn.value"), se_vec.cpu()))
+            if hasattr(blk, "attn"):
+                for name in ["query", "key", "value"]:
+                    if hasattr(blk.attn, name) and isinstance(getattr(blk.attn, name), nn.Linear):
+                        fc = getattr(blk.attn, name)
+                        if _should_quantize(fc):
+                            s = se_vec.view(1, -1).to(fc.weight.device).to(fc.weight.dtype)
+                            fc.weight.mul_(s)
+                            fc.weight.data = w_quantize_func(fc.weight.data) / s
 
-        # 2) ffn_norm -> fc1
-        if not (hasattr(blk, "ffn_norm") and hasattr(blk, "ffn") and hasattr(blk.ffn, "fc1")):
-            raise AttributeError("Expected ViT Block to have ffn_norm and ffn.fc1.")
-        scales_list.append(("ffn_norm", ("ffn.fc1",), se_vec.cpu()))
+                if hasattr(blk.attn, "out") and isinstance(blk.attn.out, nn.Linear):
+                    fc = blk.attn.out
+                    if _should_quantize(fc):
+                        fc.weight.data = w_quantize_func(fc.weight.data)
 
-        return scales_list
+            if hasattr(blk, "ffn"):
+                if hasattr(blk.ffn, "fc1") and isinstance(blk.ffn.fc1, nn.Linear):
+                    fc = blk.ffn.fc1
+                    if _should_quantize(fc):
+                        s = se_vec.view(1, -1).to(fc.weight.device).to(fc.weight.dtype)
+                        fc.weight.mul_(s)
+                        fc.weight.data = w_quantize_func(fc.weight.data) / s
+
+                if hasattr(blk.ffn, "fc2") and isinstance(blk.ffn.fc2, nn.Linear):
+                    fc = blk.ffn.fc2
+                    if _should_quantize(fc):
+                        fc.weight.data = w_quantize_func(fc.weight.data)
+
+    @torch.no_grad()
+    def _search_best_se_scales_full_model(self, blocks: List[nn.Module]) -> List[torch.Tensor]:
+        """Select the SE scale set that minimizes full-model logits MSE."""
+        def _extract_logits(output: Any) -> torch.Tensor:
+            if isinstance(output, dict):
+                if "logits" in output:
+                    return output["logits"]
+            if isinstance(output, (list, tuple)):
+                return output[0]
+            return output
+
+        def _get_se_scales(output: Any) -> List[torch.Tensor]:
+            # try:
+            #     return self._extract_se_scales_from_output(output, expected_len=len(blocks))
+            # except ValueError:
+            #     if hasattr(self.model, "get_se_scale"):
+            #         candidate = self.model.get_se_scale()
+            #         if isinstance(candidate, (list, tuple)) and len(candidate) == len(blocks):
+            #             if all(torch.is_tensor(t) for t in candidate):
+            #                 return [t.detach() for t in candidate]
+            #     raise
+            return self._extract_se_scales_from_output(output, expected_len=len(blocks))
+
+
+        def w_quantize_func(p: torch.Tensor) -> torch.Tensor:
+            return pseudo_quantize_tensor(p, n_bit=self.w_bit, **self.q_config).detach()
+
+        best_error = float("inf")
+        best_scales: Optional[List[torch.Tensor]] = None
+
+        org_sd = {k: v.detach().cpu() for k, v in self.model.state_dict().items()}
+
+        n_seen = 0
+        for batch in self.calib_loader:
+            image = batch["image"]
+            input = self._extract_input_tensor(image).to(self.device)
+
+            output = self.model(input)
+            fp_logits = _extract_logits(output)
+            se_scales = _get_se_scales(output)
+
+            self._quantize_full_model_with_se_scales(blocks, se_scales, w_quantize_func)
+            q_output = self.model(input)
+            q_logits = _extract_logits(q_output)
+
+            loss = (fp_logits - q_logits).float().pow(2).mean().item()
+            if loss < best_error:
+                best_error = loss
+                best_scales = [t.detach().cpu() for t in se_scales]
+
+            # Restore weights between candidates.
+            self.model.load_state_dict(org_sd)
+
+            n_seen += 1
+            if n_seen >= self.n_calib_batches:
+                break
+
+        if best_scales is None:
+            raise RuntimeError("Failed to find any valid SE scales for full-model selection.")
+
+        return best_scales
+
+    @torch.no_grad()
+    def _auto_se_scale(self, blocks: List[nn.Module]):
+        """Build per-block `scales_list` using full-model SE-derived scales."""
+        best_se_scales = self._search_best_se_scales_full_model(blocks)
+        if len(best_se_scales) != len(blocks):
+            raise RuntimeError(
+                f"SE scales length {len(best_se_scales)} does not match number of blocks {len(blocks)}."
+            )
+
+        scales_list_by_block = []
+        for blk, se_scale in zip(blocks, best_se_scales):
+            se_vec = self._se_scale_to_vec(se_scale).detach()
+            scales_list = []
+
+            # 1) attention_norm -> q/k/v
+            if not (hasattr(blk, "attention_norm") and hasattr(blk, "attn")):
+                raise AttributeError("Expected ViT Block to have attention_norm and attn.")
+            scales_list.append(("attention_norm", ("attn.query", "attn.key", "attn.value"), se_vec.cpu()))
+
+            # 2) ffn_norm -> fc1
+            if not (hasattr(blk, "ffn_norm") and hasattr(blk, "ffn") and hasattr(blk.ffn, "fc1")):
+                raise AttributeError("Expected ViT Block to have ffn_norm and ffn.fc1.")
+            scales_list.append(("ffn_norm", ("ffn.fc1",), se_vec.cpu()))
+
+            scales_list_by_block.append(scales_list)
+
+        return scales_list_by_block
 
     @torch.no_grad()
     def _print_se_vs_awq(self, block_idx: int, se_scale: torch.Tensor, scales_list) -> None:
