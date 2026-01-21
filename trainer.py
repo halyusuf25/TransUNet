@@ -15,6 +15,7 @@ from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import DiceLoss
+from src.loss_bu import BULoss
 from networks.distillation import compute_kd_loss, MGD, KDTarget, KDWeights
 from torchvision import transforms
 from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
@@ -55,6 +56,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     gamma = 0.2 # distillation loss weight
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(num_classes)
+    bu_loss = BULoss(loss_option='A', args=args)
     optimizer = optim.SGD(model.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
     writer = SummaryWriter(snapshot_path + '/log')
     iter_num = 0
@@ -97,7 +99,8 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 )
                 loss = (1-gamma) * (0.5 * loss_ce + 0.5 * loss_dice) + gamma * kd_loss
             else:
-                loss = 0.5 * loss_ce + 0.5 * loss_dice
+                # loss = 0.5 * loss_ce + 0.5 * loss_dice
+                loss = bu_loss(outputs, label_batch) 
                 
             optimizer.zero_grad()
             loss.backward()

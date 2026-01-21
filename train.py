@@ -81,7 +81,13 @@ parser.add_argument('--kd_points' , type=str,
                     default='logits', help='"logits", "intermediate", "features", "logits+intermediate", and "all" are options for kd training')
 ###########################################
 
+##########LOSS FUNCTION BU arguments##########
+parser.add_argument('--tau', type=float, default=None, help='Boundry Decay parameter for BU loss')
+parser.add_argument('--alpha', type=float, default=None, help='maximum value for the Weight Map in BU loss')
+parser.add_argument('--bm_min', type=float, default=None, help='Minimum value for the Boundary Map in BU loss')
+parser.add_argument('--bm_max', type=float, default=None, help='Maximum value for the Boundary Map in BU loss')
 
+#########################################
 ##########swin config arguments##########
 parser.add_argument('--swin_pretrained_path', type=str,
                     default='/data/shared/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')
