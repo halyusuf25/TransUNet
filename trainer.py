@@ -56,7 +56,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     gamma = 0.2 # distillation loss weight
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(num_classes)
-    bu_loss = BULoss(loss_option='A', args=args)
+    bu_loss = BULoss(loss_option=args.buloss_option, args=args)
     optimizer = optim.SGD(model.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
     writer = SummaryWriter(snapshot_path + '/log')
     iter_num = 0
@@ -98,9 +98,10 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                     temperature=args.kd_temperature,
                 )
                 loss = (1-gamma) * (0.5 * loss_ce + 0.5 * loss_dice) + gamma * kd_loss
+            elif args.use_bu_loss:
+                loss = bu_loss(outputs, label_batch)
             else:
-                # loss = 0.5 * loss_ce + 0.5 * loss_dice
-                loss = bu_loss(outputs, label_batch) 
+                loss = 0.5 * loss_ce + 0.5 * loss_dice
                 
             optimizer.zero_grad()
             loss.backward()

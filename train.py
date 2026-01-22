@@ -82,12 +82,20 @@ parser.add_argument('--kd_points' , type=str,
 ###########################################
 
 ##########LOSS FUNCTION BU arguments##########
-parser.add_argument('--tau', type=float, default=None, help='Boundry Decay parameter for BU loss')
-parser.add_argument('--alpha', type=float, default=None, help='maximum value for the Weight Map in BU loss')
-parser.add_argument('--bm_min', type=float, default=None, help='Minimum value for the Boundary Map in BU loss')
-parser.add_argument('--bm_max', type=float, default=None, help='Maximum value for the Boundary Map in BU loss')
-
+parser.add_argument('--use_bu_loss', action='store_true', 
+                    help='whether to use Boundary-Uncertainty (BU) loss for training')
+parser.add_argument('--tau', type=float, default=1.0, help='Boundry Decay parameter for BU loss')
+parser.add_argument('--alpha', type=float, default=10, help='maximum value for the Weight Map in BU loss')
+parser.add_argument('--bm_min', type=float, default=0.2, help='Minimum value for the Boundary Map in BU loss')
+parser.add_argument('--bm_max', type=float, default=3.0, help='Maximum value for the Boundary Map in BU loss')
+parser.add_argument('--distance_map_type', type=str, 
+                    default='unsigned', help='Type of Distance Map for BU loss: "dtm", "signed" or "unsigned"')
+parser.add_argument('--buloss_option', type=str, default='C', help='Options for BU loss: "A, B, C"')
+#OPTION A : \mathcal{L}_{total} = \mathcal{L}_{Dice}^w+ \mathcal{L}_{CE}^w
+#OPTION B : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}^w
+#OPTION C : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}
 #########################################
+
 ##########swin config arguments##########
 parser.add_argument('--swin_pretrained_path', type=str,
                     default='/data/shared/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')

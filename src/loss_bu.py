@@ -7,6 +7,8 @@ import torch.nn.functional as F
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt as _scipy_distance_transform_edt
+from torch.nn.modules.loss import CrossEntropyLoss
+from utils import DiceLoss
 
 
 class BULoss(nn.Module):
@@ -14,7 +16,7 @@ class BULoss(nn.Module):
 
     def __init__(
         self,
-        loss_option: str = "A",
+        loss_option: str = "C",
         #OPTION A : \mathcal{L}_{total} = \mathcal{L}_{Dice}^w+ \mathcal{L}_{CE}^w
         #OPTION B : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}^w
         #OPTION C : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}
@@ -46,7 +48,7 @@ class BULoss(nn.Module):
             raise ValueError("tau must be > 0.")
 
         self.args = args
-        self.loss_option = loss_option
+        self.loss_option = self.args.buloss_option #defalult 'C'
         self.distance_type = distance_type
         self.tau = float(self.args.tau) if self.args.tau is not None else float(tau)
         self.bm_min = float(self.args.bm_min) if self.args.bm_min is not None else float(bm_min)
@@ -57,6 +59,10 @@ class BULoss(nn.Module):
         self.cdist_chunk_size = int(cdist_chunk_size)
         self.mu_dice = float(mu_dice)
         self.mu_ce = float(mu_ce)
+        
+        self._ce_loss_function = CrossEntropyLoss()
+        self._dice_loss_function = DiceLoss(args.num_classes)
+        
 
         # 3x3 kernel for binary erosion when estimating the boundary (Sec. 1.2).
         self.register_buffer("_boundary_kernel", torch.ones(1, 1, 3, 3))
@@ -126,6 +132,23 @@ class BULoss(nn.Module):
         if target.dim() != 3:
             raise ValueError("target must be [B, H, W]")
 
+        
+        if self.loss_option == "C":
+            # Standard Dice + CE loss without boundary/uncertainty weighting.
+            loss_ce = self._ce_loss_function(logits, target)
+            loss_dice = self._dice_loss_function(logits, target, softmax=True)
+            total = self.mu_dice * loss_dice + self.mu_ce * loss_ce
+            if not return_details:
+                return total
+            details: Dict[str, torch.Tensor] = {
+                "L_CE": loss_ce.detach(),
+                "L_Dice": loss_dice.detach(),
+            }
+            return total, details
+        elif self.loss_option == "B":
+            loss_dice = self._dice_loss_function(logits, target, softmax=True)
+            
+        
         probs = F.softmax(logits, dim=1)
         uncertainty_map = self.compute_uncertainty_map(probs)
         distance_map = self.compute_distance_map(target)
@@ -134,23 +157,16 @@ class BULoss(nn.Module):
 
         # log_probs = F.log_softmax(logits, dim=1)
         # ce_per_pixel = -log_probs.gather(1, target.unsqueeze(1)).squeeze(1)
-        ce_per_pixel = F.cross_entropy(logits, target, reduction="none")
-        loss_ce = ce_per_pixel.mean()
+        
 
-        weights_spatial = weights.squeeze(1)
-        weight_sum = weights_spatial.sum(dim=(1, 2)).clamp_min(self.eps)
-        loss_wce = (weights_spatial * ce_per_pixel).sum(dim=(1, 2)) / weight_sum
-        loss_wce = loss_wce.mean()
+        loss_wce = self._weighted_ce(logits, target, weights)
 
-        loss_dice = self._dice_loss(probs, target, weights=None)
         loss_wdice = self._dice_loss(probs, target, weights=weights)
 
         if self.loss_option == "A":
             total = self.mu_dice * loss_wdice + self.mu_ce * loss_wce
         elif self.loss_option == "B":
             total = self.mu_dice * loss_dice + self.mu_ce * loss_wce
-        else:
-            total = self.mu_dice * loss_dice + self.mu_ce * loss_ce
 
         if not return_details:
             return total
@@ -159,12 +175,24 @@ class BULoss(nn.Module):
             "UM_mean": uncertainty_map.mean().detach(),
             "BM_mean": boundary_map.mean().detach(),
             "w_mean": weights.mean().detach(),
-            "L_CE": loss_ce.detach(),
             "L_wCE": loss_wce.detach(),
             "L_Dice": loss_dice.detach(),
             "L_wDice": loss_wdice.detach(),
         }
         return total, details
+
+    def _weighted_ce(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        weights: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute weighted CE loss (loss_function.tex, Sec. 1.3.2)."""
+        ce_per_pixel = F.cross_entropy(logits, target, reduction="none")
+        weights_spatial = weights.squeeze(1)
+        weight_sum = weights_spatial.sum(dim=(1, 2)).clamp_min(self.eps)
+        loss_wce = (weights_spatial * ce_per_pixel).sum(dim=(1, 2)) / weight_sum
+        return loss_wce.mean()
 
     def _dice_loss(
         self,
