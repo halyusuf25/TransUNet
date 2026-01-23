@@ -33,11 +33,13 @@ class BULoss(nn.Module):
         args = None,
     ) -> None:
         super().__init__()
+        loss_option = args.buloss_option
         loss_option = loss_option.upper()
         if loss_option not in {"A", "B", "C"}:
             raise ValueError(
                 f"loss_option must be 'A', 'B', or 'C', got {loss_option!r}"
             )
+        distance_type = args.distance_map_type
         distance_type = distance_type.lower()
         if distance_type not in {"dtm", "unsigned", "signed"}:
             raise ValueError(
@@ -48,8 +50,9 @@ class BULoss(nn.Module):
             raise ValueError("tau must be > 0.")
 
         self.args = args
-        self.loss_option = self.args.buloss_option #defalult 'C'
-        self.distance_type = distance_type
+        self.loss_option = loss_option
+        self.distance_type = distance_type 
+        print(f"Using BULoss with option {self.loss_option}, distance type {self.distance_type}")
         self.tau = float(self.args.tau) if self.args.tau is not None else float(tau)
         self.bm_min = float(self.args.bm_min) if self.args.bm_min is not None else float(bm_min)
         self.bm_max = float(self.args.bm_max) if self.args.bm_max is not None else float(bm_max)
