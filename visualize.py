@@ -46,6 +46,19 @@ def _discrete_cmap(n_classes: int, class_labels: Optional[List[str]] = None):
     return cmap, norm, class_labels
 
 
+def _imshow_input(ax, image: np.ndarray) -> None:
+    if image.ndim == 2:
+        ax.imshow(image, cmap='gray')
+    elif image.ndim == 3 and image.shape[2] in (1, 3):
+        if image.shape[2] == 1:
+            ax.imshow(image[:, :, 0], cmap='gray')
+        else:
+            ax.imshow(image)
+    else:
+        # Fall back to showing the first slice/channel
+        ax.imshow(np.squeeze(image), cmap='gray')
+
+
 def _plot_triplet(
     image: np.ndarray,
     pred: np.ndarray,
@@ -69,28 +82,23 @@ def _plot_triplet(
     fig, axes = plt.subplots(1, 3, figsize=figsize, constrained_layout=True)
 
     # Input image (handle grayscale or RGB)
-    if image.ndim == 2:
-        axes[0].imshow(image, cmap='gray')
-    elif image.ndim == 3 and image.shape[2] in (1, 3):
-        if image.shape[2] == 1:
-            axes[0].imshow(image[:, :, 0], cmap='gray')
-        else:
-            axes[0].imshow(image)
-    else:
-        # Fall back to showing the first slice/channel
-        axes[0].imshow(np.squeeze(image), cmap='gray')
+    _imshow_input(axes[0], image)
     axes[0].set_title('Input', fontsize=12)
     axes[0].set_xlabel('X (px)')
     axes[0].set_ylabel('Y (px)')
 
     # Prediction
-    im1 = axes[1].imshow(pred.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+    _imshow_input(axes[1], image)
+    pred_mask = np.ma.masked_where(pred == 0, pred)
+    im1 = axes[1].imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
     axes[1].set_title('Prediction', fontsize=12)
     axes[1].set_xlabel('X (px)')
     axes[1].set_yticklabels([])
 
     # Ground truth
-    im2 = axes[2].imshow(gt.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+    _imshow_input(axes[2], image)
+    gt_mask = np.ma.masked_where(gt == 0, gt)
+    im2 = axes[2].imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
     axes[2].set_title('Ground Truth', fontsize=12)
     axes[2].set_xlabel('X (px)')
     axes[2].set_yticklabels([])
@@ -151,16 +159,15 @@ def _plot_triplet_grid(
 
     for r, (image, pred, gt) in enumerate(triplets):
         # Input
-        if image.ndim == 2:
-            axes[r, 0].imshow(image, cmap='gray')
-        elif image.ndim == 3 and image.shape[2] in (1, 3):
-            axes[r, 0].imshow(image[:, :, 0], cmap='gray') if image.shape[2] == 1 else axes[r, 0].imshow(image)
-        else:
-            axes[r, 0].imshow(np.squeeze(image), cmap='gray')
+        _imshow_input(axes[r, 0], image)
 
         # Prediction and GT
-        im_pred = axes[r, 1].imshow(pred.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-        im_gt = axes[r, 2].imshow(gt.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+        _imshow_input(axes[r, 1], image)
+        pred_mask = np.ma.masked_where(pred == 0, pred)
+        im_pred = axes[r, 1].imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+        _imshow_input(axes[r, 2], image)
+        gt_mask = np.ma.masked_where(gt == 0, gt)
+        im_gt = axes[r, 2].imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
 
         # Titles on top row only
         if r == 0:
