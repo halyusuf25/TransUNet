@@ -78,6 +78,7 @@ parser.add_argument('--viz_slice', type=int, default=None, help='slice index for
 parser.add_argument('--viz_save', type=str, default=None, help='path to save figure (file or directory)')
 parser.add_argument('--viz_out', type=str, default=None, help='output filename for the saved figure (used if --viz_save is a directory or not provided)')
 parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
+parser.add_argument('--viz_suffix', type=str, default=None, help='suffix to append to the output filename (before extension)')
 
 ##########swin config arguments##########
 parser.add_argument('--swin_pretrained_path', type=str,
@@ -326,6 +327,9 @@ if __name__ == "__main__":
                 img_exts = {'.png', '.jpg', '.jpeg', '.pdf', '.svg', '.tif', '.tiff'}
                 base = args.viz_save
                 name = args.viz_out or default_name
+                if args.viz_suffix:
+                    base_name, ext = os.path.splitext(name)
+                    name = f"{base_name}{args.viz_suffix}{ext}"
                 if base is None:
                     return os.path.join('qualitative', name)
                 ext = os.path.splitext(base)[1].lower()
