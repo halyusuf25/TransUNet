@@ -53,7 +53,7 @@ class BULoss(nn.Module):
         self.loss_option = loss_option
         self.distance_type = distance_type 
         print(f"Using BULoss with option {self.loss_option}, distance type {self.distance_type}")
-        self.tau = float(self.args.tau) if self.args.tau is not None else float(tau)
+        self.tau = float(self.args.tau) 
         self.bm_min = float(self.args.bm_min) if self.args.bm_min is not None else float(bm_min)
         self.bm_max = float(self.args.bm_max) if self.args.bm_max is not None else float(bm_max)
         self.alpha = float(self.args.alpha) if self.args.alpha is not None else float(alpha)
