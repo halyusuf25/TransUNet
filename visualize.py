@@ -59,6 +59,34 @@ def _imshow_input(ax, image: np.ndarray) -> None:
         ax.imshow(np.squeeze(image), cmap='gray')
 
 
+def _draw_gt_boundaries(
+    ax,
+    gt: np.ndarray,
+    color: str = "yellow",
+    linewidth: float = 1.0,
+    linestyle: str = "--",
+) -> None:
+    gt_arr = np.asarray(gt)
+    if gt_arr.ndim != 2:
+        gt_arr = np.squeeze(gt_arr)
+    if gt_arr.ndim != 2:
+        return
+    classes = np.unique(gt_arr.astype(int))
+    classes = classes[classes != 0]
+    if classes.size == 0:
+        return
+    for cls in classes:
+        mask = gt_arr == cls
+        if mask.any():
+            ax.contour(
+                mask.astype(float),
+                levels=[0.5],
+                colors=color,
+                linewidths=linewidth,
+                linestyles=linestyle,
+            )
+
+
 def _plot_triplet(
     image: np.ndarray,
     pred: np.ndarray,
@@ -91,6 +119,7 @@ def _plot_triplet(
     _imshow_input(axes[1], image)
     pred_mask = np.ma.masked_where(pred == 0, pred)
     im1 = axes[1].imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+    _draw_gt_boundaries(axes[1], gt)
     axes[1].set_title('Prediction', fontsize=12)
     axes[1].set_xlabel('X (px)')
     axes[1].set_yticklabels([])
@@ -99,6 +128,7 @@ def _plot_triplet(
     _imshow_input(axes[2], image)
     gt_mask = np.ma.masked_where(gt == 0, gt)
     im2 = axes[2].imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+    _draw_gt_boundaries(axes[2], gt)
     axes[2].set_title('Ground Truth', fontsize=12)
     axes[2].set_xlabel('X (px)')
     axes[2].set_yticklabels([])
@@ -165,9 +195,11 @@ def _plot_triplet_grid(
         _imshow_input(axes[r, 1], image)
         pred_mask = np.ma.masked_where(pred == 0, pred)
         im_pred = axes[r, 1].imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+        _draw_gt_boundaries(axes[r, 1], gt)
         _imshow_input(axes[r, 2], image)
         gt_mask = np.ma.masked_where(gt == 0, gt)
         im_gt = axes[r, 2].imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+        _draw_gt_boundaries(axes[r, 2], gt)
 
         # Titles on top row only
         if r == 0:
