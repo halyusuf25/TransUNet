@@ -96,6 +96,7 @@ def _plot_triplet(
     figure_title: Optional[str] = None,
     figsize: Tuple[float, float] = (12, 4),
     save_path: Optional[str] = None,
+    include_input: bool = True,
 ):
     """
     Plot a side-by-side triplet: Input | Prediction | Ground Truth
@@ -107,31 +108,42 @@ def _plot_triplet(
 
     cmap, norm, labels = _discrete_cmap(n_classes, class_labels)
 
-    fig, axes = plt.subplots(1, 3, figsize=figsize, constrained_layout=True)
+    ncols = 3 if include_input else 2
+    fig, axes = plt.subplots(1, ncols, figsize=figsize, constrained_layout=True)
 
-    # Input image (handle grayscale or RGB)
-    _imshow_input(axes[0], image)
-    axes[0].set_title('Input', fontsize=12)
-    axes[0].set_xlabel('X (px)')
-    axes[0].set_ylabel('Y (px)')
+    if include_input:
+        input_ax = axes[0]
+        pred_ax = axes[1]
+        gt_ax = axes[2]
+
+        # Input image (handle grayscale or RGB)
+        _imshow_input(input_ax, image)
+        input_ax.set_title('Input', fontsize=12)
+        input_ax.set_xlabel('X (px)')
+        input_ax.set_ylabel('Y (px)')
+    else:
+        pred_ax = axes[0]
+        gt_ax = axes[1]
+        pred_ax.set_ylabel('Y (px)')
 
     # Prediction
-    _imshow_input(axes[1], image)
+    _imshow_input(pred_ax, image)
     pred_mask = np.ma.masked_where(pred == 0, pred)
-    im1 = axes[1].imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-    _draw_gt_boundaries(axes[1], gt)
-    axes[1].set_title('Prediction', fontsize=12)
-    axes[1].set_xlabel('X (px)')
-    axes[1].set_yticklabels([])
+    im1 = pred_ax.imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+    _draw_gt_boundaries(pred_ax, gt)
+    pred_ax.set_title('Prediction', fontsize=12)
+    pred_ax.set_xlabel('X (px)')
+    if include_input:
+        pred_ax.set_yticklabels([])
 
     # Ground truth
-    _imshow_input(axes[2], image)
+    _imshow_input(gt_ax, image)
     gt_mask = np.ma.masked_where(gt == 0, gt)
-    im2 = axes[2].imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-    _draw_gt_boundaries(axes[2], gt)
-    axes[2].set_title('Ground Truth', fontsize=12)
-    axes[2].set_xlabel('X (px)')
-    axes[2].set_yticklabels([])
+    im2 = gt_ax.imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+    _draw_gt_boundaries(gt_ax, gt)
+    gt_ax.set_title('Ground Truth', fontsize=12)
+    gt_ax.set_xlabel('X (px)')
+    gt_ax.set_yticklabels([])
 
     # Common colorbar with class labels (narrow width)
     cbar = fig.colorbar(
@@ -164,6 +176,7 @@ def _plot_triplet_grid(
     figure_title: Optional[str] = None,
     figsize: Optional[Tuple[float, float]] = None,
     save_path: Optional[str] = None,
+    include_input: bool = True,
 ):
     """
     Plot a grid with rows of (Input | Prediction | Ground Truth).
@@ -183,41 +196,53 @@ def _plot_triplet_grid(
 
     cmap, norm, labels = _discrete_cmap(n_classes, class_labels)
 
-    fig, axes = plt.subplots(num_rows, 3, figsize=figsize, constrained_layout=True)
+    ncols = 3 if include_input else 2
+    fig, axes = plt.subplots(num_rows, ncols, figsize=figsize, constrained_layout=True)
     if num_rows == 1:
         axes = np.expand_dims(axes, axis=0)
 
     for r, (image, pred, gt) in enumerate(triplets):
-        # Input
-        _imshow_input(axes[r, 0], image)
+        if include_input:
+            input_ax = axes[r, 0]
+            pred_ax = axes[r, 1]
+            gt_ax = axes[r, 2]
 
-        # Prediction and GT
-        _imshow_input(axes[r, 1], image)
+            _imshow_input(input_ax, image)
+        else:
+            pred_ax = axes[r, 0]
+            gt_ax = axes[r, 1]
+
+        _imshow_input(pred_ax, image)
         pred_mask = np.ma.masked_where(pred == 0, pred)
-        im_pred = axes[r, 1].imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-        _draw_gt_boundaries(axes[r, 1], gt)
-        _imshow_input(axes[r, 2], image)
+        im_pred = pred_ax.imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+        _draw_gt_boundaries(pred_ax, gt)
+
+        _imshow_input(gt_ax, image)
         gt_mask = np.ma.masked_where(gt == 0, gt)
-        im_gt = axes[r, 2].imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-        _draw_gt_boundaries(axes[r, 2], gt)
+        im_gt = gt_ax.imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+        _draw_gt_boundaries(gt_ax, gt)
 
         # Titles on top row only
         if r == 0:
-            axes[r, 0].set_title('Input', fontsize=12)
-            axes[r, 1].set_title('Prediction', fontsize=12)
-            axes[r, 2].set_title('Ground Truth', fontsize=12)
+            if include_input:
+                input_ax.set_title('Input', fontsize=12)
+            pred_ax.set_title('Prediction', fontsize=12)
+            gt_ax.set_title('Ground Truth', fontsize=12)
 
         # Row titles (case names)
         if row_titles and r < len(row_titles):
-            axes[r, 0].set_ylabel(row_titles[r], fontsize=10)
+            label_ax = input_ax if include_input else pred_ax
+            label_ax.set_ylabel(row_titles[r], fontsize=10)
 
         # Axes labels
-        axes[r, 0].set_xlabel('X (px)')
-        axes[r, 1].set_xlabel('X (px)')
-        axes[r, 2].set_xlabel('X (px)')
+        if include_input:
+            input_ax.set_xlabel('X (px)')
+        pred_ax.set_xlabel('X (px)')
+        gt_ax.set_xlabel('X (px)')
         # Hide y tick labels for middle and right columns to reduce clutter
-        axes[r, 1].set_yticklabels([])
-        axes[r, 2].set_yticklabels([])
+        if include_input:
+            pred_ax.set_yticklabels([])
+        gt_ax.set_yticklabels([])
 
     # Colorbar with labels (narrow width)
     cbar = fig.colorbar(
@@ -253,6 +278,7 @@ def visualize_synapse_sample(
     figure_title: Optional[str] = None,
     figsize: Tuple[float, float] = (12, 4),
     save_path: Optional[str] = None,
+    include_input: bool = True,
     device: Optional[str] = None,
 ):
     """
@@ -329,6 +355,7 @@ def visualize_synapse_sample(
         figure_title=figure_title,
         figsize=figsize,
         save_path=save_path,
+        include_input=include_input,
     )
 
 
@@ -341,6 +368,7 @@ def visualize_cataract_sample(
     figure_title: Optional[str] = None,
     figsize: Tuple[float, float] = (12, 4),
     save_path: Optional[str] = None,
+    include_input: bool = True,
     device: Optional[str] = None,
 ):
     """
@@ -400,6 +428,7 @@ def visualize_cataract_sample(
         figure_title=figure_title,
         figsize=figsize,
         save_path=save_path,
+        include_input=include_input,
     )
 
 
@@ -414,6 +443,7 @@ def visualize_synapse_batch(
     figure_title: Optional[str] = None,
     figsize: Optional[Tuple[float, float]] = None,
     save_path: Optional[str] = None,
+    include_input: bool = True,
     device: Optional[str] = None,
 ):
     """
@@ -483,6 +513,7 @@ def visualize_synapse_batch(
         figure_title=figure_title,
         figsize=figsize,
         save_path=save_path,
+        include_input=include_input,
     )
 
 
@@ -496,6 +527,7 @@ def visualize_cataract_batch(
     figure_title: Optional[str] = None,
     figsize: Optional[Tuple[float, float]] = None,
     save_path: Optional[str] = None,
+    include_input: bool = True,
     device: Optional[str] = None,
 ):
     """
@@ -545,4 +577,5 @@ def visualize_cataract_batch(
         figure_title=figure_title,
         figsize=figsize,
         save_path=save_path,
+        include_input=include_input,
     )
