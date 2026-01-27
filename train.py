@@ -81,7 +81,8 @@ parser.add_argument('--kd_points' , type=str,
                     default='logits', help='"logits", "intermediate", "features", "logits+intermediate", and "all" are options for kd training')
 ###########################################
 
-##########LOSS FUNCTION BU arguments##########
+##########LOSS FUNCTION arguments##########
+parser.add_argument('--lambda_' , type=float, default=0.5, help='weighting factor for the loss function')
 parser.add_argument('--use_bu_loss', action='store_true', 
                     help='whether to use Boundary-Uncertainty (BU) loss for training')
 parser.add_argument('--tau', type=float, default=1.0, help='Boundry Decay parameter for BU loss')

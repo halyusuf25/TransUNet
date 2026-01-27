@@ -28,8 +28,6 @@ class BULoss(nn.Module):
         eps: float = 1e-6,
         background_class: int = 0,
         cdist_chunk_size: int = 4096,
-        mu_dice: float = 0.5,
-        mu_ce: float = 0.5,
         args = None,
     ) -> None:
         super().__init__()
@@ -60,8 +58,6 @@ class BULoss(nn.Module):
         self.eps = float(eps)
         self.background_class = int(background_class)
         self.cdist_chunk_size = int(cdist_chunk_size)
-        self.mu_dice = float(mu_dice)
-        self.mu_ce = float(mu_ce)
         
         self._ce_loss_function = CrossEntropyLoss()
         self._dice_loss_function = DiceLoss(args.num_classes)
@@ -167,9 +163,9 @@ class BULoss(nn.Module):
         loss_wdice = self._dice_loss(probs, target, weights=weights)
 
         if self.loss_option == "A":
-            total = self.mu_dice * loss_wdice + self.mu_ce * loss_wce
+            total = (1-self.args.lambda_) * loss_wdice + self.args.lambda_ * loss_wce
         elif self.loss_option == "B":
-            total = self.mu_dice * loss_dice + self.mu_ce * loss_wce
+            total = (1-self.args.lambda_) * loss_dice + self.args.lambda_ * loss_wce
 
         if not return_details:
             return total

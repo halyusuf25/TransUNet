@@ -54,6 +54,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
         model = nn.DataParallel(model)
     model.train()
     gamma = 0.2 # distillation loss weight
+    lambda_ = args.lambda_
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(num_classes)
     bu_loss = BULoss(loss_option=args.buloss_option, args=args)
@@ -97,11 +98,11 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                     mgd_predictor=_mgd_predictor,
                     temperature=args.kd_temperature,
                 )
-                loss = (1-gamma) * (0.5 * loss_ce + 0.5 * loss_dice) + gamma * kd_loss
+                loss = (1-gamma) * ((1-lambda_) * loss_dice + lambda_ * loss_ce) + gamma * kd_loss
             elif args.use_bu_loss:
                 loss = bu_loss(outputs, label_batch)
             else:
-                loss = 0.5 * loss_ce + 0.5 * loss_dice
+                loss = (1-lambda_) * loss_dice + lambda_ * loss_ce
                 
             optimizer.zero_grad()
             loss.backward()
@@ -136,13 +137,13 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
         
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_interval = 70  # int(max_epoch/6)
-        if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
-            save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
-            torch.save(model.state_dict(), save_mode_path)
-            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
-            torch.save(model.state_dict(), local_path)
-            logging.info("save model to {}".format(save_mode_path))
+        # save_interval = 70  # int(max_epoch/6)
+        # if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
+        #     save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
+        #     torch.save(model.state_dict(), save_mode_path)
+        #     local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
+        #     torch.save(model.state_dict(), local_path)
+        #     logging.info("save model to {}".format(save_mode_path))
 
         if epoch_num >= max_epoch - 1:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
