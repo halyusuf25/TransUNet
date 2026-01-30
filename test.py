@@ -80,6 +80,7 @@ parser.add_argument('--viz_out', type=str, default=None, help='output filename f
 parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
 parser.add_argument('--viz_suffix', type=str, default=None, help='suffix to append to the output filename (before extension)')
 parser.add_argument('--viz_hide_input', action='store_true', help='hide input column in visualization (show only prediction and ground truth)')
+parser.add_argument('--num_slices_to_overlay', type=int, default=None, help='number of slices to overlay for visualization (clamped to [2,20])')
 
 ##########swin config arguments##########
 parser.add_argument('--swin_pretrained_path', type=str,
@@ -366,6 +367,7 @@ if __name__ == "__main__":
                         row_titles=titles,
                         figure_title=figure_title,
                         include_input=not args.viz_hide_input,
+                        num_slices_to_overlay=args.num_slices_to_overlay,
                         save_path=save_path,
                     )
                 else:
@@ -381,6 +383,7 @@ if __name__ == "__main__":
                         img_size=args.img_size,
                         figure_title=title,
                         include_input=not args.viz_hide_input,
+                        num_slices_to_overlay=args.num_slices_to_overlay,
                         save_path=save_path,
                     )
             elif dataset_name == 'Cataract1k':
@@ -408,6 +411,7 @@ if __name__ == "__main__":
                         row_titles=titles,
                         figure_title=figure_title,
                         include_input=not args.viz_hide_input,
+                        num_slices_to_overlay=args.num_slices_to_overlay,
                         save_path=save_path,
                     )
                 else:
@@ -422,6 +426,7 @@ if __name__ == "__main__":
                         img_size=args.img_size,
                         figure_title=title,
                         include_input=not args.viz_hide_input,
+                        num_slices_to_overlay=args.num_slices_to_overlay,
                         save_path=save_path,
                     )
         except Exception as e:

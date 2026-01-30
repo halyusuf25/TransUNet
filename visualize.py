@@ -87,6 +87,76 @@ def _draw_gt_boundaries(
             )
 
 
+def _clamp_overlay_slices(num_slices_to_overlay: Optional[int]) -> Optional[int]:
+    if num_slices_to_overlay is None:
+        return None
+    try:
+        value = int(num_slices_to_overlay)
+    except (TypeError, ValueError):
+        return None
+    return max(2, min(20, value))
+
+
+def _evenly_spaced_indices(depth: int, count: int) -> List[int]:
+    if depth <= 0:
+        return []
+    count = max(1, min(count, depth))
+    indices = np.linspace(0, depth - 1, num=count)
+    indices = np.round(indices).astype(int)
+    indices = np.clip(indices, 0, depth - 1)
+    seen = set()
+    ordered = []
+    for idx in indices.tolist():
+        if idx not in seen:
+            ordered.append(idx)
+            seen.add(idx)
+    return ordered
+
+
+def _resolve_overlay_indices(depth: int, num_slices_to_overlay: Optional[int]) -> Optional[List[int]]:
+    count = _clamp_overlay_slices(num_slices_to_overlay)
+    if count is None:
+        return None
+    indices = _evenly_spaced_indices(depth, count)
+    return indices if indices else None
+
+
+def _overlay_class_maps(maps: List[np.ndarray]) -> np.ndarray:
+    if not maps:
+        return np.array([])
+    composite = np.zeros_like(maps[0])
+    for m in maps:
+        mask = m != 0
+        composite[mask] = m[mask]
+    return composite
+
+
+def _infer_slice_prediction(
+    model: torch.nn.Module,
+    img2d: np.ndarray,
+    img_size: int,
+    device: str,
+) -> np.ndarray:
+    h, w = img2d.shape
+    if (h, w) != (img_size, img_size):
+        img_resized = zoom(img2d, (img_size / h, img_size / w), order=3)
+    else:
+        img_resized = img2d
+
+    with torch.no_grad():
+        input_tensor = torch.from_numpy(img_resized).unsqueeze(0).unsqueeze(0).float().to(device)
+        outputs = model(input_tensor)
+        if isinstance(outputs, (list, tuple)):
+            outputs = outputs[0]
+        pred_small = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0).cpu().numpy()
+
+    if (h, w) != (img_size, img_size):
+        pred = zoom(pred_small, (h / img_size, w / img_size), order=0)
+    else:
+        pred = pred_small
+    return pred
+
+
 def _plot_triplet(
     image: np.ndarray,
     pred: np.ndarray,
@@ -278,6 +348,7 @@ def visualize_synapse_sample(
     figure_title: Optional[str] = None,
     figsize: Tuple[float, float] = (12, 4),
     save_path: Optional[str] = None,
+    num_slices_to_overlay: Optional[int] = None,
     include_input: bool = True,
     device: Optional[str] = None,
 ):
@@ -299,13 +370,23 @@ def visualize_synapse_sample(
     model.eval()
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Determine dimensionality
+    overlay_indices = None
     if volume.ndim == 3:
         D, H, W = volume.shape
+        overlay_indices = _resolve_overlay_indices(D, num_slices_to_overlay)
+        if overlay_indices and label.ndim != 3:
+            overlay_indices = None
         if slice_index is None:
-            slice_index = D // 2
+            if overlay_indices:
+                slice_index = overlay_indices[len(overlay_indices) // 2]
+            else:
+                slice_index = D // 2
         img2d = volume[slice_index]
-        gt2d = label[slice_index] if label.ndim == 3 else label
+        if overlay_indices:
+            gt_slices = [label[i] for i in overlay_indices]
+            gt2d = _overlay_class_maps(gt_slices)
+        else:
+            gt2d = label[slice_index] if label.ndim == 3 else label
     elif volume.ndim == 2:
         img2d = volume
         gt2d = label
@@ -313,25 +394,13 @@ def visualize_synapse_sample(
     else:
         raise ValueError("Synapse volume must be 2D or 3D array")
 
-    # Resize to model input
-    h, w = img2d.shape
-    if (h, w) != (img_size, img_size):
-        img_resized = zoom(img2d, (img_size / h, img_size / w), order=3)
+    if overlay_indices:
+        pred_slices = [
+            _infer_slice_prediction(model, volume[i], img_size, device) for i in overlay_indices
+        ]
+        pred = _overlay_class_maps(pred_slices)
     else:
-        img_resized = img2d
-
-    with torch.no_grad():
-        input_tensor = torch.from_numpy(img_resized).unsqueeze(0).unsqueeze(0).float().to(device)
-        outputs = model(input_tensor)
-        if isinstance(outputs, (list, tuple)):
-            outputs = outputs[0]
-        pred_small = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0).cpu().numpy()
-
-    # Resize prediction back to original size
-    if (h, w) != (img_size, img_size):
-        pred = zoom(pred_small, (h / img_size, w / img_size), order=0)
-    else:
-        pred = pred_small
+        pred = _infer_slice_prediction(model, img2d, img_size, device)
 
     # Determine n_classes from prediction/labels
     n_classes = int(max(np.max(pred), np.max(gt2d)) + 1)
@@ -368,6 +437,7 @@ def visualize_cataract_sample(
     figure_title: Optional[str] = None,
     figsize: Tuple[float, float] = (12, 4),
     save_path: Optional[str] = None,
+    num_slices_to_overlay: Optional[int] = None,
     include_input: bool = True,
     device: Optional[str] = None,
 ):
@@ -443,6 +513,7 @@ def visualize_synapse_batch(
     figure_title: Optional[str] = None,
     figsize: Optional[Tuple[float, float]] = None,
     save_path: Optional[str] = None,
+    num_slices_to_overlay: Optional[int] = None,
     include_input: bool = True,
     device: Optional[str] = None,
 ):
@@ -456,17 +527,27 @@ def visualize_synapse_batch(
     triplets = []
     max_class = 1
     for idx, (volume, label) in enumerate(zip(volumes, labels)):
-        # Determine slice for this volume
+        overlay_indices = None
         s_idx = None
         if slice_indices is not None and idx < len(slice_indices):
             s_idx = slice_indices[idx]
 
         if volume.ndim == 3:
             D, H, W = volume.shape
+            overlay_indices = _resolve_overlay_indices(D, num_slices_to_overlay)
+            if overlay_indices and label.ndim != 3:
+                overlay_indices = None
             if s_idx is None:
-                s_idx = D // 2
+                if overlay_indices:
+                    s_idx = overlay_indices[len(overlay_indices) // 2]
+                else:
+                    s_idx = D // 2
             img2d = volume[s_idx]
-            gt2d = label[s_idx] if label.ndim == 3 else label
+            if overlay_indices:
+                gt_slices = [label[i] for i in overlay_indices]
+                gt2d = _overlay_class_maps(gt_slices)
+            else:
+                gt2d = label[s_idx] if label.ndim == 3 else label
         elif volume.ndim == 2:
             img2d = volume
             gt2d = label
@@ -474,23 +555,13 @@ def visualize_synapse_batch(
         else:
             raise ValueError("Synapse volume must be 2D or 3D array")
 
-        h, w = img2d.shape
-        if (h, w) != (img_size, img_size):
-            img_resized = zoom(img2d, (img_size / h, img_size / w), order=3)
+        if overlay_indices:
+            pred_slices = [
+                _infer_slice_prediction(model, volume[i], img_size, device) for i in overlay_indices
+            ]
+            pred = _overlay_class_maps(pred_slices)
         else:
-            img_resized = img2d
-
-        with torch.no_grad():
-            input_tensor = torch.from_numpy(img_resized).unsqueeze(0).unsqueeze(0).float().to(device)
-            outputs = model(input_tensor)
-            if isinstance(outputs, (list, tuple)):
-                outputs = outputs[0]
-            pred_small = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0).cpu().numpy()
-
-        if (h, w) != (img_size, img_size):
-            pred = zoom(pred_small, (h / img_size, w / img_size), order=0)
-        else:
-            pred = pred_small
+            pred = _infer_slice_prediction(model, img2d, img_size, device)
 
         max_class = max(max_class, int(max(np.max(pred), np.max(gt2d)) + 1))
         triplets.append((img2d, pred, gt2d))
@@ -527,6 +598,7 @@ def visualize_cataract_batch(
     figure_title: Optional[str] = None,
     figsize: Optional[Tuple[float, float]] = None,
     save_path: Optional[str] = None,
+    num_slices_to_overlay: Optional[int] = None,
     include_input: bool = True,
     device: Optional[str] = None,
 ):
