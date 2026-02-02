@@ -69,7 +69,6 @@ parser.add_argument('--topk_attn', type=float, default=0.0,
                     help='if >0.0, use top-k attention (fraction of k) instead of full attention (mutually exclusive with --use_shsa)')
 parser.add_argument('--adaptive_attn_threshold', type=float,
                     default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
-parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
 
 ##################### visualization arguments ####################
 parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
@@ -90,6 +89,8 @@ parser.add_argument('--swin_pretrained_path', type=str,
 ################ Quantization arguments ################
 parser.add_argument('--quantize', action='store_true', help='whether to quantize the model')
 parser.add_argument('--quantize_calibrate_batch_size', type=int, default=8, help='batch size for calibration (default: 8)')
+parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
+parser.add_argument('--drop_se_block', action='store_true', help='whether to drop SE block during quantization')
 #####################################################
 
 #######additional arguments for debugging#########
@@ -254,6 +255,7 @@ if __name__ == "__main__":
     config_vit.n_classes = args.num_classes
     config_vit.n_skip = args.n_skip
     config_vit.use_se_block = args.use_se_block
+    config_vit.drop_se_block = args.drop_se_block
     
     config_vit.patches.size = (args.vit_patches_size, args.vit_patches_size)
     if args.num_heads is not None:
@@ -320,6 +322,13 @@ if __name__ == "__main__":
         logging.info(f"Calibrating model on {len(calib_loader)} batches from test set.")
         net = quantizer.quantize()  
         logging.info(f"Model quantized successfully.")
+        
+        #drop SE block after quantization
+        if hasattr(net.transformer.encoder, "SELayer"):
+            del net.transformer.encoder.SELayer
+            net.transformer.encoder.args.drop_se_block = True
+            logging.info("Dropped SE-blocks after quantization.")
+
         
     # Optional qualitative visualization before running full inference
     if args.viz:
@@ -479,7 +488,10 @@ if __name__ == "__main__":
     logging.info(pretty)
     
     model_size = model_size_mb_benchmark(net)
-    model_runtime_memory = runtime_memory_mb_benchmark(net)
+    model_runtime_memory = runtime_memory_mb_benchmark(
+        net,
+        test_loader=test_loader_bench,
+    )
     
     os.makedirs("bench_logs_", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

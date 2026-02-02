@@ -344,8 +344,12 @@ class Encoder(nn.Module):
                 print(f"Top-k attention with keep rate {self.args.topk_attn} is enabled.")
         
         topk_idx = None  # Initialize idx for pruning
+        
+        se_layers = getattr(self, "SELayer", None)
+        use_se = se_layers is not None and not self.args.drop_se_block
+        if not use_se:
+            se_layers = [None] * len(self.layer)
         se_scale = []
-        se_layers = self.SELayer if self.SELayer is not None else [None] * len(self.layer)
         
         # for layer_block in self.layer:
         for layer_block_id, (layer_block, se_layer) in enumerate(zip(self.layer, se_layers)):
@@ -379,7 +383,7 @@ class Encoder(nn.Module):
             else:
                 topk_idx = None
             
-            if se_layer is not None:
+            if use_se and se_layer is not None:
                 # se_in = hidden_states.transpose(1, 2).unsqueeze(2)  # [B, C, 1, N]
                 # se_out, _ = se_layer(se_in)
                 # hidden_states = se_out.squeeze(2).transpose(1, 2)   # [B, N, C]

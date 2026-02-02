@@ -94,7 +94,18 @@ def main():
     ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
     net.load_state_dict(torch.load(ckpt_path))
     print(net)
+    print(f"encoder arguments: {net.transformer.encoder.args}")
+    if hasattr(net.transformer.encoder, "SELayer"):
+        del net.transformer.encoder.SELayer
+        print("Deleted SELayer from the transformer encoder.")
+    
+    print("Model architecture after modifications")        
+    # print(net)
+
+
+
 
 
 if __name__ == "__main__":
     main()
+
