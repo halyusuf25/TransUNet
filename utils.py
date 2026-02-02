@@ -508,6 +508,7 @@ def runtime_memory_mb_benchmark(
     batch_size: int = 1,
     warmup: int = 10,
     iterations: int = 50,
+    test_loader: Optional[Any] = None,
     device: Optional[str] = None,
     autocast: bool = False,
     amp_dtype: torch.dtype = torch.float16,
@@ -552,12 +553,37 @@ def runtime_memory_mb_benchmark(
         raise RuntimeError("runtime_memory_mb_benchmark requires CUDA to measure runtime memory.")
 
     model = model.to(device_obj).eval()
-    input_size = tuple(int(v) for v in input_size)
-    batch_size = int(max(1, batch_size))
+
+    def _extract_images_from_batch(batch: Any) -> torch.Tensor:
+        if isinstance(batch, (list, tuple)) and len(batch) >= 1:
+            return batch[0]
+        if isinstance(batch, dict):
+            for k in ("image", "img", "images", "inputs", "x"):
+                if k in batch:
+                    return batch[k]
+        if torch.is_tensor(batch):
+            return batch
+        raise ValueError("Cannot extract images from the given batch structure.")
+
+    if test_loader is not None:
+        try:
+            first_batch = next(iter(test_loader))
+        except StopIteration as exc:
+            raise RuntimeError("test_loader is empty; cannot extract an input batch.") from exc
+        first_imgs = _extract_images_from_batch(first_batch)
+        if not torch.is_tensor(first_imgs):
+            raise TypeError("Extracted images are not a tensor.")
+        if first_imgs.dim() < 4:
+            raise ValueError(f"Expected images with shape (B,C,H,W), got {tuple(first_imgs.shape)}.")
+        dummy_input = first_imgs.to(device_obj, non_blocking=True)
+        batch_size = int(dummy_input.shape[0])
+        input_size = tuple(int(v) for v in dummy_input.shape[1:4])
+    else:
+        input_size = tuple(int(v) for v in input_size)
+        batch_size = int(max(1, batch_size))
+        dummy_input = torch.randn((batch_size, *input_size), device=device_obj)
     warmup = int(max(0, warmup))
     iterations = int(max(1, iterations))
-
-    dummy_input = torch.randn((batch_size, *input_size), device=device_obj)
 
     def _autocast_context():
         if autocast:
