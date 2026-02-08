@@ -69,6 +69,7 @@ parser.add_argument('--topk_attn', type=float, default=0.0,
                     help='if >0.0, use top-k attention (fraction of k) instead of full attention (mutually exclusive with --use_shsa)')
 parser.add_argument('--adaptive_attn_threshold', type=float,
                     default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
+parser.add_argument('--benchmark_dict', type=str, default='benchmark/', help='directory to save benchmark results')
 
 ##################### visualization arguments ####################
 parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
@@ -283,7 +284,7 @@ if __name__ == "__main__":
     if args.vit_name.find('R50') !=-1:
         config_vit.patches.grid = (int(args.img_size/args.vit_patches_size), int(args.img_size/args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
-
+    
     snapshot = os.path.join(snapshot_path, 'best_model.pth')
     if not os.path.exists(snapshot): snapshot = snapshot.replace('best_model', 'epoch_'+str(args.max_epochs-1))
     # net.load_state_dict(torch.load(snapshot, weights_only=True))
@@ -324,7 +325,8 @@ if __name__ == "__main__":
         logging.info(f"Model quantized successfully.")
         
         #drop SE block after quantization
-        if hasattr(net.transformer.encoder, "SELayer"):
+        se_layers = getattr(net.transformer.encoder, "SELayer", None)
+        if se_layers is not None:
             del net.transformer.encoder.SELayer
             net.transformer.encoder.args.drop_se_block = True
             logging.info("Dropped SE-blocks after quantization.")
@@ -493,10 +495,10 @@ if __name__ == "__main__":
         test_loader=test_loader_bench,
     )
     
-    os.makedirs("bench_logs_", exist_ok=True)
+    os.makedirs(args.benchmark_dict, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     date, time = timestamp.split("_")
-    with open(os.path.join("bench_logs_", f"bench_{args.ckpt}_{timestamp}.json"), "w") as f:
+    with open(os.path.join(args.benchmark_dict, f"{args.ckpt}_{args.img_size}_{timestamp}.json"), "w") as f:
         accuracy_for_json = {k: _make_json_safe(v) for k, v in performance.items()}
         metrics_for_json = {k: _make_json_safe(v) for k, v in results.metrics.items()}
         notes_for_json = {k: _make_json_safe(v) for k, v in results.notes.items()}

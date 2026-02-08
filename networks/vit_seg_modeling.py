@@ -346,7 +346,8 @@ class Encoder(nn.Module):
         topk_idx = None  # Initialize idx for pruning
         
         se_layers = getattr(self, "SELayer", None)
-        use_se = se_layers is not None and not self.args.drop_se_block
+        drop_se = getattr(self.args, "drop_se_block", False)
+        use_se = se_layers is not None and not drop_se
         if not use_se:
             se_layers = [None] * len(self.layer)
         se_scale = []
