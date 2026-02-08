@@ -7,14 +7,14 @@ import torch
 import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
-from trainer import trainer_synapse
+from trainer import trainer_synapse, trainer_acdc
 from datasets.dataset_cataract import  Cataract1kDataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str,
                     default='../../data/Synapse/train_npz', help='root dir for data')
 parser.add_argument('--dataset', type=str,
-                    default='Synapse', help='experiment_name')
+                    default='Synapse', help='dataset name, and possible values are Synapse, ACDC, and Cataract1k')
 parser.add_argument('--list_dir', type=str,
                     default='./lists/lists_Synapse', help='list dir')
 parser.add_argument('--num_classes', type=int,
@@ -123,6 +123,9 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
+    if args.dataset not in ['Synapse', 'Cataract1k', 'ACDC']:
+        raise ValueError(f"Unsupported dataset: {args.dataset}. Supported datasets are: Synapse, Cataract1k, and ACDC.")
+    
     dataset_name = args.dataset
     dataset_config = {
         'Synapse': {
@@ -135,6 +138,11 @@ if __name__ == "__main__":
             'root_path': '/data/shared/CataractData/',
             'list_dir': None,  # Not needed for Cataract1k
             'num_classes': 5,  # Background (0), Pupil (1), Cornea (2), Lens (3), Instruments (4)
+        },
+        'ACDC': {
+            'root_path': '/data/shared/project_TransUNet/data/ACDC',
+            'list_dir': None,
+            'num_classes': 4,
         },
     }
     args.num_classes = dataset_config[dataset_name]['num_classes']
@@ -231,7 +239,7 @@ if __name__ == "__main__":
 
     # print(f"arguments for training: {args}")
     # print(f"configuration of the vit model for training: {config_vit}") 
-    trainer = {'Synapse': trainer_synapse, 'Cataract1k': trainer_synapse}
+    trainer = {'Synapse': trainer_synapse, 'Cataract1k': trainer_synapse, 'ACDC': trainer_acdc}
     if args.use_kd:
         trainer[dataset_name](args, net, snapshot_path, teacher_model=teacher_net)
     else:
