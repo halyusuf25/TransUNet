@@ -178,3 +178,6 @@ checkpoints/
 *.json
 *.txt
 *.png
+
+
+*.pth
