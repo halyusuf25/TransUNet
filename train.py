@@ -9,6 +9,7 @@ from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from trainer import trainer_synapse, trainer_acdc
 from datasets.dataset_cataract import  Cataract1kDataset
+from utils import _sanitize_name
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str,
@@ -61,7 +62,8 @@ parser.add_argument('--topk_attn', type=float,
 parser.add_argument('--adaptive_attn_threshold', type=float,
                     default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
 parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
-
+parser.add_argument('--tensorboard_logdir', type=str, default='tensorboard_logs', help='root directory for TensorBoard logs',)
+parser.add_argument('--description', type=str, default='No Description', help='additional description for the training run (optional)')
 ###Teacher Model Argument:#####
 parser.add_argument('--use_kd', action='store_true', 
                     help='whether to use knowledge distillation (kd) training')
@@ -167,8 +169,17 @@ if __name__ == "__main__":
     snapshot_path = snapshot_path + '_'+str(args.img_size)
     snapshot_path = snapshot_path + '_s'+str(args.seed) if args.seed!=1234 else snapshot_path
 
+    args.tensorboard_run_name = _sanitize_name(f"{args.ckpt}__{args.description}")
+    args.tensorboard_run_dir = os.path.join(args.tensorboard_logdir, args.tensorboard_run_name)
+
     if not os.path.exists(snapshot_path):
         os.makedirs(snapshot_path)
+        
+    if not os.path.exists(args.ckpt_dir):
+        os.makedirs(args.ckpt_dir)
+        
+    if not os.path.exists(args.tensorboard_run_dir):
+        os.makedirs(args.tensorboard_run_dir)
     
 
     config_vit = CONFIGS_ViT_seg[args.vit_name]

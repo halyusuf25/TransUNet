@@ -65,7 +65,8 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     if args.use_bu_loss:
         optimizer_params.extend(list(bu_loss.parameters()))
     optimizer = optim.SGD(optimizer_params, lr=base_lr, momentum=0.9, weight_decay=0.0001)
-    writer = SummaryWriter(snapshot_path + '/log')
+    writer = SummaryWriter(args.tensorboard_run_dir)
+    logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
     iter_num = 0
     max_epoch = args.max_epochs
     max_iterations = args.max_epochs * len(trainloader)  # max_epoch = max_iterations // len(trainloader) + 1
@@ -73,6 +74,10 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     best_performance = 0.0
     iterator = tqdm(range(max_epoch), ncols=70)
     for epoch_num in iterator:
+        epoch_total_loss = 0.0
+        epoch_ce_loss = 0.0
+        epoch_dice_loss = 0.0
+        epoch_batch_count = 0
         for i_batch, sampled_batch in enumerate(trainloader):
             image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
@@ -109,6 +114,11 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 loss = bu_loss(outputs, label_batch)
             else:
                 loss = (1-lambda_) * loss_dice + lambda_ * loss_ce
+
+            epoch_total_loss += loss.item()
+            epoch_ce_loss += loss_ce.item()
+            epoch_dice_loss += loss_dice.item()
+            epoch_batch_count += 1
                 
             optimizer.zero_grad()
             loss.backward()
@@ -124,10 +134,13 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 print("Verbose mode is ON. Detailed training information were printed and training is stopped after two iterations.")
                 sys.exit(0)
 
+            tau_value = float(bu_loss.get_tau().detach().item())
             writer.add_scalar('info/lr', lr_, iter_num)
             writer.add_scalar('info/total_loss', loss, iter_num)
             writer.add_scalar('info/loss_ce', loss_ce, iter_num)
             writer.add_scalar('info/loss_dice', loss_dice, iter_num)
+            writer.add_scalar('info/tau', tau_value, iter_num)
+            
             if args.use_kd and teacher_model is not None:
                 writer.add_scalar('info/loss_kd', kd_loss, iter_num)
                 logging.info('iteration %d : loss : %f, loss_ce: %f, loss_kd: %f' % (iter_num, loss.item(), loss_ce.item(), kd_loss.item()))
@@ -142,6 +155,21 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
+
+        if epoch_batch_count > 0:
+            mean_total_loss = epoch_total_loss / epoch_batch_count
+            mean_ce_loss = epoch_ce_loss / epoch_batch_count
+            mean_dice_loss = epoch_dice_loss / epoch_batch_count
+            tau_value = float(bu_loss.get_tau().detach().item())
+            epoch_index = epoch_num + 1
+            writer.add_scalar('epoch/total_loss', mean_total_loss, epoch_index)
+            writer.add_scalar('epoch/loss_ce', mean_ce_loss, epoch_index)
+            writer.add_scalar('epoch/loss_dice', mean_dice_loss, epoch_index)
+            writer.add_scalar('epoch/tau', tau_value, epoch_index)
+            logging.info(
+                'epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, tau : %f',
+                epoch_index, mean_total_loss, mean_ce_loss, mean_dice_loss, tau_value
+            )
         
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -190,7 +218,8 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
     ce_loss = CrossEntropyLoss(ignore_index=4)
     dice_loss = DiceLoss(num_classes)
 
-    writer = SummaryWriter(snapshot_path + '/log')
+    writer = SummaryWriter(args.tensorboard_run_dir)
+    logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
     logging.info("{} iterations per epoch".format(len(trainloader)))
     logging.info("{} val iterations per epoch".format(len(valloader)))
     # logging.info("{} test iterations per epoch".format(len(testloader)))

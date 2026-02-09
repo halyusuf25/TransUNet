@@ -181,3 +181,5 @@ checkpoints/
 
 
 *.pth
+
+tensorboard_logs/

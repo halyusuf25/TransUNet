@@ -11,6 +11,9 @@ from typing import Tuple, Dict, Any, Optional
 from thop import profile
 from fvcore.nn import FlopCountAnalysis
 
+def _sanitize_name(value):
+    return str(value).replace("/", "-").replace("\\", "-").replace(" ", "_")
+
 def _make_json_safe(value: Any) -> Any:
     """Recursively convert objects into JSON-serializable types."""
     if isinstance(value, type):
