@@ -60,7 +60,11 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(num_classes)
     bu_loss = BULoss(loss_option=args.buloss_option, args=args)
-    optimizer = optim.SGD(model.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
+    bu_loss = bu_loss.to(next(model.parameters()).device)
+    optimizer_params = list(model.parameters())
+    if args.use_bu_loss:
+        optimizer_params.extend(list(bu_loss.parameters()))
+    optimizer = optim.SGD(optimizer_params, lr=base_lr, momentum=0.9, weight_decay=0.0001)
     writer = SummaryWriter(snapshot_path + '/log')
     iter_num = 0
     max_epoch = args.max_epochs
@@ -108,6 +112,8 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 
             optimizer.zero_grad()
             loss.backward()
+            # To inspect learnable tau gradients after backward:
+            # if args.use_bu_loss and getattr(args, "learn_tau", False): print(bu_loss.rho.grad)
             optimizer.step()
             lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
             for param_group in optimizer.param_groups:

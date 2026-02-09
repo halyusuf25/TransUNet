@@ -31,40 +31,65 @@ class BULoss(nn.Module):
         args = None,
     ) -> None:
         super().__init__()
-        loss_option = args.buloss_option
+        self.args = args
+        loss_option = getattr(self.args, "buloss_option", loss_option)
         loss_option = loss_option.upper()
         if loss_option not in {"A", "B", "C"}:
             raise ValueError(
                 f"loss_option must be 'A', 'B', or 'C', got {loss_option!r}"
             )
-        distance_type = args.distance_map_type
+        distance_type = getattr(self.args, "distance_map_type", distance_type)
         distance_type = distance_type.lower()
         if distance_type not in {"dtm", "unsigned", "signed"}:
             raise ValueError(
                 "distance_type must be one of {'dtm','unsigned','signed'}, "
                 f"got {distance_type!r}"
             )
-        if tau <= 0:
+        tau_init = float(getattr(self.args, "tau", tau))
+        if tau_init <= 0:
             raise ValueError("tau must be > 0.")
 
-        self.args = args
         self.loss_option = loss_option
-        self.distance_type = distance_type 
+        self.distance_type = distance_type
         print(f"Using BULoss with option {self.loss_option}, distance type {self.distance_type}")
-        self.tau = float(self.args.tau) 
-        self.bm_min = float(self.args.bm_min) if self.args.bm_min is not None else float(bm_min)
-        self.bm_max = float(self.args.bm_max) if self.args.bm_max is not None else float(bm_max)
-        self.alpha = float(self.args.alpha) if self.args.alpha is not None else float(alpha)
+        self.learn_tau = bool(getattr(self.args, "learn_tau", False))
+        # Backward-compatible fallback for older args objects that may not expose tau_min.
+        self.tau_min = float(getattr(self.args, "tau_min", 1.0))
+        if self.tau_min <= 0:
+            raise ValueError("tau_min must be > 0.")
+
+        if self.learn_tau:
+            if tau_init <= self.tau_min:
+                raise ValueError(
+                    f"tau_init ({tau_init}) must be > tau_min ({self.tau_min}) when learn_tau=True."
+                )
+            tau_delta = torch.tensor(tau_init - self.tau_min, dtype=torch.float32)
+            rho0 = torch.log(torch.expm1(tau_delta))
+            self.rho = nn.Parameter(rho0.clone().detach())
+            # After loss.backward(), inspect tau raw gradient with: print(bu_loss.rho.grad)
+        else:
+            self.register_buffer("_tau_fixed", torch.tensor(tau_init, dtype=torch.float32))
+
+        self.bm_min = float(getattr(self.args, "bm_min", bm_min))
+        self.bm_max = float(getattr(self.args, "bm_max", bm_max))
+        self.alpha = float(getattr(self.args, "alpha", alpha))
         self.eps = float(eps)
         self.background_class = int(background_class)
         self.cdist_chunk_size = int(cdist_chunk_size)
-        
+
         self._ce_loss_function = CrossEntropyLoss()
-        self._dice_loss_function = DiceLoss(args.num_classes)
-        
+        num_classes = getattr(self.args, "num_classes", None)
+        if num_classes is None:
+            raise ValueError("args.num_classes must be provided for BULoss.")
+        self._dice_loss_function = DiceLoss(num_classes)
 
         # 3x3 kernel for binary erosion when estimating the boundary (Sec. 1.2).
         self.register_buffer("_boundary_kernel", torch.ones(1, 1, 3, 3))
+
+    def get_tau(self) -> torch.Tensor:
+        if self.learn_tau:
+            return self.tau_min + F.softplus(self.rho)
+        return self._tau_fixed
 
     def compute_uncertainty_map(self, probs: torch.Tensor) -> torch.Tensor:
         """Compute UM(x)=U(x) from entropy (loss_function.tex, Sec. 1.1.1-1.1.2)."""
@@ -102,7 +127,10 @@ class BULoss(nn.Module):
 
     def compute_boundary_map(self, distance: torch.Tensor) -> torch.Tensor:
         """Compute BM(x) from D(x) (loss_function.tex, Eq. (bm_long))."""
-        bm = torch.exp(-distance / self.tau)
+        tau = self.get_tau().to(device=distance.device, dtype=distance.dtype)
+        bm = torch.exp(-distance / tau)
+        if self.learn_tau:
+            return bm  # No clipping when tau is learnable, to preserve smooth gradients.
         bm_mid = torch.where(bm < self.bm_min, torch.zeros_like(bm), bm)
         bm_mid = torch.where(bm >= self.bm_max, torch.full_like(bm, self.alpha), bm_mid)
         return bm_mid
@@ -130,8 +158,9 @@ class BULoss(nn.Module):
             raise ValueError("logits must be [B, C, H, W]")
         if target.dim() != 3:
             raise ValueError("target must be [B, H, W]")
+        if getattr(self.args, "verbose", False):
+            print(f"[BULoss] tau={float(self.get_tau().detach())}")
 
-        
         if self.loss_option == "C":
             # Standard Dice + CE loss without boundary/uncertainty weighting.
             loss_ce = self._ce_loss_function(logits, target)
