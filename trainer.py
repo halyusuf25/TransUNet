@@ -111,7 +111,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 )
                 loss = (1-gamma) * ((1-lambda_) * loss_dice + lambda_ * loss_ce) + gamma * kd_loss
             elif args.use_bu_loss:
-                loss = bu_loss(outputs, label_batch)
+                loss, details = bu_loss(outputs, label_batch, return_details=True)
             else:
                 loss = (1-lambda_) * loss_dice + lambda_ * loss_ce
 
@@ -166,6 +166,14 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar('epoch/loss_ce', mean_ce_loss, epoch_index)
             writer.add_scalar('epoch/loss_dice', mean_dice_loss, epoch_index)
             writer.add_scalar('epoch/tau', tau_value, epoch_index)
+            if args.learn_tau:
+                writer.add_scalar('epoch/mean_weights', details["w_mean"], epoch_index)
+                writer.add_scalar('epoch/max_weights', details["w_max"], epoch_index)
+                writer.add_scalar('epoch/mean_UM', details["UM_mean"], epoch_index)
+                writer.add_scalar('epoch/max_UM', details["UM_max"], epoch_index)
+                writer.add_scalar('epoch/mean_BM', details["BM_mean"], epoch_index)
+                writer.add_scalar('epoch/max_BM', details["BM_max"], epoch_index)
+                
             logging.info(
                 'epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, tau : %f',
                 epoch_index, mean_total_loss, mean_ce_loss, mean_dice_loss, tau_value

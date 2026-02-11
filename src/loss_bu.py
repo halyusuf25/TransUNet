@@ -173,6 +173,7 @@ class BULoss(nn.Module):
                 "L_Dice": loss_dice.detach(),
             }
             return total, details
+        
         elif self.loss_option == "B":
             loss_dice = self._dice_loss_function(logits, target, softmax=True)
             
@@ -201,12 +202,17 @@ class BULoss(nn.Module):
 
         details: Dict[str, torch.Tensor] = {
             "UM_mean": uncertainty_map.mean().detach(),
+            "UM_max": uncertainty_map.max().detach(),
             "BM_mean": boundary_map.mean().detach(),
+            "BM_max": boundary_map.max().detach(),
             "w_mean": weights.mean().detach(),
+            "w_max": weights.max().detach(),
             "L_wCE": loss_wce.detach(),
-            "L_Dice": loss_dice.detach(),
             "L_wDice": loss_wdice.detach(),
         }
+        if self.loss_option == "B":
+            details["L_Dice"] = loss_dice.detach()
+            
         return total, details
 
     def _weighted_ce(
