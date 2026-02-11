@@ -205,6 +205,7 @@ class BULoss(nn.Module):
             "UM_max": uncertainty_map.max().detach(),
             "BM_mean": boundary_map.mean().detach(),
             "BM_max": boundary_map.max().detach(),
+            "weights": weights.detach(),
             "w_mean": weights.mean().detach(),
             "w_max": weights.max().detach(),
             "L_wCE": loss_wce.detach(),
