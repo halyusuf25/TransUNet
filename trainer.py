@@ -14,7 +14,11 @@ from tensorboardX import SummaryWriter
 from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from utils import DiceLoss
+from utils import (
+    DiceLoss,
+    _extract_case_names,
+    _is_primary_process,
+)
 from src.loss_bu import BULoss
 from networks.distillation import compute_kd_loss, MGD, KDTarget, KDWeights
 from torchvision import transforms
@@ -22,6 +26,13 @@ from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
 from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
 from datasets.dataset_acdc import ACDC_Dataset, RandomGenerator4ACDC
 from utils import test_single_volume
+from visualize import (
+    _get_dataset_sample_names,
+    _resolve_heatmap_sample_targets,
+    _should_save_heatmap_epoch,
+    save_pending_weight_heatmaps,
+)
+
 
 def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
@@ -67,23 +78,64 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     optimizer = optim.SGD(optimizer_params, lr=base_lr, momentum=0.9, weight_decay=0.0001)
     writer = SummaryWriter(args.tensorboard_run_dir)
     logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
+    is_primary_process = _is_primary_process()
+    heatmaps_enabled = bool(getattr(args, "create_heatmaps", False)) and args.use_bu_loss and is_primary_process
+    fixed_heatmap_sample_id = None
+    fixed_heatmap_target_samples = []
+    dataset_sample_names = _get_dataset_sample_names(db_train) if heatmaps_enabled else []
+    if heatmaps_enabled:
+        os.makedirs(args.heatmaps_dir, exist_ok=True)
+        logging.info(
+            "BU-loss heatmap generation enabled. Output dir: %s | slices per target epoch: %d",
+            args.heatmaps_dir,
+            int(getattr(args, "num_heatmap_slices", 1)),
+        )
+    elif bool(getattr(args, "create_heatmaps", False)) and not is_primary_process:
+        logging.info("BU-loss heatmap generation disabled on non-primary process.")
+
     iter_num = 0
     max_epoch = args.max_epochs
     max_iterations = args.max_epochs * len(trainloader)  # max_epoch = max_iterations // len(trainloader) + 1
     logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
     best_performance = 0.0
     iterator = tqdm(range(max_epoch), ncols=70)
+    last_bu_details = None
     for epoch_num in iterator:
+        epoch_index = epoch_num + 1
+        should_save_heatmap_this_epoch = heatmaps_enabled and _should_save_heatmap_epoch(epoch_index)
+        pending_heatmap_samples = set(fixed_heatmap_target_samples) if should_save_heatmap_this_epoch else set()
+        saved_heatmap_count_this_epoch = 0
         epoch_total_loss = 0.0
         epoch_ce_loss = 0.0
         epoch_dice_loss = 0.0
         epoch_batch_count = 0
         for i_batch, sampled_batch in enumerate(trainloader):
+            case_names = _extract_case_names(sampled_batch)
+            if heatmaps_enabled and fixed_heatmap_sample_id is None:
+                if case_names and len(case_names) > 0:
+                    fixed_heatmap_sample_id = case_names[0]
+                else:
+                    fixed_heatmap_sample_id = "sample_0"
+                fixed_heatmap_target_samples = _resolve_heatmap_sample_targets(
+                    dataset_sample_names=dataset_sample_names,
+                    anchor_sample_name=fixed_heatmap_sample_id,
+                    num_heatmap_slices=int(getattr(args, "num_heatmap_slices", 1)),
+                )
+                if should_save_heatmap_this_epoch:
+                    pending_heatmap_samples = set(fixed_heatmap_target_samples)
+                logging.info(
+                    "Fixed BU-loss heatmap anchor sample: %s | selected target slices (%d): %s",
+                    fixed_heatmap_sample_id,
+                    len(fixed_heatmap_target_samples),
+                    ", ".join(fixed_heatmap_target_samples),
+                )
+
             image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
             outputs, _ , features, _ = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
             loss_dice = dice_loss(outputs, label_batch, softmax=True)
+            details = None
             
             if args.use_kd and teacher_model is not None:
                 with torch.no_grad():
@@ -112,6 +164,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 loss = (1-gamma) * ((1-lambda_) * loss_dice + lambda_ * loss_ce) + gamma * kd_loss
             elif args.use_bu_loss:
                 loss, details = bu_loss(outputs, label_batch, return_details=True)
+                last_bu_details = details
             else:
                 loss = (1-lambda_) * loss_dice + lambda_ * loss_ce
 
@@ -130,6 +183,19 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 param_group['lr'] = lr_
 
             iter_num = iter_num + 1
+            saved_heatmap_count_this_epoch += save_pending_weight_heatmaps(
+                should_save_heatmap_this_epoch=should_save_heatmap_this_epoch,
+                details=details,
+                pending_heatmap_samples=pending_heatmap_samples,
+                case_names=case_names,
+                image_batch=image_batch,
+                label_batch=label_batch,
+                epoch_index=epoch_index,
+                iter_num=iter_num,
+                heatmaps_dir=args.heatmaps_dir,
+                logger=logging,
+            )
+
             if args.verbose and iter_num >= 2:
                 print("Verbose mode is ON. Detailed training information were printed and training is stopped after two iterations.")
                 sys.exit(0)
@@ -161,22 +227,30 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
             mean_ce_loss = epoch_ce_loss / epoch_batch_count
             mean_dice_loss = epoch_dice_loss / epoch_batch_count
             tau_value = float(bu_loss.get_tau().detach().item())
-            epoch_index = epoch_num + 1
             writer.add_scalar('epoch/total_loss', mean_total_loss, epoch_index)
             writer.add_scalar('epoch/loss_ce', mean_ce_loss, epoch_index)
             writer.add_scalar('epoch/loss_dice', mean_dice_loss, epoch_index)
             writer.add_scalar('epoch/tau', tau_value, epoch_index)
-            if args.learn_tau:
-                writer.add_scalar('epoch/mean_weights', details["w_mean"], epoch_index)
-                writer.add_scalar('epoch/max_weights', details["w_max"], epoch_index)
-                writer.add_scalar('epoch/mean_UM', details["UM_mean"], epoch_index)
-                writer.add_scalar('epoch/max_UM', details["UM_max"], epoch_index)
-                writer.add_scalar('epoch/mean_BM', details["BM_mean"], epoch_index)
-                writer.add_scalar('epoch/max_BM', details["BM_max"], epoch_index)
+            if args.use_bu_loss and last_bu_details is not None:
+                writer.add_scalar('epoch/mean_weights', last_bu_details["w_mean"], epoch_index)
+                writer.add_scalar('epoch/max_weights', last_bu_details["w_max"], epoch_index)
+                writer.add_scalar('epoch/mean_UM', last_bu_details["UM_mean"], epoch_index)
+                writer.add_scalar('epoch/max_UM', last_bu_details["UM_max"], epoch_index)
+                writer.add_scalar('epoch/mean_BM', last_bu_details["BM_mean"], epoch_index)
+                writer.add_scalar('epoch/max_BM', last_bu_details["BM_max"], epoch_index)
                 
             logging.info(
                 'epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, tau : %f',
                 epoch_index, mean_total_loss, mean_ce_loss, mean_dice_loss, tau_value
+            )
+        if should_save_heatmap_this_epoch and pending_heatmap_samples:
+            missing_samples = sorted(list(pending_heatmap_samples))
+            logging.warning(
+                "Heatmap target epoch reached (epoch=%d) and saved %d/%d slices. Missing samples: %s",
+                epoch_index,
+                saved_heatmap_count_this_epoch,
+                len(fixed_heatmap_target_samples),
+                ", ".join(missing_samples),
             )
         
         

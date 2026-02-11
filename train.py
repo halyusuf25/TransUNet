@@ -98,6 +98,12 @@ parser.add_argument('--bm_max', type=float, default=3.0, help='Maximum value for
 parser.add_argument('--distance_map_type', type=str, 
                     default='unsigned', help='Type of Distance Map for BU loss: "dtm", "signed" or "unsigned"')
 parser.add_argument('--buloss_option', type=str, default='C', help='Options for BU loss: "A, B, C"')
+parser.add_argument('--create_heatmaps', action='store_true',
+                    help='if set, save BU-loss weight heatmap overlays during training')
+parser.add_argument('--heatmaps_dir', type=str, default='heatmaps',
+                    help='directory where generated BU-loss heatmaps and raw weights are saved')
+parser.add_argument('--num_heatmap_slices', type=int, default=3,
+                    help='number of evenly-spaced slices per case to save for each heatmap epoch')
 #OPTION A : \mathcal{L}_{total} = \mathcal{L}_{Dice}^w+ \mathcal{L}_{CE}^w
 #OPTION B : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}^w
 #OPTION C : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}
@@ -202,6 +208,22 @@ if __name__ == "__main__":
     
     if args.adaptive_attn_threshold > 0.0 and (args.use_shsa or args.topk_attn > 0.0):
         raise ValueError("The --adaptive_attn_threshold argument is mutually exclusive with --use_shsa and --topk_attn > 0.0.")
+
+    if args.create_heatmaps:
+        buloss_option_upper = str(args.buloss_option).upper()
+        if buloss_option_upper not in {"A", "B"}:
+            raise ValueError("--create_heatmaps can only be enabled when --buloss_option is 'A' or 'B'.")
+        if not args.use_bu_loss:
+            raise ValueError("--create_heatmaps requires --use_bu_loss because details['weights'] is produced by BULoss.")
+        if not str(args.heatmaps_dir).strip():
+            raise ValueError("--heatmaps_dir must be a non-empty path when --create_heatmaps is enabled.")
+        if args.num_heatmap_slices < 1:
+            raise ValueError("--num_heatmap_slices must be >= 1.")
+        heatmap_subdir = _sanitize_name(args.ckpt)
+        args.heatmaps_dir = os.path.join(args.heatmaps_dir, heatmap_subdir)
+        print(
+            f"[heatmaps] enabled | epochs: 1,70,140,... | slices/epoch: {args.num_heatmap_slices} | dir: {args.heatmaps_dir}"
+        )
     
     config_vit.topk_attn = args.topk_attn
     config_vit.use_shsa = args.use_shsa

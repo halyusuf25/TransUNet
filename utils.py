@@ -14,6 +14,24 @@ from fvcore.nn import FlopCountAnalysis
 def _sanitize_name(value):
     return str(value).replace("/", "-").replace("\\", "-").replace(" ", "_")
 
+
+def _is_primary_process() -> bool:
+    if not torch.distributed.is_available():
+        return True
+    if not torch.distributed.is_initialized():
+        return True
+    return torch.distributed.get_rank() == 0
+
+
+def _extract_case_names(sampled_batch):
+    case_names = sampled_batch.get("case_name")
+    if case_names is None:
+        return None
+    if isinstance(case_names, (list, tuple)):
+        return [str(name) for name in case_names]
+    return [str(case_names)]
+
+
 def _make_json_safe(value: Any) -> Any:
     """Recursively convert objects into JSON-serializable types."""
     if isinstance(value, type):

@@ -183,3 +183,4 @@ checkpoints/
 *.pth
 
 tensorboard_logs/
+*.npy

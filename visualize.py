@@ -1,8 +1,10 @@
 import os
+import re
 from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from scipy.ndimage import zoom
 
 
@@ -85,6 +87,295 @@ def _draw_gt_boundaries(
                 linewidths=linewidth,
                 linestyles=linestyle,
             )
+
+
+def _to_numpy_array(value) -> np.ndarray:
+    if torch.is_tensor(value):
+        return value.detach().cpu().numpy()
+    return np.asarray(value)
+
+
+def _normalize_float_map(values: np.ndarray) -> np.ndarray:
+    values = values.astype(np.float32, copy=False)
+    v_min = float(np.min(values))
+    v_max = float(np.max(values))
+    if v_max - v_min < 1e-8:
+        return np.zeros_like(values, dtype=np.float32)
+    return (values - v_min) / (v_max - v_min)
+
+
+def _prepare_display_image(image: np.ndarray) -> np.ndarray:
+    img = np.squeeze(np.asarray(image))
+    if img.ndim == 2:
+        img = img[..., None]
+    elif img.ndim == 3:
+        # Support both CHW and HWC.
+        if img.shape[0] in (1, 3) and img.shape[-1] not in (1, 3):
+            img = np.transpose(img, (1, 2, 0))
+        elif img.shape[-1] not in (1, 3) and img.shape[0] in (1, 3):
+            img = np.transpose(img, (1, 2, 0))
+        elif img.shape[-1] not in (1, 3):
+            img = img[..., :1]
+    else:
+        raise ValueError(f"Unsupported image shape for visualization: {img.shape}")
+
+    if img.shape[-1] == 1:
+        img = np.repeat(img, 3, axis=2)
+    elif img.shape[-1] > 3:
+        img = img[..., :3]
+
+    return _normalize_float_map(img)
+
+
+def _prepare_weight_map(weights: np.ndarray) -> np.ndarray:
+    arr = np.asarray(weights)
+    arr = np.squeeze(arr)
+    if arr.ndim < 2:
+        raise ValueError(f"weights_tensor must have at least 2 dims after squeeze, got {arr.shape}")
+    while arr.ndim > 2:
+        arr = arr[0]
+    return arr.astype(np.float32, copy=False)
+
+
+def _resize_float_map(float_map: np.ndarray, out_h: int, out_w: int) -> np.ndarray:
+    if float_map.shape == (out_h, out_w):
+        return float_map.astype(np.float32, copy=False)
+    tensor = torch.from_numpy(float_map).unsqueeze(0).unsqueeze(0).float()
+    resized = F.interpolate(tensor, size=(out_h, out_w), mode="bilinear", align_corners=False)
+    return resized.squeeze(0).squeeze(0).cpu().numpy().astype(np.float32, copy=False)
+
+
+def _prepare_label_map(label: np.ndarray, out_h: int, out_w: int) -> np.ndarray:
+    arr = np.squeeze(np.asarray(label))
+    if arr.ndim == 3:
+        # Handle one-hot style label maps if they appear.
+        if arr.shape[0] <= 32 and arr.shape[1] > 32 and arr.shape[2] > 32:
+            arr = np.argmax(arr, axis=0)
+        elif arr.shape[-1] <= 32 and arr.shape[0] > 32 and arr.shape[1] > 32:
+            arr = np.argmax(arr, axis=-1)
+        else:
+            arr = arr[0]
+    while arr.ndim > 2:
+        arr = arr[0]
+    if arr.ndim != 2:
+        raise ValueError(f"gt_mask_or_label must resolve to 2D, got {arr.shape}")
+    if arr.shape != (out_h, out_w):
+        tensor = torch.from_numpy(arr.astype(np.float32)).unsqueeze(0).unsqueeze(0)
+        arr = F.interpolate(tensor, size=(out_h, out_w), mode="nearest").squeeze(0).squeeze(0).cpu().numpy()
+    return arr
+
+
+def save_weight_heatmap_overlay(
+    image_tensor,
+    weights_tensor,
+    gt_mask_or_label,
+    out_path_png,
+    out_path_npy,
+    normalize: bool = True,
+):
+    """
+    Save a BU-loss weight heatmap overlaid on the input image with GT boundaries.
+    """
+    if not _ensure_matplotlib():
+        raise RuntimeError("Matplotlib is not available. Please install it to save heatmaps.")
+    import matplotlib.pyplot as plt
+
+    image_np = _to_numpy_array(image_tensor)
+    weights_np = _to_numpy_array(weights_tensor)
+    gt_np = _to_numpy_array(gt_mask_or_label)
+
+    out_dir_png = os.path.dirname(out_path_png)
+    out_dir_npy = os.path.dirname(out_path_npy)
+    if out_dir_png:
+        os.makedirs(out_dir_png, exist_ok=True)
+    if out_dir_npy:
+        os.makedirs(out_dir_npy, exist_ok=True)
+
+    np.save(out_path_npy, weights_np)
+
+    image_rgb = _prepare_display_image(image_np)
+    out_h, out_w = image_rgb.shape[:2]
+
+    weight_map = _prepare_weight_map(weights_np)
+    weight_map = _resize_float_map(weight_map, out_h, out_w)
+    if normalize:
+        weight_map = _normalize_float_map(weight_map)
+
+    heat_rgb = plt.get_cmap("jet")(np.clip(weight_map, 0.0, 1.0))[..., :3]
+    overlay_alpha = 0.45
+    overlay_rgb = np.clip((1.0 - overlay_alpha) * image_rgb + overlay_alpha * heat_rgb, 0.0, 1.0)
+
+    gt_map = _prepare_label_map(gt_np, out_h, out_w)
+
+    dpi = 100
+    fig = plt.figure(figsize=(max(out_w, 1) / dpi, max(out_h, 1) / dpi), dpi=dpi)
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.imshow(overlay_rgb, interpolation="nearest")
+    _draw_gt_boundaries(ax, gt_map, color="white", linewidth=1.0, linestyle=":")
+    ax.set_axis_off()
+    fig.savefig(out_path_png, dpi=dpi)
+    plt.close(fig)
+
+
+def _sanitize_sample_id(sample_id: str) -> str:
+    return str(sample_id).replace("/", "-").replace("\\", "-").replace(" ", "_")
+
+
+def save_pending_weight_heatmaps(
+    should_save_heatmap_this_epoch: bool,
+    details,
+    pending_heatmap_samples,
+    case_names,
+    image_batch,
+    label_batch,
+    epoch_index: int,
+    iter_num: int,
+    heatmaps_dir: str,
+    logger=None,
+) -> int:
+    """
+    Save heatmaps for pending samples that appear in the current batch.
+    Returns how many samples were saved in this call.
+    """
+    if (
+        not should_save_heatmap_this_epoch
+        or details is None
+        or "weights" not in details
+        or not pending_heatmap_samples
+    ):
+        return 0
+
+    matched_batch_indices = []
+    if case_names:
+        for sample_index, sample_name in enumerate(case_names):
+            if sample_name in pending_heatmap_samples:
+                matched_batch_indices.append((sample_index, sample_name))
+
+    saved_count = 0
+    for sample_index, sample_name in matched_batch_indices:
+        sample_id_safe = _sanitize_sample_id(sample_name)
+        file_stem = f"epoch_{epoch_index:04d}_step_{iter_num:06d}_sample_{sample_id_safe}"
+        out_png = os.path.join(heatmaps_dir, f"{file_stem}.png")
+        out_npy = os.path.join(heatmaps_dir, f"{file_stem}.npy")
+        try:
+            save_weight_heatmap_overlay(
+                image_tensor=image_batch[sample_index],
+                weights_tensor=details["weights"][sample_index],
+                gt_mask_or_label=label_batch[sample_index],
+                out_path_png=out_png,
+                out_path_npy=out_npy,
+                normalize=True,
+            )
+            pending_heatmap_samples.discard(sample_name)
+            saved_count += 1
+            if logger is not None:
+                logger.info(
+                    "Saved BU-loss heatmap | epoch %d step %d sample %s -> %s",
+                    epoch_index,
+                    iter_num,
+                    sample_name,
+                    out_png,
+                )
+        except Exception:
+            if logger is not None:
+                logger.exception(
+                    "Failed to save BU-loss heatmap | epoch %d step %d sample %s",
+                    epoch_index,
+                    iter_num,
+                    sample_name,
+                )
+
+    return saved_count
+
+
+def _case_id_from_sample_name(sample_name: str) -> str:
+    name = str(sample_name)
+    lowered = name.lower()
+    for token in ("_slice", "-slice", "_frame", "-frame", "_z", "-z"):
+        idx = lowered.rfind(token)
+        if idx > 0:
+            return name[:idx]
+    match = re.match(r"^(.*?)[_-]\d+$", name)
+    if match:
+        return match.group(1)
+    return name
+
+
+def _slice_number_from_sample_name(sample_name: str):
+    name = str(sample_name)
+    lowered = name.lower()
+    match = re.search(r"(?:slice|frame|z)[_-]?(\d+)(?!.*\d)", lowered)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"(\d+)(?!.*\d)", name)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _evenly_spaced_positions(length: int, count: int):
+    if length <= 0:
+        return []
+    count = max(1, min(int(count), length))
+    indices = np.linspace(0, length - 1, num=count)
+    indices = np.round(indices).astype(int).tolist()
+    indices = [max(0, min(length - 1, idx)) for idx in indices]
+    ordered = []
+    seen = set()
+    for idx in indices:
+        if idx not in seen:
+            ordered.append(idx)
+            seen.add(idx)
+    if len(ordered) < count:
+        for idx in range(length):
+            if idx not in seen:
+                ordered.append(idx)
+                seen.add(idx)
+                if len(ordered) >= count:
+                    break
+    return ordered[:count]
+
+
+def _get_dataset_sample_names(dataset):
+    if hasattr(dataset, "sample_list"):
+        return [str(name).strip() for name in dataset.sample_list]
+    if hasattr(dataset, "image_files"):
+        sample_names = []
+        for image_path in dataset.image_files:
+            filename = os.path.basename(str(image_path))
+            sample_names.append(os.path.splitext(filename)[0])
+        return sample_names
+    return []
+
+
+def _select_evenly_spaced_samples(sample_names, count):
+    if not sample_names:
+        return []
+    sortable = []
+    for name in sample_names:
+        slice_number = _slice_number_from_sample_name(name)
+        if slice_number is None:
+            sortable.append((1, str(name), str(name)))
+        else:
+            sortable.append((0, int(slice_number), str(name)))
+    sortable.sort()
+    ordered_names = [entry[2] for entry in sortable]
+    chosen_positions = _evenly_spaced_positions(len(ordered_names), count)
+    return [ordered_names[pos] for pos in chosen_positions]
+
+
+def _resolve_heatmap_sample_targets(dataset_sample_names, anchor_sample_name: str, num_heatmap_slices: int):
+    case_id = _case_id_from_sample_name(anchor_sample_name)
+    case_samples = [name for name in dataset_sample_names if _case_id_from_sample_name(name) == case_id]
+    if not case_samples:
+        return [anchor_sample_name]
+    selected = _select_evenly_spaced_samples(case_samples, num_heatmap_slices)
+    return selected if selected else [anchor_sample_name]
+
+
+def _should_save_heatmap_epoch(epoch_index: int) -> bool:
+    # Baseline at epoch 1, then every 70 epochs (70, 140, 210, ...).
+    return epoch_index == 1 or (epoch_index % 70 == 0)
 
 
 def _clamp_overlay_slices(num_slices_to_overlay: Optional[int]) -> Optional[int]:
