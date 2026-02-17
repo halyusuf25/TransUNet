@@ -72,10 +72,26 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     dice_loss = DiceLoss(num_classes)
     bu_loss = BULoss(loss_option=args.buloss_option, args=args)
     bu_loss = bu_loss.to(next(model.parameters()).device)
-    optimizer_params = list(model.parameters())
-    if args.use_bu_loss:
-        optimizer_params.extend(list(bu_loss.parameters()))
-    optimizer = optim.SGD(optimizer_params, lr=base_lr, momentum=0.9, weight_decay=0.0001)
+    optimizer_param_groups = [
+        {
+            "params": list(model.parameters()),
+            "lr": base_lr,
+            "momentum": 0.9,
+            "weight_decay": 0.0001,
+            "lr_mult": 1.0,
+        },
+    ]
+    if args.use_bu_loss and args.learn_tau:
+        optimizer_param_groups.append(
+            {
+                "params": list(bu_loss.parameters()),
+                "lr": base_lr * 0.1,
+                "momentum": 0.9,
+                "weight_decay": 0.0,
+                "lr_mult": 0.1,
+            }
+        )
+    optimizer = optim.SGD(optimizer_param_groups, lr=base_lr, momentum=0.9, weight_decay=0.0001)
     writer = SummaryWriter(args.tensorboard_run_dir)
     logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
     is_primary_process = _is_primary_process()
@@ -180,7 +196,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
             optimizer.step()
             lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
             for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_
+                param_group['lr'] = lr_ * float(param_group.get('lr_mult', 1.0))
 
             iter_num = iter_num + 1
             saved_heatmap_count_this_epoch += save_pending_weight_heatmaps(
@@ -323,7 +339,7 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
             optimizer.step()
             lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
             for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_
+                param_group['lr'] = lr_ * float(param_group.get('lr_mult', 1.0))
 
             iter_num = iter_num + 1
             if args.verbose and iter_num >= 2:
