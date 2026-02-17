@@ -59,6 +59,7 @@ class Attention(nn.Module):
     def __init__(self, config, vis):
         super(Attention, self).__init__()
         self.vis = vis
+        self.args = config
         self.num_attention_heads = config.transformer["num_heads"] # default = 12
         self.attention_head_size = int(config.hidden_size / self.num_attention_heads) #default = 64
         self.all_head_size = self.num_attention_heads * self.attention_head_size # default = 768
@@ -82,19 +83,31 @@ class Attention(nn.Module):
         mixed_query_layer = self.query(hidden_states)
         mixed_key_layer = self.key(hidden_states)
         mixed_value_layer = self.value(hidden_states)
-
+        if self.args.verbose:
+            print(f"Attention input hidden_states shape: {hidden_states.shape}")
+            print(f"Query, Key, Value shapes after linear projection: {mixed_query_layer.shape}, {mixed_key_layer.shape}, {mixed_value_layer.shape}")
+        
         query_layer = self.transpose_for_scores(mixed_query_layer)
         key_layer = self.transpose_for_scores(mixed_key_layer)
         value_layer = self.transpose_for_scores(mixed_value_layer)
-
+        if self.args.verbose:
+            print(f"Query, Key, Value shapes after transpose for scores: {query_layer.shape}, {key_layer.shape}, {value_layer.shape}")
+            
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        if self.args.verbose:
+            print(f"Raw attention scores shape (before scaling): {attention_scores.shape}")
+            
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         attention_probs = self.softmax(attention_scores)
         # weights = attention_probs if self.vis else None
         weights = attention_probs #always output attention score
         attention_probs = self.attn_dropout(attention_probs)
 
+        if self.args.verbose:
+            print(f"Attention probabilities shape: {attention_probs.shape}")
         context_layer = torch.matmul(attention_probs, value_layer)
+        if self.args.verbose:
+            print(f"Context layer shape (before merging heads): {context_layer.shape}")
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(*new_context_layer_shape)
