@@ -103,13 +103,19 @@ class TopkAttention(nn.Module):
         self.attn_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
         self.proj_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
 
-    def _compute_significance_score(self,
-        A: torch.Tensor,  # (B, H, N, N)  attention AFTER softmax
+    def _compute_significance_score(
+        self,
+        A: torch.Tensor,  # (B, H, N, N) attention AFTER softmax
         V: torch.Tensor,  # (B, H, N, Dh)
         eps: float = 1e-12,
+        v_norm_mode: str = "mean",  # "mean" or "concat"
     ) -> torch.Tensor:
         """
         Step B only (no CLS): compute normalized significance scores S over N tokens.
+
+        v_norm_mode:
+        - "mean":  n_{b,h,j} = ||V_{b,h,j}||_2, then w = mean_h(a*n)
+        - "concat": n_{b,j}  = ||concat_h(V_{b,h,j})||_2, then w = a_bar * n
 
         Returns:
         S: (B, N) where S[b].sum() == 1
@@ -117,24 +123,47 @@ class TopkAttention(nn.Module):
         if A.dim() != 4 or V.dim() != 4:
             raise ValueError(f"Expected A and V to be 4D. Got A={A.shape}, V={V.shape}")
         if A.shape[:3] != V.shape[:3] or A.shape[2] != A.shape[3]:
-            raise ValueError(f"Shape mismatch. A={A.shape} must be (B,H,N,N) and V={V.shape} must be (B,H,N,Dh).")
+            raise ValueError(
+                f"Shape mismatch. A={A.shape} must be (B,H,N,N) and V={V.shape} must be (B,H,N,Dh)."
+            )
+
+        B, H, N, _ = A.shape
+        Dh = V.shape[-1]
 
         # a_{b,h,j} = mean_q A_{b,h,q,j}  -> (B,H,N)
         a = A.mean(dim=2)
 
-        # n_{b,h,j} = ||V_{b,h,j}||_2 -> (B,H,N)
-        n = torch.linalg.vector_norm(V, ord=2, dim=-1)
+        if v_norm_mode == "mean":
+            # n_{b,h,j} = ||V_{b,h,j}||_2 -> (B,H,N)
+            n = torch.linalg.vector_norm(V, ord=2, dim=-1)
 
-        # w_{b,h,j} = a * n  -> (B,H,N)
-        w = (a * n).clamp(min=0.0)
+            # w_{b,h,j} = a * n -> (B,H,N)
+            w = (a * n).clamp(min=0.0)
 
-        # aggregate heads -> (B,N)
-        w = w.mean(dim=1)
+            # aggregate heads -> (B,N)
+            w = w.mean(dim=1)
+
+        elif v_norm_mode == "concat":
+            # aggregate heads for attention weights -> (B,N)
+            a_bar = a.mean(dim=1)
+
+            # concat heads for values: (B,H,N,Dh) -> (B,N,H,Dh) -> (B,N,H*Dh)
+            V_cat = V.permute(0, 2, 1, 3).reshape(B, N, H * Dh)
+
+            # n_{b,j} = ||concat_h(V_{b,h,j})||_2 -> (B,N)
+            n_cat = torch.linalg.vector_norm(V_cat, ord=2, dim=-1)
+
+            # w_{b,j} = a_bar * n_cat -> (B,N)
+            w = (a_bar * n_cat).clamp(min=0.0)
+
+        else:
+            raise ValueError("v_norm_mode must be either 'mean' or 'concat'")
 
         # normalize over tokens -> (B,N)
         Z = w.sum(dim=-1, keepdim=True).clamp(min=eps)
         S = w / Z
         return S
+
 
 
 
