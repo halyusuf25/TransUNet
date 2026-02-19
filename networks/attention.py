@@ -69,77 +69,150 @@ class SHSAttention(nn.Module):
         
         return output, weights
     
-    
-    
-
 class TopkAttention(nn.Module):
-    """Top-k token selection attention without assuming a CLS token.
 
-    - Computes standard multi-head attention to get attended features `x_attn`.
-    - Scores tokens by the average attention they receive (key centrality):
-      mean over heads and queries of attn_prob to each key.
-    - Selects top-k tokens globally from the full sequence (no CLS special case).
-    - Returns both raw indices `idx` (B, K) and broadcasted `index` (B, K, C)
-      for convenient `torch.gather` on the token dimension.
-    """
-    def __init__(self, config, vis, dim, qkv_bias=False, keep_rate=0.5):
+    def __init__(
+        self,
+        config,
+        embed_dim: int,
+        keep_rate: float = 0.5,
+        min_tokens: int = 10,
+        qkv_bias: bool = True,
+    ):
         super().__init__()
-        self.vis = vis
-        self.num_heads = config.transformer["num_heads"]
-        head_dim = dim // self.num_heads
-        self.scale = head_dim ** -0.5
+        
+        self.args = config
+        self.num_heads = int(config.transformer["num_heads"])
+        if embed_dim % self.num_heads != 0:
+            raise ValueError(f"embed_dim ({embed_dim}) must be divisible by num_heads ({self.num_heads}).")
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        if keep_rate is None:
+            keep_rate = float(getattr(config, "topk_attn", 1.0))
+        if not (0.0 < keep_rate <= 1.0):
+            raise ValueError(f"keep_rate must be in (0, 1], got {keep_rate}.")
+
+        self.embed_dim = embed_dim
+        self.head_dim = embed_dim // self.num_heads
+        self.scale = self.head_dim ** -0.5
+        self.keep_rate = float(keep_rate)
+        self.min_tokens = max(1, int(min_tokens))
+
+        self.qkv = nn.Linear(embed_dim, 3 * embed_dim, bias=qkv_bias)
+        self.proj = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+
         self.attn_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
-        self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
-        self.keep_rate = keep_rate
-        assert 0 < keep_rate <= 1.0, f"keep_rate must > 0 and <= 1.0, got {keep_rate}"
 
-    def forward(self, x, keep_rate=None, tokens=None):
-        # if keep_rate is None:
-        #     keep_rate = self.keep_rate
+    def _compute_significance_score(self,
+        A: torch.Tensor,  # (B, H, N, N)  attention AFTER softmax
+        V: torch.Tensor,  # (B, H, N, Dh)
+        eps: float = 1e-12,
+    ) -> torch.Tensor:
+        """
+        Step B only (no CLS): compute normalized significance scores S over N tokens.
 
-        B, N, C = x.shape
-        # QKV: [B, N, 3, H, C/H] -> [3, B, H, N, C/H]
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
+        Returns:
+        S: (B, N) where S[b].sum() == 1
+        """
+        if A.dim() != 4 or V.dim() != 4:
+            raise ValueError(f"Expected A and V to be 4D. Got A={A.shape}, V={V.shape}")
+        if A.shape[:3] != V.shape[:3] or A.shape[2] != A.shape[3]:
+            raise ValueError(f"Shape mismatch. A={A.shape} must be (B,H,N,N) and V={V.shape} must be (B,H,N,Dh).")
 
-        # Attention probabilities
-        attn_logits = (q @ k.transpose(-2, -1)) * self.scale            # [B, H, N, N]
-        attn_prob = attn_logits.softmax(dim=-1)                          # [B, H, N, N]
-        # weights = attn_prob if self.vis else None
-        weights = attn_prob
-        attn = self.attn_drop(attn_prob)
+        # a_{b,h,j} = mean_q A_{b,h,q,j}  -> (B,H,N)
+        a = A.mean(dim=2)
 
-        # Attention output
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
+        # n_{b,h,j} = ||V_{b,h,j}||_2 -> (B,H,N)
+        n = torch.linalg.vector_norm(V, ord=2, dim=-1)
 
-        # Default: keep all tokens
-        remain_tokens = N
+        # w_{b,h,j} = a * n  -> (B,H,N)
+        w = (a * n).clamp(min=0.0)
 
-        # Prune only if keep_rate < 1 or an explicit token count is provided
-        if (self.keep_rate < 1.0) or (tokens is not None):
-            remain_tokens = math.ceil(self.keep_rate * N) if tokens is None else tokens
-            # Clamp to valid range
-            remain_tokens = max(1, min(remain_tokens, N))
-            if remain_tokens == N:
-                return x, None, None, None, remain_tokens, weights
+        # aggregate heads -> (B,N)
+        w = w.mean(dim=1)
 
-            # CLS-free scoring: average attention received by each key across all queries and heads
-            # attn_prob: [B, H, N_q, N_k] = [B, H, N, N]
-            # 1) mean over heads -> [B, N, N]; 2) mean over queries -> [B, N]
-            key_scores = attn_prob.mean(dim=1).mean(dim=1)  # [B, N]
+        # normalize over tokens -> (B,N)
+        Z = w.sum(dim=-1, keepdim=True).clamp(min=eps)
+        S = w / Z
+        return S
 
-            # Top-k token indices per batch (absolute in the current sequence)
-            _, idx = torch.topk(key_scores, remain_tokens, dim=1, largest=True, sorted=True)  # [B, K]
-            # Broadcast indices for torch.gather on x (B, N, C) along dim=1
-            index = idx.unsqueeze(-1).expand(-1, -1, C)  # [B, K, C]
-            return x, index, idx, key_scores, remain_tokens, weights
 
-        return x, None, None, None, remain_tokens, weights
+
+    def _num_tokens_to_keep(self, N: int) -> int:
+        # keep at least one token and enforce a configurable lower bound.
+        k_from_rate = int(math.ceil(self.keep_rate * N))
+        return min(N, max(self.min_tokens, k_from_rate))
+
+    @staticmethod
+    def _gather_topk_queries(attn: torch.Tensor, topk_idx: torch.Tensor) -> torch.Tensor:
+        # attn: [B, H, N, N], topk_idx: [B, k] -> gathered_attn: [B, H, k, N]
+        B, H, _, N = attn.shape
+        k = topk_idx.shape[1]
+        gather_index = topk_idx[:, None, :, None].expand(B, H, k, N)
+        return torch.gather(attn, dim=2, index=gather_index)
+
+    def _gumbel_topk(self, x: torch.Tensor, K: int = 8) -> torch.Tensor:
+        if K <= 0:
+            raise ValueError(f"K must be positive, got {K}.")
+        if K > x.shape[-1]:
+            raise ValueError(f"K ({K}) cannot exceed x dimension ({x.shape[-1]}).")
+
+        loc =torch.zeros_like(x, dtype=torch.float32)
+        scale = torch.ones_like(x, dtype=torch.float32)
+        gumbel = torch.distributions.Gumbel(loc, scale)
+        scores = torch.log(x) + gumbel.sample().to(dtype=x.dtype)
+        return scores.topk(K, dim=-1, largest=True, sorted=True).indices
+
+    def forward(self, x: torch.Tensor, return_indices: bool = False):
+
+        if x.dim() != 3:
+            raise ValueError(f"Expected x to be [B, N, D], got {tuple(x.shape)}")
+
+        B, N, D = x.shape
+        if D != self.embed_dim:
+            raise ValueError(f"Expected embedding dim D={self.embed_dim}, got {D}.")
+
+        # qkv: [B, N, 3D] -> [3, B, H, N, Dh], where Dh = D / H.
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)  # each: [B, H, N, Dh]
+
+        # Full attention map over all query-key token pairs: [B, H, N, N].
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+        if attn.shape != (B, self.num_heads, N, N):
+            raise RuntimeError(f"Expected attn shape {(B, self.num_heads, N, N)}, got {tuple(attn.shape)}.")
+
+        # Token importance score from attention, aggregated over heads and queries: [B, N].
+        token_score = attn.mean(dim=1).mean(dim=1)
+        if token_score.shape != (B, N):
+            raise RuntimeError(f"Expected token_score shape {(B, N)}, got {tuple(token_score.shape)}.")
+
+        # Select top-k query tokens per sample.
+        k_keep = self._num_tokens_to_keep(N)
+        if self.args.use_gumbel_topk:
+            normalized_token_scores = self._compute_significance_score(attn, v)  # (B, N)
+            topk_idx = self._gumbel_topk(normalized_token_scores, K=k_keep)
+        else:
+            topk_idx = token_score.topk(k_keep, dim=-1, largest=True, sorted=True).indices  # [B, k]
+
+        # Reduce attention map on query dimension only: [B, H, N, N] -> [B, H, k, N].
+        topk_attn = self._gather_topk_queries(attn, topk_idx)
+        if topk_attn.shape != (B, self.num_heads, k_keep, N):
+            raise RuntimeError(
+                f"Expected reduced attn shape {(B, self.num_heads, k_keep, N)}, got {tuple(topk_attn.shape)}."
+            )
+
+        # Apply reduced attention to all value tokens: [B, H, k, N] @ [B, H, N, Dh] -> [B, H, k, Dh].
+        y = topk_attn @ v
+
+        # Merge heads back: [B, H, k, Dh] -> [B, k, D], then output projection.
+        y = y.transpose(1, 2).contiguous().reshape(B, k_keep, D)
+        y = self.proj_drop(self.proj(y))
+
+        if return_indices:
+            return y, topk_attn, topk_idx
+        return y, topk_attn
 
 
 class AdaptiveSpatialAttention(nn.Module):
@@ -259,4 +332,3 @@ class AdaptiveSpatialAttention(nn.Module):
             print(f"[AdaptiveSpatialAttention] forward output shape: {updated.shape}")
         # return updated, idx_return, attn_weights
         return updated, weights
-

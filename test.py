@@ -67,6 +67,8 @@ parser.add_argument('--use_alternate_shsa', action='store_true',
                     help='whether to use alternate partial attention')
 parser.add_argument('--topk_attn', type=float, default=0.0, 
                     help='if >0.0, use top-k attention (fraction of k) instead of full attention (mutually exclusive with --use_shsa)')
+parser.add_argument('--use_gumbel_topk', action='store_true',
+                    help='whether to use Gumbel-Softmax sampling for Top-k attention (it has to be used with --topk_attn > 0.0)')
 parser.add_argument('--adaptive_attn_threshold', type=float,
                     default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
 parser.add_argument('--benchmark_dict', type=str, default='benchmark/', help='directory to save benchmark results')
@@ -271,10 +273,14 @@ if __name__ == "__main__":
     if args.use_shsa and args.topk_attn > 0.0:
         raise ValueError("The --use_shsa flag is mutually exclusive with --topk_attn > 0.0.")
     
+    if args.use_gumbel_topk and args.topk_attn <= 0.0:
+        raise ValueError("The --use_gumbel_topk flag requires --topk_attn to be greater than 0.0.")
+    
     if args.adaptive_attn_threshold > 0.0 and (args.use_shsa or args.topk_attn > 0.0):
         raise ValueError("The --adaptive_attn_threshold argument is mutually exclusive with --use_shsa and --topk_attn > 0.0.")
     
     config_vit.topk_attn = args.topk_attn
+    config_vit.use_gumbel_topk = args.use_gumbel_topk
     config_vit.use_shsa = args.use_shsa
     config_vit.use_alternate_shsa = args.use_alternate_shsa
     config_vit.adaptive_attn_threshold = args.adaptive_attn_threshold
@@ -495,10 +501,11 @@ if __name__ == "__main__":
         test_loader=test_loader_bench,
     )
     
-    os.makedirs(args.benchmark_dict, exist_ok=True)
+    benchmark_dir = args.benchmark_dict + '_' + args.dataset
+    os.makedirs(benchmark_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     date, time = timestamp.split("_")
-    with open(os.path.join(args.benchmark_dict, f"{args.ckpt}_{args.img_size}_{timestamp}.json"), "w") as f:
+    with open(os.path.join(benchmark_dir, f"{args.ckpt}_{args.img_size}_{timestamp}.json"), "w") as f:
         accuracy_for_json = {k: _make_json_safe(v) for k, v in performance.items()}
         metrics_for_json = {k: _make_json_safe(v) for k, v in results.metrics.items()}
         notes_for_json = {k: _make_json_safe(v) for k, v in results.notes.items()}

@@ -100,7 +100,7 @@ class Attention(nn.Module):
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         attention_probs = self.softmax(attention_scores)
         # weights = attention_probs if self.vis else None
-        weights = attention_probs #always output attention score
+        # weights = attention_probs #always output attention score
         attention_probs = self.attn_dropout(attention_probs)
 
         if self.args.verbose:
@@ -113,7 +113,7 @@ class Attention(nn.Module):
         context_layer = context_layer.view(*new_context_layer_shape)
         attention_output = self.out(context_layer)
         attention_output = self.proj_dropout(attention_output)
-        return attention_output, weights
+        return attention_output, attention_probs
 
 class Mlp(nn.Module):
     def __init__(self, config):
@@ -255,25 +255,34 @@ class Block(nn.Module):
          
         if self.use_shsa:
             self.attn = SHSAttention(config, vis, alternate_partial_attn=alternate_partial_attn)
-        # elif self.topk_attn > 0.0:
-        #     self.attn = TopkAttention(config, vis, config.hidden_size, keep_rate=self.topk_attn)
+        elif self.topk_attn > 0.0:
+            self.attn = TopkAttention(config, config.hidden_size, keep_rate=self.topk_attn)
         elif self.args.adaptive_attn_threshold > 0.0:
             self.attn = AdaptiveSpatialAttention(config, alpha=self.args.adaptive_attn_threshold)
         else:
             self.attn = Attention(config, vis)    
 
-    def forward(self, x):
+    def forward(self, x, return_indices=False):
         # Pre-norm
         if self.args.verbose:
             print(f"Block input x shape: {x.shape}")
         # Multi-head self-attention with residual
         h = x
         x = self.attention_norm(x)
-        x, weights = self.attn(x)
+        if self.args.topk_attn > 0.0:
+            # x: [B, N, D] -> [B, k, D], weights: [B, H, k, N], topk_idx: [B, k]
+            x, weights, topk_idx = self.attn(x, return_indices=True)
+
+            # Residual must be reduced to the same selected tokens: [B, k, D]
+            gather_index = topk_idx.unsqueeze(-1).expand(-1, -1, h.size(-1))
+            h = torch.gather(h, dim=1, index=gather_index)
+        else:
+            x, weights = self.attn(x)
+
         x = x + h
         if self.args.verbose:
             print(f"Block output x shape after attention and residual: {x.shape}")
-            print(f"Block attention weights shape: {weights.shape}")
+            print(f"Block attention score shape: {weights.shape}")
         # FFN with residual
         h = x
         x = self.ffn_norm(x)
@@ -281,6 +290,9 @@ class Block(nn.Module):
         x = x + h
         if self.args.verbose:
             print(f"Block output x shape after FFN and residual: {x.shape}")
+        
+        if return_indices:
+            return x, weights, topk_idx if self.args.topk_attn > 0.0 else None
         return x, weights
 
     def load_from(self, weights, n_block):
@@ -353,11 +365,7 @@ class Encoder(nn.Module):
         # layer_block_id = 0
         if self.args.verbose:
             print(f"input shape for the Encoder Transformer Layers: {hidden_states.shape}")
-            if self.args.topk_attn > 0.0:
-                print(f"Top-k attention with keep rate {self.args.topk_attn} is enabled.")
-        
-        topk_idx = None  # Initialize idx for pruning
-        
+
         se_layers = getattr(self, "SELayer", None)
         drop_se = getattr(self.args, "drop_se_block", False)
         use_se = se_layers is not None and not drop_se
@@ -370,32 +378,17 @@ class Encoder(nn.Module):
             if self.args.verbose:
                 print(f"Encoder layer#{layer_block_id} input hidden_states shape: {hidden_states.shape}")
 
-            if topk_idx is not None:
-                # Prune tokens consistently for residual and attn output
-                hidden_states = torch.gather(hidden_states, dim=1, index=topk_idx)      # [B, K, C]
-
-            hidden_states, weights = layer_block(hidden_states)
+            if self.args.topk_attn > 0.0:
+                hidden_states, attn, kept_indices = layer_block(hidden_states, return_indices=True)
+            else:
+                hidden_states, attn = layer_block(hidden_states)
             
-
             if self.args.verbose:
                 print(f"Encoder layer#{layer_block_id} output hidden_states shape: {hidden_states.shape}")
-                print(f"Encoder layer#{layer_block_id} attention weights shape: {weights.shape}")
+                print(f"Encoder layer#{layer_block_id} attention weights shape: {attn.shape}")
 
             
-            attn_weights.append(weights)
-            
-            # # Compose kept indices across pruning layers
-            # if idx is not None:
-            #     if kept_indices_abs is None:
-            #         kept_indices_abs = idx
-            #     else:
-            #         kept_indices_abs = torch.gather(kept_indices_abs, dim=1, index=idx)
-            
-            # layer_block_id += 1
-            if self.args.topk_attn > 0.0 and layer_block_id == 1: # only apply top-k pruning at the first layer
-                kept_indices, topk_idx = topk_indices(hidden_states, weights, self.args.topk_attn)
-            else:
-                topk_idx = None
+            attn_weights.append(attn)
             
             if use_se and se_layer is not None:
                 # se_in = hidden_states.transpose(1, 2).unsqueeze(2)  # [B, C, 1, N]
@@ -408,7 +401,7 @@ class Encoder(nn.Module):
                     print(f"Encoder layer#{layer_block_id} hidden_states shape after SE block: {h_se.shape}")
                     
                 se_scale.append(scale)
-            
+        
         encoded = self.encoder_norm(hidden_states)
         return encoded, attn_weights, kept_indices, se_scale
     
@@ -647,8 +640,8 @@ class VisionTransformer(nn.Module):
         # If pruning occurred, scatter tokens back to the original grid length
         if kept_indices is not None:
             B, K, C = x.size()
-            total_n = orig_n_patches
-            full = x.new_zeros(B, total_n, C)
+            # total_n = orig_n_patches
+            full = x.new_zeros(B, orig_n_patches, C)
             scatter_index = kept_indices.long().unsqueeze(-1).expand(-1, -1, C)  # (B, K, C)
             full.scatter_(1, scatter_index, x)
             x = self.decoder(full, features)
