@@ -102,13 +102,13 @@ class TopkAttention(nn.Module):
 
         self.attn_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
         self.proj_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
-
+    
     def _compute_significance_score(
         self,
         A: torch.Tensor,  # (B, H, N, N) attention AFTER softmax
         V: torch.Tensor,  # (B, H, N, Dh)
         eps: float = 1e-12,
-        v_norm_mode: str = "mean",  # "mean" or "concat"
+        v_norm_mode: str = "concat",  # "mean" or "concat"
     ) -> torch.Tensor:
         """
         Step B only (no CLS): compute normalized significance scores S over N tokens.
@@ -242,6 +242,214 @@ class TopkAttention(nn.Module):
         if return_indices:
             return y, topk_attn, topk_idx
         return y, topk_attn
+
+
+class ATSAttention(nn.Module):
+
+    def __init__(
+        self,
+        config,
+        embed_dim: int,
+        keep_rate: float = None,
+        K: int = None,
+        min_tokens: int = 10,
+        qkv_bias: bool = True,
+        eps: float = 1e-12,
+    ):
+        super().__init__()
+
+        self.args = config
+        self.num_heads = int(config.transformer["num_heads"])
+        if embed_dim % self.num_heads != 0:
+            raise ValueError(f"embed_dim ({embed_dim}) must be divisible by num_heads ({self.num_heads}).")
+
+        if keep_rate is None and K is None:
+            raise ValueError("At least one of keep_rate or K must be specified.")
+        if keep_rate is not None and not (0.0 < float(keep_rate) <= 1.0):
+            raise ValueError(f"keep_rate must be in (0, 1], got {keep_rate}.")
+        if K is not None and int(K) <= 0:
+            raise ValueError(f"K must be a positive integer, got {K}.")
+
+        self.embed_dim = embed_dim
+        self.head_dim = embed_dim // self.num_heads
+        self.scale = self.head_dim ** -0.5
+        self.keep_rate = float(keep_rate) if keep_rate is not None else None
+        self.K = int(K) if K is not None else None
+        self.min_tokens = max(10, int(min_tokens))
+        self.eps = float(eps)
+
+        self.qkv = nn.Linear(embed_dim, 3 * embed_dim, bias=qkv_bias)
+        self.proj = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+
+        self.attn_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
+        self.proj_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
+
+    def _num_tokens_to_keep(self, N: int) -> int:
+        if N <= 0:
+            raise ValueError(f"N must be positive, got {N}.")
+
+        K = self.K
+        keep_rate = self.keep_rate
+
+        if K is not None:
+            k_keep = int(K)
+        elif keep_rate is not None:
+            if not (0.0 < float(keep_rate) <= 1.0):
+                raise ValueError(f"keep_rate must be in (0, 1], got {keep_rate}.")
+            k_keep = int(math.floor(float(keep_rate) * N + 0.5))
+        else:
+            raise ValueError("Either K or keep_rate must be specified.")
+        
+        k_keep = max(self.min_tokens, k_keep)
+        k_keep = min(N, k_keep)
+        return k_keep
+
+    def _normalize_scores(self, r: torch.Tensor) -> torch.Tensor:
+        if r.dim() != 2:
+            raise ValueError(f"Expected r to be [B, N], got {tuple(r.shape)}.")
+
+        B, N = r.shape
+        if N <= 0:
+            raise ValueError("Token dimension N must be > 0.")
+
+        r = torch.nan_to_num(r, nan=0.0, posinf=0.0, neginf=0.0).clamp(min=0.0)
+        sum_r = r.sum(dim=-1, keepdim=True)
+        S = r / sum_r.clamp(min=self.eps)
+        S = torch.nan_to_num(S, nan=0.0, posinf=0.0, neginf=0.0)
+
+        sum_s = S.sum(dim=-1, keepdim=True)
+        degenerate = (~torch.isfinite(sum_r)) | (sum_r <= self.eps) | (~torch.isfinite(sum_s)) | (sum_s <= self.eps)
+        if degenerate.any():
+            uniform = torch.full_like(S, 1.0 / float(N))
+            S = torch.where(degenerate.expand_as(S), uniform, S)
+
+        S = S / S.sum(dim=-1, keepdim=True).clamp(min=self.eps)
+        return S
+
+    def score_assignment_step(self, attn: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """
+        No-CLS ATS adaptation.
+        A: [B, H, N, N], V: [B, H, N, Dh] -> S: [B, N]
+        """
+        if attn.dim() != 4 or v.dim() != 4:
+            raise ValueError(f"Expected attn and v to be 4D. Got attn={attn.shape}, v={v.shape}")
+        if attn.shape[:3] != v.shape[:3] or attn.shape[2] != attn.shape[3]:
+            raise ValueError(f"Shape mismatch. attn={attn.shape}, v={v.shape}")
+
+        a_bar = attn.mean(dim=2)  # [B, H, N]
+        m = torch.linalg.vector_norm(v, ord=2, dim=-1)  # [B, H, N]
+        r = (a_bar * m).sum(dim=1)  # [B, N]
+        return self._normalize_scores(r)
+
+    def inverse_transform_sampling(self, scores: torch.Tensor, K: int):
+        """
+        Deterministic inverse transform sampling on the CDF of scores.
+        Returns padded unique indices and validity mask:
+        - sampled_idx: [B, K_max] (torch.long)
+        - sampled_mask: [B, K_max] (bool), True for valid sampled entries
+        """
+        if scores.dim() != 2:
+            raise ValueError(f"Expected scores to be [B, N], got {tuple(scores.shape)}.")
+        if K <= 0:
+            raise ValueError(f"K must be positive, got {K}.")
+
+        B, N = scores.shape
+        if N <= 0:
+            raise ValueError("Token dimension N must be > 0.")
+
+        if K >= N:
+            idx = torch.arange(N, device=scores.device, dtype=torch.long).unsqueeze(0).expand(B, N)
+            mask = torch.ones(B, N, device=scores.device, dtype=torch.bool)
+            return idx, mask
+
+        scores = self._normalize_scores(scores)
+        cdf = torch.cumsum(scores, dim=-1).clamp_(0.0, 1.0)
+        cdf[:, -1] = 1.0
+
+        steps = torch.arange(1, K + 1, device=scores.device, dtype=scores.dtype)
+        u = ((2.0 * steps) - 1.0) / (2.0 * K)
+        u = u.unsqueeze(0).expand(B, K).contiguous()
+
+        sampled = torch.searchsorted(cdf, u, right=False).clamp_(min=0, max=N - 1).long()
+
+        unique_indices = [torch.unique(sampled[b], sorted=True) for b in range(B)]
+        max_k = max(idx.numel() for idx in unique_indices)
+        max_k = max(1, max_k)
+
+        sampled_idx = torch.zeros(B, max_k, device=scores.device, dtype=torch.long)
+        sampled_mask = torch.zeros(B, max_k, device=scores.device, dtype=torch.bool)
+        for b, idx in enumerate(unique_indices):
+            if idx.numel() == 0:
+                sampled_idx[b, 0] = 0
+                sampled_mask[b, 0] = True
+                continue
+            sampled_idx[b, : idx.numel()] = idx
+            sampled_mask[b, : idx.numel()] = True
+
+        return sampled_idx, sampled_mask
+
+    @staticmethod
+    def _gather_queries(attn: torch.Tensor, sampled_idx: torch.Tensor) -> torch.Tensor:
+        # attn: [B, H, N, N], sampled_idx: [B, K_max] -> [B, H, K_max, N]
+        B, H, _, N = attn.shape
+        k_max = sampled_idx.shape[1]
+        gather_index = sampled_idx[:, None, :, None].expand(B, H, k_max, N)
+        return torch.gather(attn, dim=2, index=gather_index)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_indices: bool = False,
+    ):
+        if x.dim() != 3:
+            raise ValueError(f"Expected x to be [B, N, D], got {tuple(x.shape)}.")
+
+        B, N, D = x.shape
+        if D != self.embed_dim:
+            raise ValueError(f"Expected embedding dim D={self.embed_dim}, got {D}.")
+
+        k_keep = self._num_tokens_to_keep(N)
+        # qkv: [B, N, 3D] -> [3, B, H, N, Dh]
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        if self.args.verbose:
+            print(f"[ATSAttention] Input x shape: {x.shape}, keeping top {k_keep} tokens per sample.")
+            print(f"[ATSAttention] q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)  # [B, H, N, N]
+
+        if k_keep >= N:
+            if self.args.verbose:
+                print(f"[ATSAttention] keep_rate results in keeping all tokens (k_keep={k_keep} >= N={N}). Using full attention.")
+            full_attn = self.attn_drop(attn)
+            y = full_attn @ v
+            y = y.transpose(1, 2).contiguous().reshape(B, N, D)
+            y = self.proj_drop(self.proj(y))
+
+            idx = torch.arange(N, device=x.device, dtype=torch.long).unsqueeze(0).expand(B, N)
+            mask = torch.ones(B, N, device=x.device, dtype=torch.bool)
+            if return_indices:
+                # return y, full_attn, idx, mask
+                return y, full_attn, idx
+            return y, full_attn
+
+        scores = self.score_assignment_step(attn, v)  # [B, N]
+        sampled_idx, sampled_mask = self.inverse_transform_sampling(scores, k_keep)
+
+        attn = self.attn_drop(attn)
+        attn_s = self._gather_queries(attn, sampled_idx)  # [B, H, K_max, N]
+        attn_s = attn_s * sampled_mask[:, None, :, None].to(attn_s.dtype)
+
+        y = attn_s @ v  # [B, H, K_max, Dh]
+        y = y.transpose(1, 2).contiguous().reshape(B, sampled_idx.shape[1], D)
+        y = self.proj_drop(self.proj(y))
+        y = y * sampled_mask.unsqueeze(-1).to(y.dtype)
+
+        if return_indices:
+            # return y, attn_s, sampled_idx, sampled_mask
+            return y, attn_s, sampled_idx
+        return y, attn_s
 
 
 class AdaptiveSpatialAttention(nn.Module):

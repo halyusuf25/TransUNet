@@ -19,7 +19,7 @@ from scipy import ndimage
 from . import vit_seg_configs as configs
 from .vit_seg_modeling_resnet_skip import ResNetV2
 
-from .attention import SHSAttention, TopkAttention, AdaptiveSpatialAttention
+from .attention import SHSAttention, TopkAttention, AdaptiveSpatialAttention, ATSAttention
 from .swin_transformer_official import SwinTransformer
 from torchvision.models.efficientnet import MBConvConfig, MBConv
 from .efficientnetpp import EfficientNetppDecoderBlock
@@ -255,7 +255,13 @@ class Block(nn.Module):
          
         if self.use_shsa:
             self.attn = SHSAttention(config, vis, alternate_partial_attn=alternate_partial_attn)
+        elif config.use_ats:
+            if self.args.verbose:
+                print(f"Using Adaptive Token Sampling (ATS) for attention with keep_rate={self.topk_attn}.")
+            self.attn = ATSAttention(config, config.hidden_size, keep_rate=self.topk_attn)
         elif self.topk_attn > 0.0:
+            if self.args.verbose:
+                print(f"Using Top-k Attention with keep_rate={self.topk_attn}.")
             self.attn = TopkAttention(config, config.hidden_size, keep_rate=self.topk_attn)
         elif self.args.adaptive_attn_threshold > 0.0:
             self.attn = AdaptiveSpatialAttention(config, alpha=self.args.adaptive_attn_threshold)

@@ -63,6 +63,8 @@ parser.add_argument('--use_gumbel_topk', action='store_true',
                     help='whether to use Gumbel-Softmax sampling for Top-k attention (it has to be used with --topk_attn > 0.0)')
 parser.add_argument('--adaptive_attn_threshold', type=float,
                     default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
+parser.add_argument('--use_ats', action='store_true', 
+                    help='whether to use Adaptive Token Sampling (ATS) for attention')
 parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
 parser.add_argument('--tensorboard_logdir', type=str, default='tensorboard_logs', help='root directory for TensorBoard logs',)
 parser.add_argument('--description', type=str, default='No Description', help='additional description for the training run (optional)')
@@ -211,6 +213,9 @@ if __name__ == "__main__":
     if args.use_gumbel_topk and args.topk_attn <= 0.0:
         raise ValueError("The --use_gumbel_topk flag requires --topk_attn to be greater than 0.0.")
     
+    if args.use_ats and args.topk_attn <= 0.0:
+        raise ValueError("The --use_ats flag requires --topk_attn to be greater than 0.0.")
+    
     if args.adaptive_attn_threshold > 0.0 and (args.use_shsa or args.topk_attn > 0.0):
         raise ValueError("The --adaptive_attn_threshold argument is mutually exclusive with --use_shsa and --topk_attn > 0.0.")
 
@@ -232,6 +237,7 @@ if __name__ == "__main__":
     
     
     config_vit.topk_attn = args.topk_attn
+    config_vit.use_ats = args.use_ats
     config_vit.use_gumbel_topk = args.use_gumbel_topk
     config_vit.use_shsa = args.use_shsa
     config_vit.use_alternate_shsa = args.use_alternate_shsa
