@@ -96,6 +96,8 @@ parser.add_argument('--learn_tau', action='store_true',
                     help='if set, learn tau via tau=tau_min+softplus(rho)')
 parser.add_argument('--tau_min', type=float, default=1e-3,
                     help='strictly positive floor for learnable tau')
+parser.add_argument('--tau_init', type=float, default=1.0,
+                    help='initial value for tau (ignored if learn_tau=False)')
 parser.add_argument('--alpha', type=float, default=10, help='maximum value for the Weight Map in BU loss')
 parser.add_argument('--bm_min', type=float, default=0.2, help='Minimum value for the Boundary Map in BU loss')
 parser.add_argument('--bm_max', type=float, default=3.0, help='Maximum value for the Boundary Map in BU loss')

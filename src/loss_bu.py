@@ -21,7 +21,7 @@ class BULoss(nn.Module):
         #OPTION B : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}^w
         #OPTION C : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}
         distance_type: str = "unsigned",
-        tau: float = 1.0,
+        tau_min: float = 1e-3,
         bm_min: float = 0.2,
         bm_max: float = 3.0,
         alpha: float = 10.0,
@@ -32,6 +32,9 @@ class BULoss(nn.Module):
     ) -> None:
         super().__init__()
         self.args = args
+        self.tau_min = float(getattr(self.args, "tau_min", tau_min))
+        self.tau_init = float(getattr(self.args, "tau_init", 1.0))
+        
         loss_option = getattr(self.args, "buloss_option", loss_option)
         loss_option = loss_option.upper()
         if loss_option not in {"A", "B", "C"}:
@@ -45,8 +48,8 @@ class BULoss(nn.Module):
                 "distance_type must be one of {'dtm','unsigned','signed'}, "
                 f"got {distance_type!r}"
             )
-        tau_init = float(getattr(self.args, "tau", tau))
-        if tau_init <= 0:
+
+        if self.tau_init <= 0:
             raise ValueError("tau must be > 0.")
 
         self.loss_option = loss_option
@@ -54,22 +57,25 @@ class BULoss(nn.Module):
         print(f"Using BULoss with option {self.loss_option}, distance type {self.distance_type}")
         self.learn_tau = bool(getattr(self.args, "learn_tau", False))
         # Backward-compatible fallback for older args objects that may not expose tau_min.
-        self.tau_min = float(getattr(self.args, "tau_min", 1.0))
         if self.tau_min <= 0:
             raise ValueError("tau_min must be > 0.")
 
         if self.learn_tau:
-            if tau_init <= self.tau_min:
+            if self.tau_init <= self.tau_min:
                 raise ValueError(
-                    f"tau_init ({tau_init}) must be > tau_min ({self.tau_min}) when learn_tau=True."
+                    f"tau_init ({self.tau_init}) must be > tau_min ({self.tau_min}) when learn_tau=True."
                 )
-            tau_delta = torch.tensor(tau_init - self.tau_min, dtype=torch.float32)
+            tau_delta = torch.tensor(self.tau_init - self.tau_min, dtype=torch.float32)
             rho0 = torch.log(torch.expm1(tau_delta))
             self.rho = nn.Parameter(rho0.clone().detach())
             # After loss.backward(), inspect tau raw gradient with: print(bu_loss.rho.grad)
         else:
-            self.register_buffer("_tau_fixed", torch.tensor(tau_init, dtype=torch.float32))
+            self.register_buffer("_tau_fixed", torch.tensor(self.tau_init, dtype=torch.float32))
 
+        if args.verbose:
+            print(f"[BULoss] Initialized with tau={self.tau_init}, learn_tau={self.learn_tau}, tau_min={self.tau_min}")
+            print(f"rho initial value: {rho0.item()} (corresponding to tau={self.tau_init})")
+                    
         self.bm_min = float(getattr(self.args, "bm_min", bm_min))
         self.bm_max = float(getattr(self.args, "bm_max", bm_max))
         self.alpha = float(getattr(self.args, "alpha", alpha))
