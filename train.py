@@ -158,7 +158,7 @@ if __name__ == "__main__":
             'num_classes': 5,  # Background (0), Pupil (1), Cornea (2), Lens (3), Instruments (4)
         },
         'ACDC': {
-            'root_path': '/data/shared/project_TransUNet/data/ACDC',
+            'root_path': '/data/shared/project_TransUNet/ACDC',
             'list_dir': None,
             'num_classes': 4,
         },

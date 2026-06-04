@@ -72,7 +72,7 @@ class BULoss(nn.Module):
         else:
             self.register_buffer("_tau_fixed", torch.tensor(self.tau_init, dtype=torch.float32))
 
-        if args.verbose:
+        if args.verbose and self.args.learn_tau and self.args.buloss_option in {"A", "B"}:
             print(f"[BULoss] Initialized with tau={self.tau_init}, learn_tau={self.learn_tau}, tau_min={self.tau_min}")
             print(f"rho initial value: {rho0.item()} (corresponding to tau={self.tau_init})")
                     
