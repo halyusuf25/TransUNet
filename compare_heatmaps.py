@@ -153,7 +153,7 @@ def _candidate_synapse_roots() -> List[str]:
     cwd = os.getcwd()
     candidates = [
         os.environ.get("SYNAPSE_TRAIN_NPZ"),
-        "/data/shared/project_TransUNet/data/Synapse/train_npz/",
+        "/data/halyusuf/data/Synapse/train_npz/",
         os.path.join(script_dir, "data", "Synapse", "train_npz"),
         os.path.abspath(os.path.join(script_dir, "..", "..", "data", "Synapse", "train_npz")),
         os.path.abspath(os.path.join(cwd, "..", "..", "data", "Synapse", "train_npz")),

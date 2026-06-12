@@ -44,10 +44,10 @@ def main():
                     help="Root directory that contains miccai_challenge_release_* (default: '/data/shared/EndoVis2018/')")
     ap.add_argument("--release_glob", type=str, default="miccai_challenge_release_2*",
                     help='Glob for release dirs (default: "miccai_challenge_release_2*")')
-    ap.add_argument("--images_out", type=Path, default=Path("/data/shared/EndoVis_2018/train/imgs"),
-                    help="Output dir for left_frames images (default: /data/shared/EndoVis_2018/train/imgs)")
-    ap.add_argument("--labels_out", type=Path, default=Path("/data/shared/EndoVis_2018/train/labels"),
-                    help="Output dir for labels (default: /data/shared/EndoVis_2018/train/labels)")
+    ap.add_argument("--images_out", type=Path, default=Path("/data/halyusuf/data/EndoVis_2018/train/imgs"),
+                    help="Output dir for left_frames images (default: /data/halyusuf/data/EndoVis_2018/train/imgs)")
+    ap.add_argument("--labels_out", type=Path, default=Path("/data/halyusuf/data/EndoVis_2018/train/labels"),
+                    help="Output dir for labels (default: /data/halyusuf/data/EndoVis_2018/train/labels)")
     ap.add_argument("--preserve_metadata", action="store_true",
                     help="Preserve metadata (uses shutil.copy2). Default is off (uses shutil.copyfile).")
     ap.add_argument("--dry_run", action="store_true",

@@ -2,7 +2,7 @@ import os
 import synapseclient
 import synapseutils
 
-dest = "/data/shared/CataractData/semantic_segmentation"
+dest = "/data/halyusuf/data/CataractData/semantic_segmentation"
 os.makedirs(dest, exist_ok=True)
 
 syn = synapseclient.Synapse()

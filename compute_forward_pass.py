@@ -131,7 +131,7 @@ def build_synapse_loader(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Measure per-component forward times on Synapse.")
     parser.add_argument("--root_path", type=Path,
-                        default=Path("/data/shared/project_TransUNet/data/Synapse/train_npz/"),
+                        default=Path("/data/halyusuf/data/Synapse/train_npz/"),
                         help="Root directory with Synapse .npz slices.")
     parser.add_argument("--list_dir", type=Path,
                         default=Path("./lists/lists_Synapse"),
