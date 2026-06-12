@@ -187,9 +187,9 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()
     net.eval()
     # if len(image.shape) == 3:
-    if dataset == 'Synapse':
+    if dataset in ['Synapse', 'ACDC']:
         prediction = np.zeros_like(label)
-        print(f"Processing case {case}, image shape: {image.shape}")
+        print(f"\n Processing case {case}, image shape: {image.shape}")
         for ind in range(image.shape[0]):
             slice = image[ind, :, :]    
             x, y = slice.shape[0], slice.shape[1]

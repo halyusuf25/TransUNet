@@ -96,7 +96,7 @@ def build_benchmark_loader(args, batch_size=1, num_workers=0, shuffle=False):
     resized to (args.img_size, args.img_size). This prevents default_collate shape
     issues and NumPy stride pitfalls.
     """
-    if args.dataset == "Synapse":
+    if args.dataset in ['Synapse', 'ACDC']:
         db = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
     elif args.dataset == "Cataract1k":
         db = args.Dataset(base_dir=args.volume_path, split="val")

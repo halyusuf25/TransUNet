@@ -15,12 +15,12 @@ from torch.utils.data import Dataset
 # import cv2
 
 class ACDC_Dataset(Dataset):
-    def __init__(self, base_dir=None, split='train', list_dir=None, transform=None):
+    def __init__(self, base_dir=None, split='train', list_dir=None, transform=None, fold_id=0):
         self._base_dir = base_dir
         self.sample_list = []
         self.split = split
         self.transform = transform
-        train_ids, val_ids, test_ids = self._get_ids()
+        train_ids, val_ids, test_ids = self._get_ids(fold_id=fold_id)
         if self.split.find('train') != -1:
             self.all_slices = os.listdir(
                 self._base_dir + "/ACDC_training_slices")
@@ -49,11 +49,40 @@ class ACDC_Dataset(Dataset):
         #     self.sample_list = self.sample_list[:num]
         print("total {} samples".format(len(self.sample_list)))
 
-    def _get_ids(self):
+    def _get_ids(self, fold_id=0):
+        """Return patient ID splits for training, validation, and testing.
+
+        The dataset is divided into 5 equal folds. The requested fold_id is used
+        as the test set, the next fold is used for validation, and the remaining
+        folds are combined for training.
+
+        Args:
+            fold_id (int): index of the fold to use as the test set (0-4).
+
+        Returns:
+            list: [training_set, validation_set, testing_set] where each element
+            is a list of patient IDs.
+        """
         all_cases_set = ["patient{:0>3}".format(i) for i in range(1, 101)]
-        testing_set = ["patient{:0>3}".format(i) for i in range(1, 21)]
-        validation_set = ["patient{:0>3}".format(i) for i in range(21, 31)]
-        training_set = [i for i in all_cases_set if i not in testing_set+validation_set]
+        # fold_id = int(fold_id)
+        fold_size = len(all_cases_set) // 5
+        folds = [
+            all_cases_set[i * fold_size:(i + 1) * fold_size]
+            for i in range(5)
+        ]
+        validation_fold_id = (fold_id + 1) % 5
+        testing_set = folds[fold_id]
+        validation_set = folds[validation_fold_id]
+        training_set = [
+            case
+            for i, fold in enumerate(folds)
+            if i not in (fold_id, validation_fold_id)
+            for case in fold
+        ]
+        # else:
+        #     testing_set = ["patient{:0>3}".format(i) for i in range(1, 21)]
+        #     validation_set = ["patient{:0>3}".format(i) for i in range(21, 31)]
+        #     training_set = [i for i in all_cases_set if i not in testing_set+validation_set]
 
         return [training_set, validation_set, testing_set]
     
@@ -120,9 +149,10 @@ class RandomGenerator4ACDC(object):
         # ind = random.randrange(0, img.shape[0])
         # image = img[ind, ...]
         # label = lab[ind, ...]
-        if random.random() > 0.5:
+        augment = random.random()
+        if augment > 0.5:
             image, label = random_rot_flip(image, label)
-        elif random.random() > 0.5:
+        elif augment > 0.25:
             image, label = random_rotate(image, label)
         x, y = image.shape
         if x != self.output_size[0] or y != self.output_size[1]:

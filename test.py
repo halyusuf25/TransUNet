@@ -14,6 +14,7 @@ from benchmark_quantize import benchmark_segmentation_quantize_model
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
+from datasets.dataset_acdc import ACDC_Dataset
 from utils import test_single_volume, _make_json_safe, model_size_mb_benchmark, runtime_memory_mb_benchmark
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
@@ -42,6 +43,8 @@ parser.add_argument('--batch_size', type=int, default=24,
                     help='batch_size per gpu')
 parser.add_argument('--img_size', type=int, default=224, help='input patch size of network input')
 parser.add_argument('--is_savenii', action="store_true", help='whether to save results during inference')
+parser.add_argument('--fold_id', type=int, default=0,
+                    help='ACDC fold id to use when --random_split is set; valid values are 0-4') #TODO:need to do it for all datasets
 
 parser.add_argument('--n_skip', type=int, default=3, help='using number of skip-connect, default is num')
 parser.add_argument('--vit_name', type=str, default='ViT-B_16', help='select one vit model')
@@ -88,7 +91,7 @@ parser.add_argument('--num_slices_to_overlay', type=int, default=None, help='num
 
 ##########swin config arguments##########
 parser.add_argument('--swin_pretrained_path', type=str,
-                    default='/data/shared/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')
+                    default='/data/halyusuf/data/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')
 #########################################
 
 ################ Quantization arguments ################
@@ -107,8 +110,8 @@ args = parser.parse_args()
 
 
 def inference(args, model, test_save_path=None):
-    if args.dataset == 'Synapse':
-        db_test = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
+    if args.dataset in ['Synapse', 'ACDC']:
+        db_test = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir, fold_id=args.fold_id)
     elif args.dataset == 'Cataract1k':
         db_test = args.Dataset(base_dir=args.volume_path, split="test",)
 
@@ -193,7 +196,7 @@ if __name__ == "__main__":
     dataset_config = {
         'Synapse': {
             'Dataset': Synapse_dataset,
-            'volume_path': '/data/shared/project_TransUNet/data/Synapse/test_vol_h5',
+            'volume_path': '/data/halyusuf/data/Synapse/test_vol_h5',
             'list_dir': './lists/lists_Synapse',
             'num_classes': 9,
             'z_spacing': 1,
@@ -209,9 +212,23 @@ if __name__ == "__main__":
                 'Stomach',
             ],
         },
+        'ACDC': {
+            'Dataset': ACDC_Dataset,
+            'volume_path': '/data/halyusuf/data/ACDC/',
+            'list_dir': None,  # Not needed for ACDC
+            'num_classes': 4,  # Background (0), RV (1), Myo (2), LV (3)
+            'z_spacing': 5, #TODO: confirm the z-spacing for ACDC and update accordingly.
+            'info': '3D',
+            'class_names': [
+                'Background',
+                'Right Ventricle',
+                'Myocardium',
+                'Left Ventricle',
+            ],
+        },
         'Cataract1k': {
             'Dataset': Cataract1kDataset,
-            'volume_path': '/data/shared/CataractData/',
+            'volume_path': '/data/halyusuf/data/CataractData/',
             'list_dir': None,  # Not needed for Cataract1k
             'num_classes': 5,  # Background (0), Pupil (1), Cornea (2), Lens (3), Instruments (4)
             'z_spacing': 1,
@@ -227,19 +244,16 @@ if __name__ == "__main__":
     
     dataset_name = args.dataset
     args.volume_path = dataset_config[dataset_name]['volume_path']
-    if args.num_classes is None:
-        args.num_classes = dataset_config[dataset_name]['num_classes']
-    
+    args.num_classes = dataset_config[dataset_name]['num_classes']
     args.Dataset = dataset_config[dataset_name]['Dataset']
     args.z_spacing = dataset_config[dataset_name]['z_spacing']
     args.class_names = dataset_config[dataset_name].get('class_names')
-    if dataset_name == 'Synapse':
-        args.list_dir = dataset_config[dataset_name]['list_dir']
-        
-
-
+    args.list_dir = dataset_config[dataset_name]['list_dir']
     args.is_pretrain = True
 
+    if args.fold_id < 0 or args.fold_id >= 5:
+        raise ValueError("fold_id must be between 0 and 4")
+    
     # name the same snapshot defined in train script!
     args.exp = 'TU_' + dataset_name + str(args.img_size)
     snapshot_path = "../model/{}/{}".format(args.exp, 'TU')

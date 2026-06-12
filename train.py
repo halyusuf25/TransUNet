@@ -21,7 +21,7 @@ parser.add_argument('--list_dir', type=str,
 parser.add_argument('--num_classes', type=int,
                     default=9, help='output channel of network')
 parser.add_argument('--max_iterations', type=int,
-                    default=30000, help='maximum epoch number to train')
+                    default=30000, help='maximum iteration counts to train')
 parser.add_argument('--max_epochs', type=int,
                     default=150, help='maximum epoch number to train')
 parser.add_argument('--batch_size', type=int,
@@ -35,6 +35,8 @@ parser.add_argument('--img_size', type=int,
                     default=224, help='input patch size of network input')
 parser.add_argument('--seed', type=int,
                     default=1234, help='random seed')
+parser.add_argument('--fold_id', type=int, default=0,
+                    help='ACDC fold id to use when --random_split is set; valid values are 0-4') #TODO:need to do it for all datasets
 parser.add_argument('--n_skip', type=int,
                     default=3, help='using number of skip-connect, default is num')
 parser.add_argument('--vit_name', type=str,
@@ -117,7 +119,7 @@ parser.add_argument('--num_heatmap_slices', type=int, default=3,
 
 ##########swin config arguments##########
 parser.add_argument('--swin_pretrained_path', type=str,
-                    default='/data/shared/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')
+                    default='/data/halyusuf/data/swin/swin_large_patch4_window7_224_22k.pth', help='path to swin pretrained model')
 #########################################
 
 
@@ -148,17 +150,17 @@ if __name__ == "__main__":
     dataset_config = {
         'Synapse': {
             # 'root_path': '../../data/Synapse/train_npz',
-            'root_path': '/data/shared/project_TransUNet/data/Synapse/train_npz/',
+            'root_path': '/data/halyusuf/data/Synapse/train_npz/',
             'list_dir': './lists/lists_Synapse',
             'num_classes': 9,
         },
         'Cataract1k': {
-            'root_path': '/data/shared/CataractData/',
+            'root_path': '/data/halyusuf/data/CataractData/',
             'list_dir': None,  # Not needed for Cataract1k
             'num_classes': 5,  # Background (0), Pupil (1), Cornea (2), Lens (3), Instruments (4)
         },
         'ACDC': {
-            'root_path': '/data/shared/project_TransUNet/ACDC',
+            'root_path': '/data/halyusuf/data/ACDC',
             'list_dir': None,
             'num_classes': 4,
         },
@@ -193,6 +195,8 @@ if __name__ == "__main__":
     if not os.path.exists(args.tensorboard_run_dir):
         os.makedirs(args.tensorboard_run_dir)
     
+    if args.fold_id < 0 or args.fold_id >= 5:
+        raise ValueError("fold_id must be between 0 and 4")
 
     config_vit = CONFIGS_ViT_seg[args.vit_name]
     config_vit.verbose = args.verbose
@@ -204,6 +208,7 @@ if __name__ == "__main__":
     if args.num_layers is not None:
         config_vit.transformer.num_layers = args.num_layers
         args.ckpt_filename +='_layer'+str(args.num_layers)
+
 
     #pass the args use_shsa to the config_vit
     if args.use_alternate_shsa and not args.use_shsa:

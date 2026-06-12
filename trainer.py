@@ -300,10 +300,13 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
     max_iterations = args.max_iterations
 
     db_train = ACDC_Dataset(base_dir=args.root_path, split="train", transform=transforms.Compose([
-        RandomGenerator4ACDC([args.img_size, args.img_size])]))
-    db_val = ACDC_Dataset(base_dir=args.root_path, split="val")
+        RandomGenerator4ACDC([args.img_size, args.img_size])]), fold_id=args.fold_id)
+    
+    db_val = ACDC_Dataset(base_dir=args.root_path, split="val", fold_id=args.fold_id)
+    
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
+    
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True,
                              num_workers=8, pin_memory=True, worker_init_fn=worker_init_fn)
     valloader = DataLoader(db_val, batch_size=1, shuffle=False,
@@ -352,16 +355,16 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
 
             logging.info('iteration %d : loss : %f, loss_ce: %f' % (iter_num, loss.item(), loss_ce.item()))
 
-            if iter_num % 20 == 0:
-                image = volume_batch[1, 0:1, :, :]
-                image = (image - image.min()) / (image.max() - image.min())
-                writer.add_image('train/Image', image, iter_num)
-                outputs = torch.argmax(torch.softmax(
-                    outputs, dim=1), dim=1, keepdim=True)
-                writer.add_image('train/Prediction',
-                                 outputs[1, ...] * 50, iter_num)
-                labs = label_batch[1, ...].unsqueeze(0) * 50
-                writer.add_image('train/GroundTruth', labs, iter_num)
+            # if iter_num % 20 == 0:
+            #     image = volume_batch[1, 0:1, :, :]
+            #     image = (image - image.min()) / (image.max() - image.min())
+            #     writer.add_image('train/Image', image, iter_num)
+            #     outputs = torch.argmax(torch.softmax(
+            #         outputs, dim=1), dim=1, keepdim=True)
+            #     writer.add_image('train/Prediction',
+            #                      outputs[1, ...] * 50, iter_num)
+            #     labs = label_batch[1, ...].unsqueeze(0) * 50
+            #     writer.add_image('train/GroundTruth', labs, iter_num)
 
             if iter_num > 0 and iter_num % 500 == 0:  # 500
                 model.eval()
@@ -398,8 +401,7 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
 
             if iter_num >= max_iterations:
                 save_checkpoint(model, args, epoch_num, performance)
-                break
-            
+                break            
             
 
 def save_checkpoint(model, args, epoch_num, mean_dice):
