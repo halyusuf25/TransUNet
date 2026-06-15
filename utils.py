@@ -205,7 +205,7 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
                 else:
                     pred = out
                 prediction[ind] = pred
-    elif dataset == 'Cataract1k':
+    elif dataset in ['Cataract1k', 'EndoVis2018']:
         # Resize each channel to patch_size and stack
         resized_channels = []
         H, W, C = image.shape
@@ -227,7 +227,7 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
         raise ValueError("Unknown dataset")
     
     metric_list = []
-    metric_fn = calculate_metric_percase_cataract if dataset == 'Cataract1k' else calculate_metric_percase
+    metric_fn = calculate_metric_percase_cataract if dataset in ['Cataract1k', 'EndoVis2018'] else calculate_metric_percase
     for i in range(1, classes):
         metric_list.append(metric_fn(prediction == i, label == i))
 

@@ -100,6 +100,8 @@ def build_benchmark_loader(args, batch_size=1, num_workers=0, shuffle=False):
         db = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
     elif args.dataset == "Cataract1k":
         db = args.Dataset(base_dir=args.volume_path, split="val")
+    elif args.dataset == "EndoVis2018":
+        db = args.Dataset(base_dir=args.volume_path, split="test")
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset}")
 

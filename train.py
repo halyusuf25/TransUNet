@@ -7,7 +7,7 @@ import torch
 import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
-from trainer import trainer_synapse, trainer_acdc
+from trainer import trainer_synapse, trainer_acdc, trainer_endovis
 from datasets.dataset_cataract import  Cataract1kDataset
 from utils import _sanitize_name
 
@@ -15,7 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str,
                     default='../../data/Synapse/train_npz', help='root dir for data')
 parser.add_argument('--dataset', type=str,
-                    default='Synapse', help='dataset name, and possible values are Synapse, ACDC, and Cataract1k')
+                    default='Synapse', help='dataset name, and possible values are Synapse, ACDC, Cataract1k, and EndoVis2018')
 parser.add_argument('--list_dir', type=str,
                     default='./lists/lists_Synapse', help='list dir')
 parser.add_argument('--num_classes', type=int,
@@ -143,8 +143,8 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
-    if args.dataset not in ['Synapse', 'Cataract1k', 'ACDC']:
-        raise ValueError(f"Unsupported dataset: {args.dataset}. Supported datasets are: Synapse, Cataract1k, and ACDC.")
+    if args.dataset not in ['Synapse', 'Cataract1k', 'ACDC', 'EndoVis2018']:
+        raise ValueError(f"Unsupported dataset: {args.dataset}. Supported datasets are: Synapse, Cataract1k, ACDC, and EndoVis2018.")
     
     dataset_name = args.dataset
     dataset_config = {
@@ -163,6 +163,11 @@ if __name__ == "__main__":
             'root_path': '/data/halyusuf/data/ACDC',
             'list_dir': None,
             'num_classes': 4,
+        },
+        'EndoVis2018': {
+            'root_path': '/data/halyusuf/data/EndoVis_2018',
+            'list_dir': None,
+            'num_classes': 12,
         },
     }
     args.num_classes = dataset_config[dataset_name]['num_classes']
@@ -296,7 +301,7 @@ if __name__ == "__main__":
 
     # print(f"arguments for training: {args}")
     # print(f"configuration of the vit model for training: {config_vit}") 
-    trainer = {'Synapse': trainer_synapse, 'Cataract1k': trainer_synapse, 'ACDC': trainer_acdc}
+    trainer = {'Synapse': trainer_synapse, 'Cataract1k': trainer_synapse, 'ACDC': trainer_acdc, 'EndoVis2018': trainer_endovis}
     if args.use_kd:
         trainer[dataset_name](args, net, snapshot_path, teacher_model=teacher_net)
     else:

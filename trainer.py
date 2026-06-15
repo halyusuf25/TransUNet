@@ -25,6 +25,7 @@ from torchvision import transforms
 from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
 from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
 from datasets.dataset_acdc import ACDC_Dataset, RandomGenerator4ACDC
+from datasets.dataset_endovis2018 import EndoVis2018Dataset, RandomGenerator4EndoVis2018
 from utils import test_single_volume
 from visualize import (
     _get_dataset_sample_names,
@@ -292,6 +293,222 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     return "Training Finished!"
 
 
+def _endovis_class_dice(outputs, labels, num_classes):
+    predictions = torch.argmax(outputs, dim=1)
+    dice_values = []
+    for class_i in range(1, num_classes):
+        pred_mask = predictions == class_i
+        label_mask = labels == class_i
+        pred_sum = pred_mask.sum().float()
+        label_sum = label_mask.sum().float()
+
+        if pred_sum.item() == 0 and label_sum.item() == 0:
+            dice_values.append(np.nan)
+            continue
+
+        intersection = (pred_mask & label_mask).sum().float()
+        dice = (2.0 * intersection) / (pred_sum + label_sum + 1e-5)
+        dice_values.append(float(dice.detach().cpu().item()))
+
+    return np.array(dice_values, dtype=np.float32)
+
+
+def _validate_endovis(model, valloader, ce_loss, dice_loss, num_classes, lambda_):
+    model.eval()
+    total_loss = 0.0
+    total_ce_loss = 0.0
+    total_dice_loss = 0.0
+    batch_count = 0
+    dice_sum = np.zeros(num_classes - 1, dtype=np.float64)
+    dice_count = np.zeros(num_classes - 1, dtype=np.float64)
+
+    with torch.no_grad():
+        for sampled_batch in valloader:
+            image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
+            image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
+            outputs, _, _, _ = model(image_batch)
+            loss_ce = ce_loss(outputs, label_batch[:].long())
+            loss_dice = dice_loss(outputs, label_batch, softmax=True)
+            loss = (1 - lambda_) * loss_dice + lambda_ * loss_ce
+
+            total_loss += loss.item()
+            total_ce_loss += loss_ce.item()
+            total_dice_loss += loss_dice.item()
+            batch_count += 1
+
+            class_dice = _endovis_class_dice(outputs, label_batch, num_classes)
+            valid_classes = ~np.isnan(class_dice)
+            dice_sum[valid_classes] += class_dice[valid_classes]
+            dice_count[valid_classes] += 1
+
+    mean_class_dice = np.divide(
+        dice_sum,
+        dice_count,
+        out=np.full_like(dice_sum, np.nan, dtype=np.float64),
+        where=dice_count > 0,
+    )
+    if np.all(np.isnan(mean_class_dice)):
+        mean_dice = 0.0
+    else:
+        mean_dice = float(np.nanmean(mean_class_dice))
+
+    return {
+        'loss': total_loss / max(batch_count, 1),
+        'loss_ce': total_ce_loss / max(batch_count, 1),
+        'loss_dice': total_dice_loss / max(batch_count, 1),
+        'class_dice': mean_class_dice,
+        'mean_dice': mean_dice,
+    }
+
+
+def trainer_endovis(args, model, snapshot_path, teacher_model=None):
+    logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
+                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    logging.info(str(args))
+    base_lr = args.base_lr
+    num_classes = args.num_classes
+    batch_size = args.batch_size * args.n_gpu
+
+    db_train = EndoVis2018Dataset(
+        base_dir=args.root_path,
+        split="train",
+        transform=transforms.Compose([
+            RandomGenerator4EndoVis2018([args.img_size, args.img_size])
+        ]),
+    )
+    db_val = EndoVis2018Dataset(
+        base_dir=args.root_path,
+        split="test",
+        transform=transforms.Compose([
+            RandomGenerator4EndoVis2018([args.img_size, args.img_size], augment=False)
+        ]),
+    )
+
+    print("The length of train set is: {}".format(len(db_train)))
+    print("The length of test set used for validation is: {}".format(len(db_val)))
+    logging.info("EndoVis train samples: %d | test-as-val samples: %d", len(db_train), len(db_val))
+
+    args.ckpt_filename += '_' + args.dataset + '_'
+
+    def worker_init_fn(worker_id):
+        random.seed(args.seed + worker_id)
+
+    trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True,
+                             worker_init_fn=worker_init_fn)
+    valloader = DataLoader(db_val, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    if args.n_gpu > 1:
+        model = nn.DataParallel(model)
+    model.train()
+    gamma = 0.2
+    lambda_ = args.lambda_
+    ce_loss = CrossEntropyLoss()
+    dice_loss = DiceLoss(num_classes)
+
+    optimizer_param_groups = [
+        {
+            "params": list(model.parameters()),
+            "lr": base_lr,
+            "momentum": 0.9,
+            "weight_decay": 0.0001,
+            "lr_mult": 1.0,
+        },
+    ]
+
+    optimizer = optim.SGD(optimizer_param_groups, lr=base_lr, momentum=0.9, weight_decay=0.0001)
+    writer = SummaryWriter(args.tensorboard_run_dir)
+    logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
+
+    # is_primary_process = _is_primary_process()
+    # heatmaps_enabled = bool(getattr(args, "create_heatmaps", False)) and args.use_bu_loss and is_primary_process
+    # fixed_heatmap_sample_id = None
+    # fixed_heatmap_target_samples = []
+    # dataset_sample_names = []
+    # if heatmaps_enabled:
+    #     all_sample_names = _get_dataset_sample_names(db_train)
+    #     dataset_sample_names = [all_sample_names[index] for index in train_indices]
+    #     os.makedirs(args.heatmaps_dir, exist_ok=True)
+    #     logging.info(
+    #         "BU-loss heatmap generation enabled. Output dir: %s | slices per target epoch: %d",
+    #         args.heatmaps_dir,
+    #         int(getattr(args, "num_heatmap_slices", 1)),
+    #     )
+    # elif bool(getattr(args, "create_heatmaps", False)) and not is_primary_process:
+    #     logging.info("BU-loss heatmap generation disabled on non-primary process.")
+
+    iter_num = 0
+    max_epoch = args.max_epochs
+    max_iterations = args.max_epochs * len(trainloader)
+    logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
+    logging.info("{} val iterations per validation".format(len(valloader)))
+    best_performance = 0.0
+    iterator = tqdm(range(max_epoch), ncols=70)
+    # last_bu_details = None
+    for epoch_num in iterator:
+        # epoch_index = epoch_num + 1
+        # should_save_heatmap_this_epoch = heatmaps_enabled and _should_save_heatmap_epoch(epoch_index)
+        # pending_heatmap_samples = set(fixed_heatmap_target_samples) if should_save_heatmap_this_epoch else set()
+        # saved_heatmap_count_this_epoch = 0
+        for i_batch, sampled_batch in enumerate(trainloader):
+            
+            image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
+            image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
+            outputs, _, features, _ = model(image_batch)
+            loss_ce = ce_loss(outputs, label_batch[:].long())
+            loss_dice = dice_loss(outputs, label_batch, softmax=True)
+            loss = (1 - lambda_) * loss_dice + lambda_ * loss_ce
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr_ * float(param_group.get('lr_mult', 1.0))
+
+            iter_num = iter_num + 1
+
+            if args.verbose and iter_num >= 2:
+                print("Verbose mode is ON. Detailed training information were printed and training is stopped after two iterations.")
+                sys.exit(0)
+
+            writer.add_scalar('info/lr', lr_, iter_num)
+            writer.add_scalar('info/total_loss', loss, iter_num)
+            writer.add_scalar('info/loss_ce', loss_ce, iter_num)
+            writer.add_scalar('info/loss_dice', loss_dice, iter_num)
+
+            logging.info('epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f' % (epoch_num, iter_num, loss.item(), loss_dice.item(), loss_ce.item()))
+
+            if epoch_num > 10 and iter_num % 500 == 0:
+                val_metrics = _validate_endovis(model, valloader, ce_loss, dice_loss, num_classes, lambda_)
+                writer.add_scalar('info/val_loss', val_metrics['loss'], iter_num)
+                writer.add_scalar('info/val_loss_ce', val_metrics['loss_ce'], iter_num)
+                writer.add_scalar('info/val_loss_dice', val_metrics['loss_dice'], iter_num)
+                writer.add_scalar('info/val_mean_dice', val_metrics['mean_dice'], iter_num)
+                for class_i, class_dice in enumerate(val_metrics['class_dice'], start=1):
+                    if not np.isnan(class_dice):
+                        writer.add_scalar('info/val_{}_dice'.format(class_i), class_dice, iter_num)
+
+                performance = val_metrics['mean_dice']
+                if epoch_num > 20 and performance > best_performance:
+                    best_performance = performance
+                    logging.info('Best model | epoch %d iteration %d : mean_dice : %f val_loss : %f' % (
+                        epoch_num, iter_num, performance, val_metrics['loss']))
+                    save_checkpoint(model, args, epoch_num, performance)
+
+                logging.info('epoch %d iteration %d : val_loss : %f mean_dice : %f' % (
+                    epoch_num, iter_num, val_metrics['loss'], performance))
+                model.train()
+
+        if epoch_num >= max_epoch - 1:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_LastEpoch_' + str(timestamp) + '.pth')
+            torch.save(model.state_dict(), local_path)
+            logging.info("save model to {}".format(local_path))
+                
+    writer.close()
+    return "Training Finished!"
+
+
 def trainer_acdc(args, model, snapshot_path, teacher_model=None):
     
     base_lr = args.base_lr
@@ -353,7 +570,7 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar('info/total_loss', loss, iter_num)
             writer.add_scalar('info/loss_ce', loss_ce, iter_num)
 
-            logging.info('iteration %d : loss : %f, loss_ce: %f' % (iter_num, loss.item(), loss_ce.item()))
+            logging.info('epoch %d iteration %d : loss : %f, loss_ce: %f' % (epoch_num, iter_num, loss.item(), loss_ce.item()))
 
             # if iter_num % 20 == 0:
             #     image = volume_batch[1, 0:1, :, :]
@@ -366,7 +583,7 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
             #     labs = label_batch[1, ...].unsqueeze(0) * 50
             #     writer.add_image('train/GroundTruth', labs, iter_num)
 
-            if iter_num > 0 and iter_num % 500 == 0:  # 500
+            if epoch_num > 30 and iter_num % 500 == 0:  # 500
                 model.eval()
                 metric_list = 0.0
                 for i_batch, sampled_batch in enumerate(valloader):

@@ -15,6 +15,7 @@ from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
 from datasets.dataset_acdc import ACDC_Dataset
+from datasets.dataset_endovis2018 import EndoVis2018Dataset
 from utils import test_single_volume, _make_json_safe, model_size_mb_benchmark, runtime_memory_mb_benchmark
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
@@ -112,7 +113,7 @@ args = parser.parse_args()
 def inference(args, model, test_save_path=None):
     if args.dataset in ['Synapse', 'ACDC']:
         db_test = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir, fold_id=args.fold_id)
-    elif args.dataset == 'Cataract1k':
+    elif args.dataset in ['Cataract1k', 'EndoVis2018']:
         db_test = args.Dataset(base_dir=args.volume_path, split="test",)
 
     testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=1)
@@ -240,6 +241,27 @@ if __name__ == "__main__":
                 'Instruments',
             ],
         },
+        'EndoVis2018': {
+            'Dataset': EndoVis2018Dataset,
+            'volume_path': '/data/halyusuf/data/EndoVis_2018',
+            'list_dir': None,
+            'num_classes': 12,
+            'z_spacing': 1,
+            'class_names': [
+                'background-tissue',
+                'instrument-shaft',
+                'instrument-clasper',
+                'instrument-wrist',
+                'kidney-parenchyma',
+                'covered-kidney',
+                'thread',
+                'clamps',
+                'suturing-needle',
+                'suction-instrument',
+                'small-intestine',
+                'ultrasound-probe',
+            ],
+        },
     }
     
     dataset_name = args.dataset
@@ -331,7 +353,7 @@ if __name__ == "__main__":
     if args.quantize:
         if args.dataset == 'Synapse':
             db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
-        elif args.dataset == 'Cataract1k':
+        elif args.dataset in ['Cataract1k', 'EndoVis2018']:
             db_calib = args.Dataset(base_dir=args.volume_path, split="test",)
 
         calib_loader = DataLoader(db_calib, batch_size=1, shuffle=False, num_workers=1)
@@ -423,12 +445,14 @@ if __name__ == "__main__":
                         num_slices_to_overlay=args.num_slices_to_overlay,
                         save_path=save_path,
                     )
-            elif dataset_name == 'Cataract1k':
-                ds_viz = Cataract1kDataset(base_dir=args.volume_path, split="val")
+            elif dataset_name in ['Cataract1k', 'EndoVis2018']:
+                viz_split = "val" if dataset_name == 'Cataract1k' else "test"
+                ds_viz = args.Dataset(base_dir=args.volume_path, split=viz_split)
                 total = len(ds_viz)
                 start = max(0, min(args.viz_index, total - 1))
                 count = max(1, args.viz_count)
                 end = min(total, start + count)
+                viz_dataset_label = 'Cataract1K' if dataset_name == 'Cataract1k' else 'EndoVis2018'
 
                 if count > 1:
                     imgs, labs, titles = [], [], []
@@ -437,14 +461,15 @@ if __name__ == "__main__":
                         imgs.append(s['image'])
                         labs.append(s['label'])
                         titles.append(s['case_name'])
-                    default_name = f"Cataract_grid_{start}-{end-1}_{timestamp}.png"
+                    default_name = f"{dataset_name}_grid_{start}-{end-1}_{timestamp}.png"
                     save_path = resolve_save_path(default_name)
-                    figure_title = f"Cataract-101K | cases {start}-{end-1}"
+                    figure_title = f"{viz_dataset_label} | cases {start}-{end-1}"
                     visualize_cataract_batch(
                         net,
                         images=imgs,
                         labels=labs,
                         img_size=args.img_size,
+                        class_labels=args.class_names,
                         row_titles=titles,
                         figure_title=figure_title,
                         include_input=not args.viz_hide_input,
@@ -453,14 +478,15 @@ if __name__ == "__main__":
                     )
                 else:
                     sample = ds_viz[start]
-                    title = f"Cataract-101K | case: {sample['case_name']}"
-                    default_name = f"Cataract_{sample['case_name']}_{timestamp}.png"
+                    title = f"{viz_dataset_label} | case: {sample['case_name']}"
+                    default_name = f"{dataset_name}_{sample['case_name']}_{timestamp}.png"
                     save_path = resolve_save_path(default_name)
                     visualize_cataract_sample(
                         net,
                         image=sample['image'],
                         label=sample['label'],
                         img_size=args.img_size,
+                        class_labels=args.class_names,
                         figure_title=title,
                         include_input=not args.viz_hide_input,
                         num_slices_to_overlay=args.num_slices_to_overlay,
