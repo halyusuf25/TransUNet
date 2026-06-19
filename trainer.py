@@ -510,6 +510,10 @@ def trainer_endovis(args, model, snapshot_path, teacher_model=None):
 
 
 def trainer_acdc(args, model, snapshot_path, teacher_model=None):
+    logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
+                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    logging.info(str(args))
     
     base_lr = args.base_lr
     num_classes = args.num_classes
@@ -519,7 +523,7 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
     db_train = ACDC_Dataset(base_dir=args.root_path, split="train", transform=transforms.Compose([
         RandomGenerator4ACDC([args.img_size, args.img_size])]), fold_id=args.fold_id)
     
-    db_val = ACDC_Dataset(base_dir=args.root_path, split="val", fold_id=args.fold_id)
+    db_val = ACDC_Dataset(base_dir=args.root_path, split="test", fold_id=args.fold_id)
     
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
@@ -570,7 +574,7 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar('info/total_loss', loss, iter_num)
             writer.add_scalar('info/loss_ce', loss_ce, iter_num)
 
-            logging.info('epoch %d iteration %d : loss : %f, loss_ce: %f' % (epoch_num, iter_num, loss.item(), loss_ce.item()))
+            logging.info('epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f' % (epoch_num, iter_num, loss.item(), loss_dice.item(), loss_ce.item()))
 
             # if iter_num % 20 == 0:
             #     image = volume_batch[1, 0:1, :, :]
