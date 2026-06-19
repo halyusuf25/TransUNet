@@ -20,7 +20,7 @@ class ACDC_Dataset(Dataset):
         self.sample_list = []
         self.split = split
         self.transform = transform
-        train_ids, val_ids, test_ids = self._get_ids(fold_id=fold_id)
+        train_ids, val_ids, test_ids = self._get_ids()
         if self.split.find('train') != -1:
             self.all_slices = os.listdir(
                 self._base_dir + "/ACDC_training_slices")
@@ -49,53 +49,48 @@ class ACDC_Dataset(Dataset):
         #     self.sample_list = self.sample_list[:num]
         print("total {} samples".format(len(self.sample_list)))
 
-    def _get_ids(self, fold_id=0):
-        """Return patient ID splits for training, validation, and testing.
+    # def _get_ids(self, fold_id=0):
+    #     """Return patient ID splits for training, validation, and testing."""
+    #     all_cases_set = ["patient{:0>3}".format(i) for i in range(1, 101)]
+    #     fold_id = int(fold_id)
+    #     if fold_id < 0 or fold_id >= 5:
+    #         raise ValueError("fold_id must be between 0 and 4")
 
-        The dataset is divided into 5 equal folds. The requested fold_id is used
-        as the test set, the next fold is used for validation, and the remaining
-        folds are combined for training.
+    #     fold_size = len(all_cases_set) // 5
+    #     folds = [
+    #         all_cases_set[i * fold_size:(i + 1) * fold_size]
+    #         for i in range(5)
+    #     ]
+    #     validation_fold_id = (fold_id + 1) % 5
 
-        Args:
-            fold_id (int): index of the fold to use as the test set (0-4).
+    #     testing_set = folds[fold_id]
+    #     validation_set = folds[validation_fold_id][:10]
+    #     training_set = [
+    #         case
+    #         for case in all_cases_set
+    #         if case not in testing_set and case not in validation_set
+    #     ]
 
-        Returns:
-            list: [training_set, validation_set, testing_set] where each element
-            is a list of patient IDs.
-        """
+    #     training_ids = set(training_set)
+    #     validation_ids = set(validation_set)
+    #     testing_ids = set(testing_set)
+    #     assert len(training_set) == 70
+    #     assert len(validation_set) == 10
+    #     assert len(testing_set) == 20
+    #     assert not training_ids & validation_ids
+    #     assert not training_ids & testing_ids
+    #     assert not validation_ids & testing_ids
+    #     assert len(training_ids | validation_ids | testing_ids) == 100
+
+    #     return [training_set, validation_set, testing_set]
+    
+    def _get_ids(self):
         all_cases_set = ["patient{:0>3}".format(i) for i in range(1, 101)]
-        # fold_id = int(fold_id)
-        fold_size = len(all_cases_set) // 5
-        folds = [
-            all_cases_set[i * fold_size:(i + 1) * fold_size]
-            for i in range(5)
-        ]
-        validation_fold_id = (fold_id + 1) % 5
-        testing_set = folds[fold_id]
-        validation_set = folds[validation_fold_id]
-        training_set = [
-            case
-            for i, fold in enumerate(folds)
-            if i not in (fold_id, validation_fold_id)
-            for case in fold
-        ]
-        # else:
-        #     testing_set = ["patient{:0>3}".format(i) for i in range(1, 21)]
-        #     validation_set = ["patient{:0>3}".format(i) for i in range(21, 31)]
-        #     training_set = [i for i in all_cases_set if i not in testing_set+validation_set]
+        testing_set = ["patient{:0>3}".format(i) for i in range(1, 21)]
+        validation_set = ["patient{:0>3}".format(i) for i in range(1, 21)]
+        training_set = [i for i in all_cases_set if i not in testing_set+validation_set]
 
         return [training_set, validation_set, testing_set]
-    
-    # def _get_ids(self, seed=1234):
-    #     all_cases = [f"patient{i:03d}" for i in range(1, 101)]
-    #     rng = random.Random(seed)
-    #     rng.shuffle(all_cases)
-
-    #     test_ids = all_cases[:20]
-    #     val_ids  = all_cases[20:30]
-    #     train_ids = all_cases[30:]
-
-    #     return [train_ids, val_ids, test_ids]
 
 
     def __len__(self):
