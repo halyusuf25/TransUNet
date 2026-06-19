@@ -16,7 +16,14 @@ from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
 from datasets.dataset_acdc import ACDC_Dataset
 from datasets.dataset_endovis2018 import EndoVis2018Dataset
-from utils import test_single_volume, _make_json_safe, model_size_mb_benchmark, runtime_memory_mb_benchmark
+from utils import (
+    test_single_volume,
+    test_single_volume_endovis2018_rss,
+    _safe_nanmean,
+    _make_json_safe,
+    model_size_mb_benchmark,
+    runtime_memory_mb_benchmark,
+)
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from networks.quantizer import AWQViTSegQuantizer
@@ -106,8 +113,38 @@ parser.add_argument('--drop_se_block', action='store_true', help='whether to dro
 parser.add_argument('--description', type=str, default='no description for this test run', help='description for the experiment')
 parser.add_argument('--verbose', action='store_true', 
                     help='whether to print detailed debug information during inference')
+parser.add_argument(
+    "--normalize_endovis_eval",
+    action="store_true",
+    help="Apply ImageNet normalization during EndoVis2018 evaluation. Use only if training used the same normalization.",
+)
 ###############################################
 args = parser.parse_args()
+
+
+def _endovis_sequence_name(case_name):
+    return str(case_name).split('_', 1)[0]
+
+
+def _endovis_sequence_sort_key(sequence_name):
+    prefix = "seq"
+    if sequence_name.startswith(prefix) and sequence_name[len(prefix):].isdigit():
+        return 0, int(sequence_name[len(prefix):])
+    return 1, sequence_name
+
+
+def _class_label(class_names, class_id):
+    if class_names is not None and class_id < len(class_names):
+        return class_names[class_id]
+    return f"class_{class_id}"
+
+
+def _mean_metric_array(metric_stack):
+    metric_stack = np.asarray(metric_stack, dtype=np.float32)
+    mean_metrics = np.full(metric_stack.shape[1:], np.nan, dtype=np.float32)
+    for index in np.ndindex(mean_metrics.shape):
+        mean_metrics[index] = _safe_nanmean(metric_stack[(slice(None),) + index])
+    return mean_metrics
 
 
 def inference(args, model, test_save_path=None):
@@ -120,6 +157,166 @@ def inference(args, model, test_save_path=None):
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
     all_metrics = []
+    class_names = getattr(args, "class_names", None)
+
+    if args.dataset == 'EndoVis2018':
+        endovis_frame_metrics = []
+        endovis_per_class_metrics = []
+        sequence_frame_metrics = {}
+        sequence_per_class_metrics = {}
+        class_presence_counts = np.zeros(args.num_classes, dtype=np.int64)
+        false_positive_absent_class_counts = np.zeros(args.num_classes, dtype=np.int64)
+        discounted_frames = 0
+
+        for i_batch, sampled_batch in tqdm(enumerate(testloader)):
+            image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch['case_name'][0]
+            result_i = test_single_volume_endovis2018_rss(
+                image,
+                label,
+                model,
+                classes=args.num_classes,
+                patch_size=[args.img_size, args.img_size],
+                test_save_path=test_save_path,
+                case=case_name,
+                z_spacing=args.z_spacing,
+                normalize=getattr(args, "normalize_endovis_eval", False),
+            )
+            metric_i = result_i["per_class_metrics"]
+            frame_metrics_i = result_i["frame_metrics"]
+            present_class_ids_i = result_i["present_class_ids"]
+            false_positive_absent_class_ids_i = result_i["false_positive_absent_class_ids"]
+
+            endovis_frame_metrics.append(frame_metrics_i)
+            endovis_per_class_metrics.append(metric_i)
+            if result_i["discounted_frame"]:
+                discounted_frames += 1
+            for class_id in present_class_ids_i:
+                class_presence_counts[class_id] += 1
+            for class_id in false_positive_absent_class_ids_i:
+                false_positive_absent_class_counts[class_id] += 1
+
+            sequence_name = _endovis_sequence_name(case_name)
+            sequence_frame_metrics.setdefault(sequence_name, []).append(frame_metrics_i)
+            sequence_per_class_metrics.setdefault(sequence_name, []).append(metric_i)
+
+            logging.info(
+                'idx %d case %s frame_present_mean_dice %f frame_present_mean_hd95 %f frame_present_mean_iou %f present_class_ids %s' %
+                (
+                    i_batch,
+                    case_name,
+                    frame_metrics_i[0],
+                    frame_metrics_i[1],
+                    frame_metrics_i[2],
+                    present_class_ids_i,
+                )
+            )
+            if args.verbose:
+                break
+
+        if not endovis_frame_metrics:
+            raise RuntimeError("No metrics were collected during inference.")
+
+        official_frame_stack = np.stack(endovis_frame_metrics, axis=0)
+        performance = _safe_nanmean(official_frame_stack[:, 0])
+        mean_hd95 = _safe_nanmean(official_frame_stack[:, 1])
+        mean_iou = _safe_nanmean(official_frame_stack[:, 2])
+
+        per_class_stack = np.stack(endovis_per_class_metrics, axis=0)
+        per_class_mean = _mean_metric_array(per_class_stack)
+        per_class_metrics = {}
+        logging.info("Diagnostic per-class means are not the official headline metric.")
+        for i in range(1, args.num_classes):
+            class_metrics = per_class_mean[i - 1]
+            class_label = _class_label(class_names, i)
+            logging.info(
+                'Diagnostic Mean class %s (idx %d) mean_dice %f mean_hd95 %f mean_iou %f' %
+                (class_label, i, class_metrics[0], class_metrics[1], class_metrics[2])
+            )
+            per_class_metrics[class_label] = {
+                'dice': float(class_metrics[0]),
+                'hd95': float(class_metrics[1]),
+                'iou': float(class_metrics[2]),
+            }
+
+        per_sequence_metrics = {}
+        for sequence_name in sorted(sequence_frame_metrics, key=_endovis_sequence_sort_key):
+            sequence_stack = np.stack(sequence_frame_metrics[sequence_name], axis=0)
+            sequence_dice = _safe_nanmean(sequence_stack[:, 0])
+            sequence_hd95 = _safe_nanmean(sequence_stack[:, 1])
+            sequence_iou = _safe_nanmean(sequence_stack[:, 2])
+            sequence_per_class_mean = _mean_metric_array(
+                np.stack(sequence_per_class_metrics[sequence_name], axis=0)
+            )
+            sequence_per_class = {}
+            for i in range(1, args.num_classes):
+                class_metrics = sequence_per_class_mean[i - 1]
+                class_label = _class_label(class_names, i)
+                sequence_per_class[class_label] = {
+                    'dice': float(class_metrics[0]),
+                    'hd95': float(class_metrics[1]),
+                    'iou': float(class_metrics[2]),
+                }
+
+            logging.info(
+                'Mean sequence %s frames %d mean_dice %f mean_hd95 %f mean_iou %f' %
+                (
+                    sequence_name,
+                    len(sequence_frame_metrics[sequence_name]),
+                    sequence_dice,
+                    sequence_hd95,
+                    sequence_iou,
+                )
+            )
+            per_sequence_metrics[sequence_name] = {
+                'mean_dice': float(sequence_dice),
+                'mean_hd95': float(sequence_hd95),
+                'mean_iou': float(sequence_iou),
+                'num_frames': len(sequence_frame_metrics[sequence_name]),
+                'per_class_diagnostic': sequence_per_class,
+            }
+
+        class_presence_counts_dict = {
+            _class_label(class_names, i): int(class_presence_counts[i])
+            for i in range(1, args.num_classes)
+        }
+        false_positive_absent_class_counts_dict = {
+            _class_label(class_names, i): int(false_positive_absent_class_counts[i])
+            for i in range(1, args.num_classes)
+        }
+        num_frames = len(endovis_frame_metrics)
+        evaluated_frames = num_frames - discounted_frames
+        logging.info(
+            "EndoVis2018 RSS official-style performance: mean_dice %f, mean_hd95 %f, mean_iou %f",
+            performance,
+            mean_hd95,
+            mean_iou,
+        )
+        logging.info(
+            "EndoVis2018 RSS evaluated frames: %d | discounted frames: %d | total frames: %d",
+            evaluated_frames,
+            discounted_frames,
+            num_frames,
+        )
+        logging.info("EndoVis2018 class presence counts: %s", json.dumps(class_presence_counts_dict))
+        logging.info(
+            "EndoVis2018 false-positive absent-class counts: %s",
+            json.dumps(false_positive_absent_class_counts_dict),
+        )
+        print("Testing Finished!")
+        return {
+            "mean_dice": float(performance),
+            "mean_hd95": float(mean_hd95),
+            "mean_iou": float(mean_iou),
+            "protocol": "EndoVis2018_RSS_frame_present_background_excluded",
+            "per_class_diagnostic": per_class_metrics,
+            "per_sequence": per_sequence_metrics,
+            "class_presence_counts": class_presence_counts_dict,
+            "false_positive_absent_class_counts": false_positive_absent_class_counts_dict,
+            "discounted_frames": int(discounted_frames),
+            "evaluated_frames": int(evaluated_frames),
+            "num_frames": int(num_frames),
+        }
+
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch['case_name'][0]
         metric_i = test_single_volume(image, label, model, classes=args.num_classes, patch_size=[args.img_size, args.img_size],

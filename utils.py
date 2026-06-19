@@ -182,6 +182,149 @@ def calculate_metric_percase_cataract(pred, gt, voxelspacing=None):
         return 0.0, np.nan, 0.0
 
     return np.nan, np.nan, np.nan
+
+
+def _safe_nanmean(values):
+    values = np.asarray(values, dtype=np.float32)
+    if values.size == 0 or np.all(np.isnan(values)):
+        return np.nan
+    with np.errstate(invalid="ignore"):
+        return float(np.nanmean(values))
+
+
+def _endovis_present_class_metric(prediction, label, class_id, voxelspacing=None):
+    pred_mask = prediction == class_id
+    gt_mask = label == class_id
+    pred_present = pred_mask.sum() > 0
+    gt_present = gt_mask.sum() > 0
+
+    if not gt_present:
+        return np.nan, np.nan, np.nan, True
+
+    if not pred_present:
+        return 0.0, np.nan, 0.0, False
+
+    dice = metric.binary.dc(pred_mask, gt_mask)
+    hd95 = metric.binary.hd95(pred_mask, gt_mask, voxelspacing=voxelspacing)
+    iou = metric.binary.jc(pred_mask, gt_mask)
+    return float(dice), float(hd95), float(iou), False
+
+
+def test_single_volume_endovis2018_rss(
+    image,
+    label,
+    net,
+    classes,
+    patch_size=(256, 256),
+    test_save_path=None,
+    case=None,
+    z_spacing=1,
+    normalize=False,
+    image_mean=(0.485, 0.456, 0.406),
+    image_std=(0.229, 0.224, 0.225),
+    return_prediction=False,
+):
+    image = image.squeeze(0).cpu().detach().numpy()
+    label = label.squeeze(0).cpu().detach().numpy()
+    net.eval()
+
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError(
+            "EndoVis2018 RSS evaluation expects image shape HxWx3 after squeeze, got {}".format(
+                image.shape
+            )
+        )
+    if label.ndim != 2:
+        raise ValueError(
+            "EndoVis2018 RSS evaluation expects label shape HxW after squeeze, got {}".format(
+                label.shape
+            )
+        )
+
+    patch_h, patch_w = int(patch_size[0]), int(patch_size[1])
+    h, w, c = image.shape
+    resized_channels = []
+    for ch in range(c):
+        resized_channels.append(zoom(image[:, :, ch], (patch_h / h, patch_w / w), order=3))
+    resized_image = np.stack(resized_channels, axis=0).astype(np.float32)
+
+    if normalize:
+        resized_image = resized_image / 255.0
+        mean = np.asarray(image_mean, dtype=np.float32).reshape(3, 1, 1)
+        std = np.asarray(image_std, dtype=np.float32).reshape(3, 1, 1)
+        resized_image = (resized_image - mean) / std
+
+    try:
+        device = next(net.parameters()).device
+    except StopIteration:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    input_tensor = torch.from_numpy(resized_image).unsqueeze(0).float().to(device)
+    with torch.inference_mode():
+        outputs = net(input_tensor)
+        if isinstance(outputs, (list, tuple)):
+            outputs = outputs[0]
+        out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
+        out = out.cpu().detach().numpy()
+
+    prediction = zoom(out, (h / patch_h, w / patch_w), order=0).astype(label.dtype, copy=False)
+
+    per_class_metrics = np.full((classes - 1, 3), np.nan, dtype=np.float32)
+    present_class_ids = [
+        class_id
+        for class_id in range(1, classes)
+        if np.any(label == class_id)
+    ]
+    discounted_frame = len(present_class_ids) == 0
+    false_positive_absent_class_ids = [
+        class_id
+        for class_id in range(1, classes)
+        if not np.any(label == class_id) and np.any(prediction == class_id)
+    ]
+
+    if not discounted_frame:
+        for class_id in present_class_ids:
+            dice, hd95, iou, ignored = _endovis_present_class_metric(
+                prediction,
+                label,
+                class_id,
+                voxelspacing=(1, 1),
+            )
+            if not ignored:
+                per_class_metrics[class_id - 1] = [dice, hd95, iou]
+
+    frame_metrics = np.array(
+        [
+            _safe_nanmean(per_class_metrics[:, 0]),
+            _safe_nanmean(per_class_metrics[:, 1]),
+            _safe_nanmean(per_class_metrics[:, 2]),
+        ],
+        dtype=np.float32,
+    )
+
+    if test_save_path is not None:
+        img_itk = sitk.GetImageFromArray(image.astype(np.float32))
+        prd_itk = sitk.GetImageFromArray(prediction.astype(np.float32))
+        lab_itk = sitk.GetImageFromArray(label.astype(np.float32))
+        spacing = (1, 1, z_spacing)
+        img_itk.SetSpacing(spacing[:img_itk.GetDimension()])
+        prd_itk.SetSpacing(spacing[:prd_itk.GetDimension()])
+        lab_itk.SetSpacing(spacing[:lab_itk.GetDimension()])
+        sitk.WriteImage(prd_itk, test_save_path + '/' + case + "_pred.nii.gz")
+        sitk.WriteImage(img_itk, test_save_path + '/' + case + "_img.nii.gz")
+        sitk.WriteImage(lab_itk, test_save_path + '/' + case + "_gt.nii.gz")
+
+    result = {
+        "per_class_metrics": per_class_metrics,
+        "frame_metrics": frame_metrics,
+        "present_class_ids": present_class_ids,
+        "discounted_frame": discounted_frame,
+        "false_positive_absent_class_ids": false_positive_absent_class_ids,
+        "case": case,
+    }
+    if return_prediction:
+        result["prediction"] = prediction
+    return result
     
 def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, dataset='Synapse'):
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()

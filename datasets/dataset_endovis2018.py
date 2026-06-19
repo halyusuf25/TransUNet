@@ -134,20 +134,26 @@ class EndoVis2018Dataset(Dataset):
                 return label_json
             raise FileNotFoundError("Could not find {}".format(label_json))
 
-        train_candidate = os.path.join(
-            self.data_dir,
-            'train',
-            'labels',
-            label_json,
-        )
-        if os.path.exists(train_candidate):
-            return train_candidate
+        root_candidate = os.path.join(self.data_dir, label_json)
+        if os.path.exists(root_candidate):
+            return root_candidate
+        else:
+            raise ValueError("Could not find {} in data_dir".format(label_json))
 
-        candidate = os.path.join(self.label_dir, label_json)
-        if os.path.exists(candidate):
-            return candidate
+        # train_candidate = os.path.join(
+        #     self.data_dir,
+        #     'train',
+        #     'labels',
+        #     label_json,
+        # )
+        # if os.path.exists(train_candidate):
+        #     return train_candidate
 
-        raise FileNotFoundError("Could not find {}".format(label_json))
+        # candidate = os.path.join(self.label_dir, label_json)
+        # if os.path.exists(candidate):
+        #     return candidate
+
+        # raise FileNotFoundError("Could not find {}".format(label_json))
 
     def _load_labels(self, label_json_path):
         with open(label_json_path, 'r') as f:
@@ -197,10 +203,35 @@ class EndoVis2018Dataset(Dataset):
         return self._color_label_to_class_ids(label_image)
 
     def _color_label_to_class_ids(self, label_image):
-        mask = np.zeros(label_image.shape[:2], dtype=np.uint8)
+        mask = np.full(label_image.shape[:2], 255, dtype=np.uint8)
+
         for color, class_id in self.color_to_class.items():
-            matches = np.all(label_image == np.array(color, dtype=np.uint8), axis=-1)
+            color_arr = np.array(color, dtype=np.uint8)
+            matches = np.all(label_image == color_arr, axis=-1)
             mask[matches] = class_id
+
+        unknown = mask == 255
+        if np.any(unknown):
+            unknown_colors, counts = np.unique(
+                label_image[unknown].reshape(-1, 3),
+                axis=0,
+                return_counts=True,
+            )
+
+            order = np.argsort(counts)[::-1]
+            preview = [
+                {
+                    "rgb": unknown_colors[i].tolist(),
+                    "count": int(counts[i]),
+                }
+                for i in order[:20]
+            ]
+
+            raise ValueError(
+                "Unknown RGB colors found in label mask. "
+                f"Most frequent unknown colors: {preview}. "
+                "Your labels.json is incomplete or mismatched."
+            )
 
         return mask
 
