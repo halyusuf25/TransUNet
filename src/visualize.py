@@ -1,5 +1,6 @@
 import os
 import re
+from datetime import datetime
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -942,3 +943,118 @@ def visualize_cataract_batch(
         save_path=save_path,
         include_input=include_input,
     )
+
+
+def resolve_visualization_save_path(args, default_name: str):
+    img_exts = {'.png', '.jpg', '.jpeg', '.pdf', '.svg', '.tif', '.tiff'}
+    base = args.viz_save
+    name = args.viz_out or default_name
+    if args.viz_suffix:
+        base_name, ext = os.path.splitext(name)
+        name = f"{base_name}{args.viz_suffix}{ext}"
+    if base is None:
+        return os.path.join('qualitative', name)
+    ext = os.path.splitext(base)[1].lower()
+    if ext in img_exts:
+        return base
+    return os.path.join(base, name)
+
+
+def generate_qualitative_visualization(args, model, dataset_name):
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if dataset_name == 'Synapse':
+            ds_viz = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
+            total = len(ds_viz)
+            start = max(0, min(args.viz_index, total - 1))
+            count = max(1, args.viz_count)
+            end = min(total, start + count)
+
+            if count > 1:
+                vols, labs, titles = [], [], []
+                for i in range(start, end):
+                    s = ds_viz[i]
+                    vols.append(s['image'])
+                    labs.append(s['label'])
+                    titles.append(s['case_name'])
+                slice_indices = None if args.viz_slice is None else [args.viz_slice] * len(vols)
+                default_name = f"Synapse_grid_{start}-{end-1}_{timestamp}.png"
+                save_path = resolve_visualization_save_path(args, default_name)
+                figure_title = f"Synapse | cases {start}-{end-1}"
+                visualize_synapse_batch(
+                    model,
+                    volumes=vols,
+                    labels=labs,
+                    slice_indices=slice_indices,
+                    img_size=args.img_size,
+                    row_titles=titles,
+                    figure_title=figure_title,
+                    include_input=not args.viz_hide_input,
+                    num_slices_to_overlay=args.num_slices_to_overlay,
+                    save_path=save_path,
+                )
+            else:
+                sample = ds_viz[start]
+                title = f"Synapse | case: {sample['case_name']}"
+                default_name = f"Synapse_{sample['case_name']}_{timestamp}.png"
+                save_path = resolve_visualization_save_path(args, default_name)
+                visualize_synapse_sample(
+                    model,
+                    volume=sample['image'],
+                    label=sample['label'],
+                    slice_index=args.viz_slice,
+                    img_size=args.img_size,
+                    figure_title=title,
+                    include_input=not args.viz_hide_input,
+                    num_slices_to_overlay=args.num_slices_to_overlay,
+                    save_path=save_path,
+                )
+        elif dataset_name in ['Cataract1k', 'EndoVis2018']:
+            viz_split = "val" if dataset_name == 'Cataract1k' else "test"
+            ds_viz = args.Dataset(base_dir=args.volume_path, split=viz_split)
+            total = len(ds_viz)
+            start = max(0, min(args.viz_index, total - 1))
+            count = max(1, args.viz_count)
+            end = min(total, start + count)
+            viz_dataset_label = 'Cataract1K' if dataset_name == 'Cataract1k' else 'EndoVis2018'
+
+            if count > 1:
+                imgs, labs, titles = [], [], []
+                for i in range(start, end):
+                    s = ds_viz[i]
+                    imgs.append(s['image'])
+                    labs.append(s['label'])
+                    titles.append(s['case_name'])
+                default_name = f"{dataset_name}_grid_{start}-{end-1}_{timestamp}.png"
+                save_path = resolve_visualization_save_path(args, default_name)
+                figure_title = f"{viz_dataset_label} | cases {start}-{end-1}"
+                visualize_cataract_batch(
+                    model,
+                    images=imgs,
+                    labels=labs,
+                    img_size=args.img_size,
+                    class_labels=args.class_names,
+                    row_titles=titles,
+                    figure_title=figure_title,
+                    include_input=not args.viz_hide_input,
+                    num_slices_to_overlay=args.num_slices_to_overlay,
+                    save_path=save_path,
+                )
+            else:
+                sample = ds_viz[start]
+                title = f"{viz_dataset_label} | case: {sample['case_name']}"
+                default_name = f"{dataset_name}_{sample['case_name']}_{timestamp}.png"
+                save_path = resolve_visualization_save_path(args, default_name)
+                visualize_cataract_sample(
+                    model,
+                    image=sample['image'],
+                    label=sample['label'],
+                    img_size=args.img_size,
+                    class_labels=args.class_names,
+                    figure_title=title,
+                    include_input=not args.viz_hide_input,
+                    num_slices_to_overlay=args.num_slices_to_overlay,
+                    save_path=save_path,
+                )
+    except Exception as e:
+        raise RuntimeError(f"Visualization failed due to: {e}")

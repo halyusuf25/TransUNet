@@ -1,9 +1,5 @@
-import argparse
-import datetime
 import logging
 import os
-from pyexpat import features
-import random
 import sys
 from datetime import datetime
 import numpy as np
@@ -20,14 +16,15 @@ from utils import (
     _is_primary_process,
 )
 from src.loss_bu import BULoss
-from networks.distillation import compute_kd_loss, MGD, KDTarget, KDWeights
+from networks.distillation import compute_kd_loss, MGD, KDWeights
 from torchvision import transforms
 from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
 from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
 from datasets.dataset_acdc import ACDC_Dataset, RandomGenerator4ACDC
 from datasets.dataset_endovis2018 import EndoVis2018Dataset, RandomGenerator4EndoVis2018
 from utils import test_single_volume
-from visualize import (
+from src.trainer_helpers import make_worker_init_fn, _validate_endovis, save_checkpoint
+from src.visualize import (
     _get_dataset_sample_names,
     _resolve_heatmap_sample_targets,
     _should_save_heatmap_epoch,
@@ -59,9 +56,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
 
     args.ckpt_filename += '_' + args.dataset + '_'
 
-    def worker_init_fn(worker_id):
-        random.seed(args.seed + worker_id)
-
+    worker_init_fn = make_worker_init_fn(args.seed)
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True,
                              worker_init_fn=worker_init_fn)
     if args.n_gpu > 1:
@@ -272,13 +267,13 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
         
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # save_interval = 70  # int(max_epoch/6)
-        # if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
-        #     save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
-        #     torch.save(model.state_dict(), save_mode_path)
-        #     local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
-        #     torch.save(model.state_dict(), local_path)
-        #     logging.info("save model to {}".format(save_mode_path))
+        save_interval = 70  # int(max_epoch/6)
+        if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
+            save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
+            torch.save(model.state_dict(), save_mode_path)
+            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
+            torch.save(model.state_dict(), local_path)
+            logging.info("save model to {}".format(save_mode_path))
 
         if epoch_num >= max_epoch - 1:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
@@ -291,74 +286,6 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
 
     writer.close()
     return "Training Finished!"
-
-
-def _endovis_class_dice(outputs, labels, num_classes):
-    predictions = torch.argmax(outputs, dim=1)
-    dice_values = []
-    for class_i in range(1, num_classes):
-        pred_mask = predictions == class_i
-        label_mask = labels == class_i
-        pred_sum = pred_mask.sum().float()
-        label_sum = label_mask.sum().float()
-
-        if pred_sum.item() == 0 and label_sum.item() == 0:
-            dice_values.append(np.nan)
-            continue
-
-        intersection = (pred_mask & label_mask).sum().float()
-        dice = (2.0 * intersection) / (pred_sum + label_sum + 1e-5)
-        dice_values.append(float(dice.detach().cpu().item()))
-
-    return np.array(dice_values, dtype=np.float32)
-
-
-def _validate_endovis(model, valloader, ce_loss, dice_loss, num_classes, lambda_):
-    model.eval()
-    total_loss = 0.0
-    total_ce_loss = 0.0
-    total_dice_loss = 0.0
-    batch_count = 0
-    dice_sum = np.zeros(num_classes - 1, dtype=np.float64)
-    dice_count = np.zeros(num_classes - 1, dtype=np.float64)
-
-    with torch.no_grad():
-        for sampled_batch in valloader:
-            image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
-            image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
-            outputs, _, _, _ = model(image_batch)
-            loss_ce = ce_loss(outputs, label_batch[:].long())
-            loss_dice = dice_loss(outputs, label_batch, softmax=True)
-            loss = (1 - lambda_) * loss_dice + lambda_ * loss_ce
-
-            total_loss += loss.item()
-            total_ce_loss += loss_ce.item()
-            total_dice_loss += loss_dice.item()
-            batch_count += 1
-
-            class_dice = _endovis_class_dice(outputs, label_batch, num_classes)
-            valid_classes = ~np.isnan(class_dice)
-            dice_sum[valid_classes] += class_dice[valid_classes]
-            dice_count[valid_classes] += 1
-
-    mean_class_dice = np.divide(
-        dice_sum,
-        dice_count,
-        out=np.full_like(dice_sum, np.nan, dtype=np.float64),
-        where=dice_count > 0,
-    )
-    if np.all(np.isnan(mean_class_dice)):
-        mean_dice = 0.0
-    else:
-        mean_dice = float(np.nanmean(mean_class_dice))
-
-    return {
-        'loss': total_loss / max(batch_count, 1),
-        'loss_ce': total_ce_loss / max(batch_count, 1),
-        'loss_dice': total_dice_loss / max(batch_count, 1),
-        'class_dice': mean_class_dice,
-        'mean_dice': mean_dice,
-    }
 
 
 def trainer_endovis(args, model, snapshot_path, teacher_model=None):
@@ -391,9 +318,7 @@ def trainer_endovis(args, model, snapshot_path, teacher_model=None):
 
     args.ckpt_filename += '_' + args.dataset + '_'
 
-    def worker_init_fn(worker_id):
-        random.seed(args.seed + worker_id)
-
+    worker_init_fn = make_worker_init_fn(args.seed)
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True,
                              worker_init_fn=worker_init_fn)
     valloader = DataLoader(db_val, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
@@ -419,23 +344,6 @@ def trainer_endovis(args, model, snapshot_path, teacher_model=None):
     writer = SummaryWriter(args.tensorboard_run_dir)
     logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
 
-    # is_primary_process = _is_primary_process()
-    # heatmaps_enabled = bool(getattr(args, "create_heatmaps", False)) and args.use_bu_loss and is_primary_process
-    # fixed_heatmap_sample_id = None
-    # fixed_heatmap_target_samples = []
-    # dataset_sample_names = []
-    # if heatmaps_enabled:
-    #     all_sample_names = _get_dataset_sample_names(db_train)
-    #     dataset_sample_names = [all_sample_names[index] for index in train_indices]
-    #     os.makedirs(args.heatmaps_dir, exist_ok=True)
-    #     logging.info(
-    #         "BU-loss heatmap generation enabled. Output dir: %s | slices per target epoch: %d",
-    #         args.heatmaps_dir,
-    #         int(getattr(args, "num_heatmap_slices", 1)),
-    #     )
-    # elif bool(getattr(args, "create_heatmaps", False)) and not is_primary_process:
-    #     logging.info("BU-loss heatmap generation disabled on non-primary process.")
-
     iter_num = 0
     max_epoch = args.max_epochs
     max_iterations = args.max_epochs * len(trainloader)
@@ -443,12 +351,9 @@ def trainer_endovis(args, model, snapshot_path, teacher_model=None):
     logging.info("{} val iterations per validation".format(len(valloader)))
     best_performance = 0.0
     iterator = tqdm(range(max_epoch), ncols=70)
-    # last_bu_details = None
+
     for epoch_num in iterator:
-        # epoch_index = epoch_num + 1
-        # should_save_heatmap_this_epoch = heatmaps_enabled and _should_save_heatmap_epoch(epoch_index)
-        # pending_heatmap_samples = set(fixed_heatmap_target_samples) if should_save_heatmap_this_epoch else set()
-        # saved_heatmap_count_this_epoch = 0
+
         for i_batch, sampled_batch in enumerate(trainloader):
             
             image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
@@ -525,9 +430,7 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
     
     db_val = ACDC_Dataset(base_dir=args.root_path, split="test", fold_id=args.fold_id)
     
-    def worker_init_fn(worker_id):
-        random.seed(args.seed + worker_id)
-    
+    worker_init_fn = make_worker_init_fn(args.seed)
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True,
                              num_workers=8, pin_memory=True, worker_init_fn=worker_init_fn)
     valloader = DataLoader(db_val, batch_size=1, shuffle=False,
@@ -576,16 +479,6 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
 
             logging.info('epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f' % (epoch_num, iter_num, loss.item(), loss_dice.item(), loss_ce.item()))
 
-            # if iter_num % 20 == 0:
-            #     image = volume_batch[1, 0:1, :, :]
-            #     image = (image - image.min()) / (image.max() - image.min())
-            #     writer.add_image('train/Image', image, iter_num)
-            #     outputs = torch.argmax(torch.softmax(
-            #         outputs, dim=1), dim=1, keepdim=True)
-            #     writer.add_image('train/Prediction',
-            #                      outputs[1, ...] * 50, iter_num)
-            #     labs = label_batch[1, ...].unsqueeze(0) * 50
-            #     writer.add_image('train/GroundTruth', labs, iter_num)
 
             if epoch_num > 30 and iter_num % 500 == 0:  # 500
                 model.eval()
@@ -623,10 +516,3 @@ def trainer_acdc(args, model, snapshot_path, teacher_model=None):
             if iter_num >= max_iterations:
                 save_checkpoint(model, args, epoch_num, performance)
                 break            
-            
-
-def save_checkpoint(model, args, epoch_num, mean_dice):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_dice_'+ str(mean_dice) + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
-    torch.save(model.state_dict(), local_path)
-    logging.info("save model to {}".format(local_path))

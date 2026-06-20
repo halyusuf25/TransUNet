@@ -12,8 +12,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 try:
-    from visualize import _discrete_cmap as _visualize_discrete_cmap
-    from visualize import _draw_gt_boundaries as _visualize_draw_gt_boundaries
+    from src.visualize import _discrete_cmap as _visualize_discrete_cmap
+    from src.visualize import _draw_gt_boundaries as _visualize_draw_gt_boundaries
 except Exception:
     _visualize_discrete_cmap = None
     _visualize_draw_gt_boundaries = None
