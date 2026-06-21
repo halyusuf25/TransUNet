@@ -1,8 +1,7 @@
 import logging
 import os
 import sys
-from datetime import datetime
-import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,64 +9,95 @@ from tensorboardX import SummaryWriter
 from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from utils import (
-    DiceLoss,
-    _extract_case_names,
-    _is_primary_process,
-)
+
+from networks.distillation import KDWeights, MGD, compute_kd_loss
 from src.loss_bu import BULoss
-from networks.distillation import compute_kd_loss, MGD, KDWeights
-from torchvision import transforms
-from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
-from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
-from datasets.dataset_acdc import ACDC_Dataset, RandomGenerator4ACDC
-from datasets.dataset_endovis2018 import EndoVis2018Dataset, RandomGenerator4EndoVis2018
-from utils import test_single_volume
-from src.trainer_helpers import make_worker_init_fn, _validate_endovis, save_checkpoint
+from src.trainer_helpers import (
+    _append_dataset_to_checkpoint_name,
+    _build_datasets,
+    _log_bu_epoch_details,
+    _log_train_images,
+    _log_validation,
+    _make_validation_loader,
+    _save_last_epoch_checkpoint,
+    _save_periodic_checkpoint,
+    _validate,
+    make_worker_init_fn,
+    save_checkpoint,
+)
 from src.visualize import (
     _get_dataset_sample_names,
     _resolve_heatmap_sample_targets,
     _should_save_heatmap_epoch,
     save_pending_weight_heatmaps,
 )
+from utils import (
+    DiceLoss,
+    _extract_case_names,
+    _is_primary_process,
+)
 
 
-def trainer_synapse(args, model, snapshot_path, teacher_model=None):
-    logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
-                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+def trainer(args, model, snapshot_path, teacher_model=None):
+    logging.basicConfig(
+        filename=snapshot_path + "/log.txt",
+        level=logging.INFO,
+        format="[%(asctime)s.%(msecs)03d] %(message)s",
+        datefmt="%H:%M:%S",
+    )
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
+
     base_lr = args.base_lr
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
-    # max_iterations = args.max_iterations
-    if args.dataset == 'Synapse':
-        db_train = Synapse_dataset(base_dir=args.root_path, list_dir=args.list_dir, split="train",
-                                transform=transforms.Compose(
-                                    [RandomGenerator(output_size=[args.img_size, args.img_size])]))
-        print("The length of train set is: {}".format(len(db_train)))
-    elif args.dataset == 'Cataract1k':
-        db_train = Cataract1kDataset(base_dir=args.root_path, split="train",
-                                    transform=transforms.Compose(
-                                        [RandomGenerator4Cataract(output_size=[args.img_size, args.img_size])]))
-        print("The length of train set is: {}".format(len(db_train)))
-    else:
-        raise ValueError("Unknown dataset: {}".format(args.dataset)) 
+    db_train, db_val, validation_protocol = _build_datasets(args)
 
-    args.ckpt_filename += '_' + args.dataset + '_'
+    print("The length of train set is: {}".format(len(db_train)))
+    print("The length of test set used for validation is: {}".format(len(db_val)))
+    logging.info(
+        "%s train samples: %d | test-as-val samples: %d",
+        args.dataset,
+        len(db_train),
+        len(db_val),
+    )
+    _append_dataset_to_checkpoint_name(args)
 
     worker_init_fn = make_worker_init_fn(args.seed)
-    trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True,
-                             worker_init_fn=worker_init_fn)
+    trainloader = DataLoader(
+        db_train,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True,
+        worker_init_fn=worker_init_fn,
+    )
+    valloader = _make_validation_loader(db_val, batch_size, validation_protocol)
+
     if args.n_gpu > 1:
         model = nn.DataParallel(model)
     model.train()
-    gamma = 0.2 # distillation loss weight
+
+    gamma = 0.2
     lambda_ = args.lambda_
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(num_classes)
     bu_loss = BULoss(loss_option=args.buloss_option, args=args)
     bu_loss = bu_loss.to(next(model.parameters()).device)
+    
+    if args.verbose:
+        print(f"Verbose mode is ON. Training will be stopped after two iterations for debugging purposes.")
+        print(f"BU Loss parameters will be printed for the first two iterations.")
+        print(f"BU Loss parameters: {list(bu_loss.parameters())}")
+
+        if not hasattr(bu_loss, "rho"):
+            raise RuntimeError(
+                "args.learn_tau=True, but BULoss does not expose a learnable rho parameter."
+            )
+        else:
+            print(f"BU Loss rho parameter: {bu_loss.rho}")
+
+
     optimizer_param_groups = [
         {
             "params": list(model.parameters()),
@@ -80,18 +110,30 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
     if args.use_bu_loss and args.learn_tau:
         optimizer_param_groups.append(
             {
-                "params": list(bu_loss.parameters()),
-                "lr": base_lr * 0.1,
+                "params": [bu_loss.rho],
+                "lr": base_lr * 0.5,
                 "momentum": 0.9,
                 "weight_decay": 0.0,
-                "lr_mult": 0.1,
+                "lr_mult": 0.5 ,
             }
         )
-    optimizer = optim.SGD(optimizer_param_groups, lr=base_lr, momentum=0.9, weight_decay=0.0001)
+    optimizer = optim.SGD(
+        optimizer_param_groups,
+        lr=base_lr,
+        momentum=0.9,
+        weight_decay=0.0001,
+    )
+
     writer = SummaryWriter(args.tensorboard_run_dir)
     logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
+    logging.info("{} val iterations per validation".format(len(valloader)))
+
     is_primary_process = _is_primary_process()
-    heatmaps_enabled = bool(getattr(args, "create_heatmaps", False)) and args.use_bu_loss and is_primary_process
+    heatmaps_enabled = (
+        bool(getattr(args, "create_heatmaps", False))
+        and args.use_bu_loss
+        and is_primary_process
+    )
     fixed_heatmap_sample_id = None
     fixed_heatmap_target_samples = []
     dataset_sample_names = _get_dataset_sample_names(db_train) if heatmaps_enabled else []
@@ -106,12 +148,15 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
         logging.info("BU-loss heatmap generation disabled on non-primary process.")
 
     iter_num = 0
-    max_epoch = args.max_epochs
-    max_iterations = args.max_epochs * len(trainloader)  # max_epoch = max_iterations // len(trainloader) + 1
+    max_iterations = args.max_iterations
+    max_epoch = max_iterations // len(trainloader) + 1
     logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
+
     best_performance = 0.0
     iterator = tqdm(range(max_epoch), ncols=70)
     last_bu_details = None
+    stop_training = False
+
     for epoch_num in iterator:
         epoch_index = epoch_num + 1
         should_save_heatmap_this_epoch = heatmaps_enabled and _should_save_heatmap_epoch(epoch_index)
@@ -121,6 +166,7 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
         epoch_ce_loss = 0.0
         epoch_dice_loss = 0.0
         epoch_batch_count = 0
+
         for i_batch, sampled_batch in enumerate(trainloader):
             case_names = _extract_case_names(sampled_batch)
             if heatmaps_enabled and fixed_heatmap_sample_id is None:
@@ -142,26 +188,27 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                     ", ".join(fixed_heatmap_target_samples),
                 )
 
-            image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
+            image_batch, label_batch = sampled_batch["image"], sampled_batch["label"]
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
-            outputs, _ , features, _ = model(image_batch)
+            outputs, _, features, _ = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
             loss_dice = dice_loss(outputs, label_batch, softmax=True)
             details = None
-            
+            kd_loss = None
+
             if args.use_kd and teacher_model is not None:
                 with torch.no_grad():
-                    teacher_outputs, _ , teacher_features, _ = teacher_model(image_batch)
-                    if args.kd_points in {'backbone', 'all'}:
+                    teacher_outputs, _, teacher_features, _ = teacher_model(image_batch)
+                    if args.kd_points in {"backbone", "all"}:
                         s_last = features[-1]
                         t_last = teacher_features[-1]
                         _mgd_predictor = MGD(c_s=s_last.shape[1], c_t=t_last.shape[1]).to(s_last.device)
                         _backbone_pair = (s_last, t_last)
-                        optimizer.add_param_group({'params': _mgd_predictor.parameters(), 'lr': base_lr})
+                        optimizer.add_param_group({"params": _mgd_predictor.parameters(), "lr": base_lr})
                     else:
                         _mgd_predictor = None
                         _backbone_pair = None
-                           
+
                 kd_loss, _ = compute_kd_loss(
                     kd_points=args.kd_points,
                     weights=KDWeights(logits=1.0, intermediate=1.0, backbone=1.0),
@@ -169,30 +216,29 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                     teacher_logits=teacher_outputs,
                     student_features=features,
                     teacher_features=teacher_features,
-                    backbone_pair=_backbone_pair, # (student_feat, teacher_feat) for MGD
+                    backbone_pair=_backbone_pair,
                     mgd_predictor=_mgd_predictor,
                     temperature=args.kd_temperature,
                 )
-                loss = (1-gamma) * ((1-lambda_) * loss_dice + lambda_ * loss_ce) + gamma * kd_loss
+                loss = (1 - gamma) * ((1 - lambda_) * loss_dice + lambda_ * loss_ce) + gamma * kd_loss
             elif args.use_bu_loss:
                 loss, details = bu_loss(outputs, label_batch, return_details=True)
                 last_bu_details = details
             else:
-                loss = (1-lambda_) * loss_dice + lambda_ * loss_ce
+                loss = (1 - lambda_) * loss_dice + lambda_ * loss_ce
 
             epoch_total_loss += loss.item()
             epoch_ce_loss += loss_ce.item()
             epoch_dice_loss += loss_dice.item()
             epoch_batch_count += 1
-                
+
             optimizer.zero_grad()
             loss.backward()
-            # To inspect learnable tau gradients after backward:
-            # if args.use_bu_loss and getattr(args, "learn_tau", False): print(bu_loss.rho.grad)
             optimizer.step()
+
             lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
             for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_ * float(param_group.get('lr_mult', 1.0))
+                param_group["lr"] = lr_ * float(param_group.get("lr_mult", 1.0))
 
             iter_num = iter_num + 1
             saved_heatmap_count_this_epoch += save_pending_weight_heatmaps(
@@ -209,52 +255,68 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
             )
 
             if args.verbose and iter_num >= 2:
-                print("Verbose mode is ON. Detailed training information were printed and training is stopped after two iterations.")
+                print(
+                    "Verbose mode is ON. Detailed training information were printed "
+                    "and training is stopped after two iterations."
+                )
                 sys.exit(0)
 
             tau_value = float(bu_loss.get_tau().detach().item())
-            writer.add_scalar('info/lr', lr_, iter_num)
-            writer.add_scalar('info/total_loss', loss, iter_num)
-            writer.add_scalar('info/loss_ce', loss_ce, iter_num)
-            writer.add_scalar('info/loss_dice', loss_dice, iter_num)
-            writer.add_scalar('info/tau', tau_value, iter_num)
-            
-            if args.use_kd and teacher_model is not None:
-                writer.add_scalar('info/loss_kd', kd_loss, iter_num)
-                logging.info('iteration %d : loss : %f, loss_ce: %f, loss_kd: %f' % (iter_num, loss.item(), loss_ce.item(), kd_loss.item()))
-            else:
-                logging.info('iteration %d : loss : %f, loss_ce: %f' % (iter_num, loss.item(), loss_ce.item()))
+            writer.add_scalar("info/lr", lr_, iter_num)
+            writer.add_scalar("info/total_loss", loss, iter_num)
+            writer.add_scalar("info/loss_ce", loss_ce, iter_num)
+            writer.add_scalar("info/loss_dice", loss_dice, iter_num)
+            writer.add_scalar("info/tau", tau_value, iter_num)
 
-            if iter_num % 20 == 0:
-                image = image_batch[1, 0:1, :, :]
-                image = (image - image.min()) / (image.max() - image.min())
-                writer.add_image('train/Image', image, iter_num)
-                outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
-                writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
-                labs = label_batch[1, ...].unsqueeze(0) * 50
-                writer.add_image('train/GroundTruth', labs, iter_num)
+            if args.use_kd and teacher_model is not None:
+                writer.add_scalar("info/loss_kd", kd_loss, iter_num)
+                logging.info(
+                    "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f, loss_kd: %f",
+                    epoch_num,
+                    iter_num,
+                    loss.item(),
+                    loss_dice.item(),
+                    loss_ce.item(),
+                    kd_loss.item(),
+                )
+            else:
+                logging.info(
+                    "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f",
+                    epoch_num,
+                    iter_num,
+                    loss.item(),
+                    loss_dice.item(),
+                    loss_ce.item(),
+                )
+
+            # if iter_num % 20 == 0:
+            #     _log_train_images(writer, image_batch, label_batch, outputs, iter_num)
+
+            if iter_num >= max_iterations:
+                stop_training = True
+                break
 
         if epoch_batch_count > 0:
             mean_total_loss = epoch_total_loss / epoch_batch_count
             mean_ce_loss = epoch_ce_loss / epoch_batch_count
             mean_dice_loss = epoch_dice_loss / epoch_batch_count
             tau_value = float(bu_loss.get_tau().detach().item())
-            writer.add_scalar('epoch/total_loss', mean_total_loss, epoch_index)
-            writer.add_scalar('epoch/loss_ce', mean_ce_loss, epoch_index)
-            writer.add_scalar('epoch/loss_dice', mean_dice_loss, epoch_index)
-            writer.add_scalar('epoch/tau', tau_value, epoch_index)
+            writer.add_scalar("epoch/total_loss", mean_total_loss, epoch_index)
+            writer.add_scalar("epoch/loss_ce", mean_ce_loss, epoch_index)
+            writer.add_scalar("epoch/loss_dice", mean_dice_loss, epoch_index)
+            writer.add_scalar("epoch/tau", tau_value, epoch_index)
             if args.use_bu_loss and last_bu_details is not None:
-                writer.add_scalar('epoch/mean_weights', last_bu_details["w_mean"], epoch_index)
-                writer.add_scalar('epoch/max_weights', last_bu_details["w_max"], epoch_index)
-                writer.add_scalar('epoch/mean_UM', last_bu_details["UM_mean"], epoch_index)
-                writer.add_scalar('epoch/max_UM', last_bu_details["UM_max"], epoch_index)
-                writer.add_scalar('epoch/mean_BM', last_bu_details["BM_mean"], epoch_index)
-                writer.add_scalar('epoch/max_BM', last_bu_details["BM_max"], epoch_index)
-                
+                _log_bu_epoch_details(writer, last_bu_details, epoch_index)
+
             logging.info(
-                'epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, tau : %f',
-                epoch_index, mean_total_loss, mean_ce_loss, mean_dice_loss, tau_value
+                "epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, tau : %f",
+                epoch_index,
+                mean_total_loss,
+                mean_ce_loss,
+                mean_dice_loss,
+                tau_value,
             )
+
         if should_save_heatmap_this_epoch and pending_heatmap_samples:
             missing_samples = sorted(list(pending_heatmap_samples))
             logging.warning(
@@ -264,255 +326,57 @@ def trainer_synapse(args, model, snapshot_path, teacher_model=None):
                 len(fixed_heatmap_target_samples),
                 ", ".join(missing_samples),
             )
-        
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_interval = 70  # int(max_epoch/6)
-        if epoch_num > int(max_epoch / 2) and (epoch_num + 1) % save_interval == 0:
-            save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
-            torch.save(model.state_dict(), save_mode_path)
-            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
-            torch.save(model.state_dict(), local_path)
-            logging.info("save model to {}".format(save_mode_path))
+
+        if epoch_batch_count > 0:
+            val_metrics = _validate(
+                model,
+                valloader,
+                ce_loss,
+                dice_loss,
+                num_classes,
+                lambda_,
+                args,
+                validation_protocol,
+            )
+            # _log_validation(writer, val_metrics, iter_num)
+            writer.add_scalar("epoch/val_loss", val_metrics["loss"], iter_num)
+            writer.add_scalar("epoch/val_loss_ce", val_metrics["loss_ce"], iter_num)
+            writer.add_scalar("epoch/val_loss_dice", val_metrics["loss_dice"], iter_num)
+            writer.add_scalar("epoch/val_mean_dice", val_metrics["mean_dice"], iter_num)
+
+            performance = val_metrics["mean_dice"]
+            if epoch_num > 20 and performance > best_performance:
+                best_performance = performance
+                logging.info(
+                    "Best validation model | epoch %d iteration %d : mean_dice : %f val_loss : %f",
+                    epoch_num,
+                    iter_num,
+                    performance,
+                    val_metrics["loss"],
+                )
+                save_checkpoint(model, args, epoch_num, performance)
+
+            logging.info(
+                "epoch %d iteration %d : val_loss : %f mean_dice : %f",
+                epoch_num,
+                iter_num,
+                val_metrics["loss"],
+                performance,
+            )
+            model.train()
+
+        if epoch_index % 50 == 0:
+            _save_periodic_checkpoint(model, args, performance, epoch_index)
+
+        if stop_training:
+            _save_last_epoch_checkpoint(model, args, epoch_num, performance)
+            iterator.close()
+            break
 
         if epoch_num >= max_epoch - 1:
-            save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')
-            torch.save(model.state_dict(), save_mode_path)
-            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth')
-            torch.save(model.state_dict(), local_path)
-            logging.info("save model to {}".format(save_mode_path))
+            _save_last_epoch_checkpoint(model, args, epoch_num, performance)
             iterator.close()
             break
 
     writer.close()
     return "Training Finished!"
-
-
-def trainer_endovis(args, model, snapshot_path, teacher_model=None):
-    logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
-                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    logging.info(str(args))
-    base_lr = args.base_lr
-    num_classes = args.num_classes
-    batch_size = args.batch_size * args.n_gpu
-
-    db_train = EndoVis2018Dataset(
-        base_dir=args.root_path,
-        split="train",
-        transform=transforms.Compose([
-            RandomGenerator4EndoVis2018([args.img_size, args.img_size])
-        ]),
-    )
-    db_val = EndoVis2018Dataset(
-        base_dir=args.root_path,
-        split="test",
-        transform=transforms.Compose([
-            RandomGenerator4EndoVis2018([args.img_size, args.img_size], augment=False)
-        ]),
-    )
-
-    print("The length of train set is: {}".format(len(db_train)))
-    print("The length of test set used for validation is: {}".format(len(db_val)))
-    logging.info("EndoVis train samples: %d | test-as-val samples: %d", len(db_train), len(db_val))
-
-    args.ckpt_filename += '_' + args.dataset + '_'
-
-    worker_init_fn = make_worker_init_fn(args.seed)
-    trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True,
-                             worker_init_fn=worker_init_fn)
-    valloader = DataLoader(db_val, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    if args.n_gpu > 1:
-        model = nn.DataParallel(model)
-    model.train()
-    gamma = 0.2
-    lambda_ = args.lambda_
-    ce_loss = CrossEntropyLoss()
-    dice_loss = DiceLoss(num_classes)
-
-    optimizer_param_groups = [
-        {
-            "params": list(model.parameters()),
-            "lr": base_lr,
-            "momentum": 0.9,
-            "weight_decay": 0.0001,
-            "lr_mult": 1.0,
-        },
-    ]
-
-    optimizer = optim.SGD(optimizer_param_groups, lr=base_lr, momentum=0.9, weight_decay=0.0001)
-    writer = SummaryWriter(args.tensorboard_run_dir)
-    logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
-
-    iter_num = 0
-    max_epoch = args.max_epochs
-    max_iterations = args.max_epochs * len(trainloader)
-    logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
-    logging.info("{} val iterations per validation".format(len(valloader)))
-    best_performance = 0.0
-    iterator = tqdm(range(max_epoch), ncols=70)
-
-    for epoch_num in iterator:
-
-        for i_batch, sampled_batch in enumerate(trainloader):
-            
-            image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
-            image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
-            outputs, _, features, _ = model(image_batch)
-            loss_ce = ce_loss(outputs, label_batch[:].long())
-            loss_dice = dice_loss(outputs, label_batch, softmax=True)
-            loss = (1 - lambda_) * loss_dice + lambda_ * loss_ce
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_ * float(param_group.get('lr_mult', 1.0))
-
-            iter_num = iter_num + 1
-
-            if args.verbose and iter_num >= 2:
-                print("Verbose mode is ON. Detailed training information were printed and training is stopped after two iterations.")
-                sys.exit(0)
-
-            writer.add_scalar('info/lr', lr_, iter_num)
-            writer.add_scalar('info/total_loss', loss, iter_num)
-            writer.add_scalar('info/loss_ce', loss_ce, iter_num)
-            writer.add_scalar('info/loss_dice', loss_dice, iter_num)
-
-            logging.info('epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f' % (epoch_num, iter_num, loss.item(), loss_dice.item(), loss_ce.item()))
-
-            if epoch_num > 10 and iter_num % 500 == 0:
-                val_metrics = _validate_endovis(model, valloader, ce_loss, dice_loss, num_classes, lambda_)
-                writer.add_scalar('info/val_loss', val_metrics['loss'], iter_num)
-                writer.add_scalar('info/val_loss_ce', val_metrics['loss_ce'], iter_num)
-                writer.add_scalar('info/val_loss_dice', val_metrics['loss_dice'], iter_num)
-                writer.add_scalar('info/val_mean_dice', val_metrics['mean_dice'], iter_num)
-                for class_i, class_dice in enumerate(val_metrics['class_dice'], start=1):
-                    if not np.isnan(class_dice):
-                        writer.add_scalar('info/val_{}_dice'.format(class_i), class_dice, iter_num)
-
-                performance = val_metrics['mean_dice']
-                if epoch_num > 20 and performance > best_performance:
-                    best_performance = performance
-                    logging.info('Best model | epoch %d iteration %d : mean_dice : %f val_loss : %f' % (
-                        epoch_num, iter_num, performance, val_metrics['loss']))
-                    save_checkpoint(model, args, epoch_num, performance)
-
-                logging.info('epoch %d iteration %d : val_loss : %f mean_dice : %f' % (
-                    epoch_num, iter_num, val_metrics['loss'], performance))
-                model.train()
-
-        if epoch_num >= max_epoch - 1:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            local_path = os.path.join(args.ckpt_dir, args.ckpt_filename + '_epoch_' + str(epoch_num) + '_LastEpoch_' + str(timestamp) + '.pth')
-            torch.save(model.state_dict(), local_path)
-            logging.info("save model to {}".format(local_path))
-                
-    writer.close()
-    return "Training Finished!"
-
-
-def trainer_acdc(args, model, snapshot_path, teacher_model=None):
-    logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
-                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    logging.info(str(args))
-    
-    base_lr = args.base_lr
-    num_classes = args.num_classes
-    batch_size = args.batch_size
-    max_iterations = args.max_iterations
-
-    db_train = ACDC_Dataset(base_dir=args.root_path, split="train", transform=transforms.Compose([
-        RandomGenerator4ACDC([args.img_size, args.img_size])]), fold_id=args.fold_id)
-    
-    db_val = ACDC_Dataset(base_dir=args.root_path, split="test", fold_id=args.fold_id)
-    
-    worker_init_fn = make_worker_init_fn(args.seed)
-    trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True,
-                             num_workers=8, pin_memory=True, worker_init_fn=worker_init_fn)
-    valloader = DataLoader(db_val, batch_size=1, shuffle=False,
-                           num_workers=1)
-    if args.n_gpu > 1:
-        model = nn.DataParallel(model)
-    model.train()
-    optimizer = optim.SGD(model.parameters(), lr=base_lr,
-                          momentum=0.9, weight_decay=0.0001)
-    ce_loss = CrossEntropyLoss(ignore_index=4)
-    dice_loss = DiceLoss(num_classes)
-
-    writer = SummaryWriter(args.tensorboard_run_dir)
-    logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
-    logging.info("{} iterations per epoch".format(len(trainloader)))
-    logging.info("{} val iterations per epoch".format(len(valloader)))
-    # logging.info("{} test iterations per epoch".format(len(testloader)))
-
-    iter_num = 0
-    max_epoch = max_iterations // len(trainloader) + 1
-    best_performance = 0.0
-    iterator = tqdm(range(max_epoch), ncols=70)
-    for epoch_num in iterator:
-        for i_batch, sampled_batch in enumerate(trainloader):
-            volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
-            volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
-            outputs, _ , features, _ = model(volume_batch)
-            loss_ce = ce_loss(outputs, label_batch[:].long())
-            loss_dice = dice_loss(outputs, label_batch, softmax=True)
-            loss = 0.5 * loss_ce + 0.5 * loss_dice
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr_ * float(param_group.get('lr_mult', 1.0))
-
-            iter_num = iter_num + 1
-            if args.verbose and iter_num >= 2:
-                print("Verbose mode is ON. Detailed training information were printed and training is stopped after two iterations.")
-                sys.exit(0)
-                
-            writer.add_scalar('info/lr', lr_, iter_num)
-            writer.add_scalar('info/total_loss', loss, iter_num)
-            writer.add_scalar('info/loss_ce', loss_ce, iter_num)
-
-            logging.info('epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f' % (epoch_num, iter_num, loss.item(), loss_dice.item(), loss_ce.item()))
-
-
-            if epoch_num > 30 and iter_num % 500 == 0:  # 500
-                model.eval()
-                metric_list = 0.0
-                for i_batch, sampled_batch in enumerate(valloader):
-                    image, label = sampled_batch["image"], sampled_batch["label"]
-                    metric_i = test_single_volume(image, label, model, classes=num_classes,
-                                                  patch_size=[args.img_size, args.img_size])
-                    metric_list += np.array(metric_i)
-                metric_list = metric_list / len(db_val)
-                for class_i in range(num_classes - 1):
-                    writer.add_scalar('info/val_{}_dice'.format(class_i + 1),
-                                      metric_list[class_i, 0], iter_num)
-                    writer.add_scalar('info/val_{}_hd95'.format(class_i + 1),
-                                      metric_list[class_i, 1], iter_num)
-
-                performance = np.mean(metric_list, axis=0)[0]
-
-                mean_hd95 = np.mean(metric_list, axis=0)[1]
-                writer.add_scalar('info/val_mean_dice', performance, iter_num)
-                writer.add_scalar('info/val_mean_hd95', mean_hd95, iter_num)
-
-                if performance > best_performance:
-                    best_iteration, best_performance, best_hd95 = iter_num, performance, mean_hd95
-                    save_best = os.path.join(snapshot_path, 'best_model.pth')
-                    torch.save(model.state_dict(), save_best)
-                    logging.info('Best model | iteration %d : mean_dice : %f mean_hd95 : %f' % (
-                    iter_num, performance, mean_hd95))
-                    
-                    save_checkpoint(model, args, epoch_num, performance)
-
-                logging.info('iteration %d : mean_dice : %f mean_hd95 : %f' % (iter_num, performance, mean_hd95))
-                model.train()
-
-            if iter_num >= max_iterations:
-                save_checkpoint(model, args, epoch_num, performance)
-                break            

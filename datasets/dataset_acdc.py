@@ -145,9 +145,9 @@ class RandomGenerator4ACDC(object):
         # image = img[ind, ...]
         # label = lab[ind, ...]
         augment = random.random()
-        if augment > 0.5:
+        if augment > 0.6:
             image, label = random_rot_flip(image, label)
-        elif augment > 0.25:
+        elif augment > 0.35:
             image, label = random_rotate(image, label)
         x, y = image.shape
         if x != self.output_size[0] or y != self.output_size[1]:

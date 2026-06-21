@@ -35,9 +35,9 @@ class RandomGenerator4EndoVis2018(object):
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
 
-        if self.augment and random.random() > 0.5:
+        if self.augment and random.random() > 0.6:
             image, label = random_rot_flip(image, label)
-        elif self.augment and random.random() > 0.5:
+        elif self.augment and random.random() > 0.35:
             image, label = random_rotate(image, label)
 
         h, w = image.shape[:2]

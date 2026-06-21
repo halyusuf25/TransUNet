@@ -32,9 +32,9 @@ class RandomGenerator(object):
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
 
-        if random.random() > 0.5:
+        if random.random() > 0.6:
             image, label = random_rot_flip(image, label)
-        elif random.random() > 0.5:
+        elif random.random() > 0.35:
             image, label = random_rotate(image, label)
         x, y = image.shape
         if x != self.output_size[0] or y != self.output_size[1]:

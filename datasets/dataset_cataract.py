@@ -27,15 +27,16 @@ def random_rotate(image, label):
     return image, label
 
 class RandomGenerator4Cataract(object):
-    def __init__(self, output_size):
+    def __init__(self, output_size, augment=True):
         self.output_size = output_size
+        self.augment = augment
 
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
 
-        if random.random() > 0.5:
+        if self.augment and random.random() > 0.5:
             image, label = random_rot_flip(image, label)
-        elif random.random() > 0.5:
+        elif self.augment and random.random() > 0.5:
             image, label = random_rotate(image, label)
         
         # Get dimensions
@@ -193,4 +194,3 @@ class Cataract1kDataset(Dataset):
                 cv2.fillPoly(mask, [exterior_points], class_id)
 
         return mask
-

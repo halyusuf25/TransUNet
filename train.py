@@ -7,7 +7,7 @@ import torch
 import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
-from trainer import trainer_synapse, trainer_acdc, trainer_endovis
+from trainer import trainer
 from datasets.dataset_cataract import  Cataract1kDataset
 from utils import _sanitize_name
 
@@ -301,8 +301,7 @@ if __name__ == "__main__":
 
     # print(f"arguments for training: {args}")
     # print(f"configuration of the vit model for training: {config_vit}") 
-    trainer = {'Synapse': trainer_synapse, 'Cataract1k': trainer_synapse, 'ACDC': trainer_acdc, 'EndoVis2018': trainer_endovis}
     if args.use_kd:
-        trainer[dataset_name](args, net, snapshot_path, teacher_model=teacher_net)
+        trainer(args, net, snapshot_path, teacher_model=teacher_net)
     else:
-        trainer[dataset_name](args, net, snapshot_path)
+        trainer(args, net, snapshot_path)
