@@ -166,7 +166,9 @@ class BULoss(nn.Module):
             raise ValueError("target must be [B, H, W]")
         if getattr(self.args, "verbose", False):
             print(f"[BULoss] tau={float(self.get_tau().detach())}")
-
+        
+        target = target.to(device=logits.device, dtype=torch.long)
+        
         if self.loss_option == "C":
             # Standard Dice + CE loss without boundary/uncertainty weighting.
             loss_ce = self._ce_loss_function(logits, target)
