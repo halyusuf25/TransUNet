@@ -47,6 +47,8 @@ parser.add_argument('--ckpt_dir', type=str,
                     default='ckpt/', help='directory to save trained model')
 parser.add_argument('--ckpt', type=str, 
                     default='default_ckpt_name', help='name of the checkpoint file (dont add .pth)')
+parser.add_argument('--best_checkpoint_start_epoch', type=int,
+                    default=20, help='save best validation checkpoints only after this epoch')
 parser.add_argument('--num_heads', type=int,
                     default=None, help='number of attention heads (default value sets in the imported CONFIGS_ViT_seg)')
 parser.add_argument('--num_layers', type=int,
@@ -105,6 +107,12 @@ parser.add_argument('--bm_min', type=float, default=0.2, help='Minimum value for
 parser.add_argument('--bm_max', type=float, default=3.0, help='Maximum value for the Boundary Map in BU loss')
 parser.add_argument('--distance_map_type', type=str, 
                     default='unsigned', help='Type of Distance Map for BU loss: "dtm", "signed" or "unsigned"')
+parser.add_argument(
+    "--boundary_radius",
+    type=int,
+    default=1,
+    help="Radius of local neighborhood N_alpha for BU boundary-set extraction."
+)
 parser.add_argument('--buloss_option', type=str, default='C', help='Options for BU loss: "A, B, C"')
 parser.add_argument('--create_heatmaps', action='store_true',
                     help='if set, save BU-loss weight heatmap overlays during training')
@@ -126,6 +134,8 @@ parser.add_argument('--swin_pretrained_path', type=str,
 #########addtional arguments for debugging#########
 parser.add_argument('--verbose', action='store_true', 
                     help='whether to print detailed debug information during training')
+parser.add_argument('--verbos_iterations', type=int, default=2,
+                    help='number of iterations to print detailed debug information when --verbose is set')
 ###################################################
 
 args = parser.parse_args()

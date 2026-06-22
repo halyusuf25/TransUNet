@@ -9,6 +9,7 @@ from tensorboardX import SummaryWriter
 from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from datetime import datetime
 
 from networks.distillation import KDWeights, MGD, compute_kd_loss
 from src.loss_bu import BULoss
@@ -52,14 +53,22 @@ def trainer(args, model, snapshot_path, teacher_model=None):
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
     db_train, db_val, validation_protocol = _build_datasets(args)
+    full_validation_size = getattr(db_val, "full_validation_size", len(db_val))
 
     print("The length of train set is: {}".format(len(db_train)))
-    print("The length of test set used for validation is: {}".format(len(db_val)))
+    print(
+        "The length of validataion set is: {} / {}".format(
+            len(db_val),
+            full_validation_size,
+        )
+    )
     logging.info(
-        "%s train samples: %d | test-as-val samples: %d",
+        "%s train samples: %d | val samples: %d/%d | validation subset seed: %d",
         args.dataset,
         len(db_train),
         len(db_val),
+        full_validation_size,
+        args.seed,
     )
     _append_dataset_to_checkpoint_name(args)
 
@@ -254,7 +263,7 @@ def trainer(args, model, snapshot_path, teacher_model=None):
                 logger=logging,
             )
 
-            if args.verbose and iter_num >= 2:
+            if args.verbose and iter_num >= args.verbos_iterations:
                 print(
                     "Verbose mode is ON. Detailed training information were printed "
                     "and training is stopped after two iterations."
@@ -272,7 +281,7 @@ def trainer(args, model, snapshot_path, teacher_model=None):
                 writer.add_scalar("info/loss_kd", kd_loss, iter_num)
                 logging.info(
                     "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f, loss_kd: %f",
-                    epoch_num,
+                    epoch_index,
                     iter_num,
                     loss.item(),
                     loss_dice.item(),
@@ -282,7 +291,7 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             else:
                 logging.info(
                     "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f",
-                    epoch_num,
+                    epoch_index,
                     iter_num,
                     loss.item(),
                     loss_dice.item(),
@@ -308,13 +317,15 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             if args.use_bu_loss and last_bu_details is not None:
                 _log_bu_epoch_details(writer, last_bu_details, epoch_index)
 
+            epoch_end_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             logging.info(
-                "epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, tau : %f",
+                "epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, tau : %f, timestamp: %s",
                 epoch_index,
                 mean_total_loss,
                 mean_ce_loss,
                 mean_dice_loss,
                 tau_value,
+                epoch_end_timestamp,
             )
 
         if should_save_heatmap_this_epoch and pending_heatmap_samples:
@@ -345,23 +356,25 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar("epoch/val_mean_dice", val_metrics["mean_dice"], iter_num)
 
             performance = val_metrics["mean_dice"]
-            if epoch_num > 20 and performance > best_performance:
+            if epoch_index > args.best_checkpoint_start_epoch and performance > best_performance:
                 best_performance = performance
                 logging.info(
                     "Best validation model | epoch %d iteration %d : mean_dice : %f val_loss : %f",
-                    epoch_num,
+                    epoch_index,
                     iter_num,
                     performance,
                     val_metrics["loss"],
                 )
-                save_checkpoint(model, args, epoch_num, performance)
+                save_checkpoint(model, args, epoch_index, performance)
 
+            val_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             logging.info(
-                "epoch %d iteration %d : val_loss : %f mean_dice : %f",
-                epoch_num,
+                "epoch %d iteration %d : val_loss : %f mean_dice : %f, timestamp: %s",
+                epoch_index,
                 iter_num,
                 val_metrics["loss"],
                 performance,
+                val_timestamp,
             )
             model.train()
 
@@ -369,12 +382,12 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             _save_periodic_checkpoint(model, args, performance, epoch_index)
 
         if stop_training:
-            _save_last_epoch_checkpoint(model, args, epoch_num, performance)
+            _save_last_epoch_checkpoint(model, args, epoch_index, performance)
             iterator.close()
             break
 
         if epoch_num >= max_epoch - 1:
-            _save_last_epoch_checkpoint(model, args, epoch_num, performance)
+            _save_last_epoch_checkpoint(model, args, epoch_index, performance)
             iterator.close()
             break
 

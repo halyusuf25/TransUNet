@@ -6,14 +6,28 @@ from datetime import datetime
 import numpy as np
 import torch
 from scipy.ndimage import zoom
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 
 from datasets.dataset_acdc import ACDC_Dataset, RandomGenerator4ACDC
 from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
 from datasets.dataset_endovis2018 import EndoVis2018Dataset, RandomGenerator4EndoVis2018
 from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
-from utils import calculate_metric_percase
+
+
+def _fast_dice(pred, gt):
+    pred_sum = int(np.sum(pred))
+    gt_sum = int(np.sum(gt))
+
+    if pred_sum > 0 and gt_sum > 0:
+        intersection = int(np.logical_and(pred, gt).sum())
+        dice = (2.0 * intersection) / float(pred_sum + gt_sum)
+        return float(dice)
+
+    if pred_sum == 0 and gt_sum == 0:
+        return 1.0
+
+    return 0.0
 
 
 def make_worker_init_fn(seed):
@@ -21,6 +35,23 @@ def make_worker_init_fn(seed):
         random.seed(seed + worker_id)
 
     return worker_init_fn
+
+
+def _make_random_half_validation_subset(dataset, seed):
+    dataset_size = len(dataset)
+    if dataset_size <= 1:
+        return dataset
+
+    subset_size = max(1, dataset_size // 2)
+    indices = list(range(dataset_size))
+    rng = random.Random(seed)
+    rng.shuffle(indices)
+    selected_indices = sorted(indices[:subset_size])
+
+    subset = Subset(dataset, selected_indices)
+    subset.full_validation_size = dataset_size
+    subset.validation_subset_indices = selected_indices
+    return subset
 
 
 def _synapse_validation_root(args):
@@ -99,6 +130,8 @@ def _build_datasets(args):
             "Unsupported dataset: {}. Supported datasets are: Synapse, "
             "Cataract1k, ACDC, and EndoVis2018.".format(args.dataset)
         )
+
+    db_val = _make_random_half_validation_subset(db_val, args.seed)
 
     return db_train, db_val, validation_protocol
 
@@ -198,7 +231,7 @@ def _validate_volume_dataset(model, valloader, ce_loss, dice_loss, num_classes, 
     total_ce_loss = 0.0
     total_dice_loss = 0.0
     slice_count = 0
-    all_metrics = []
+    all_dice = []
 
     with torch.no_grad():
         for sampled_batch in valloader:
@@ -266,25 +299,18 @@ def _validate_volume_dataset(model, valloader, ce_loss, dice_loss, num_classes, 
                     )
                 prediction[slice_index] = output_slice
 
-            case_metrics = [
-                calculate_metric_percase(prediction == class_i, label == class_i)
+            case_dice = [
+                _fast_dice(prediction == class_i, label == class_i)
                 for class_i in range(1, num_classes)
             ]
-            all_metrics.append(np.asarray(case_metrics, dtype=np.float32))
+            all_dice.append(np.asarray(case_dice, dtype=np.float32))
 
-    if all_metrics:
-        metrics_stack = np.stack(all_metrics, axis=0)
-        with np.errstate(invalid="ignore"):
-            mean_metrics = np.nanmean(metrics_stack, axis=0)
-        class_dice = mean_metrics[:, 0]
-        class_hd95 = mean_metrics[:, 1]
-        if np.all(np.isnan(class_dice)):
-            mean_dice = 0.0
-        else:
-            mean_dice = float(np.nanmean(class_dice))
+    if all_dice:
+        dice_stack = np.stack(all_dice, axis=0)
+        class_dice = np.mean(dice_stack, axis=0)
+        mean_dice = float(np.mean(class_dice))
     else:
         class_dice = np.full(num_classes - 1, np.nan, dtype=np.float32)
-        class_hd95 = np.full(num_classes - 1, np.nan, dtype=np.float32)
         mean_dice = 0.0
 
     return {
@@ -292,7 +318,6 @@ def _validate_volume_dataset(model, valloader, ce_loss, dice_loss, num_classes, 
         "loss_ce": total_ce_loss / max(slice_count, 1),
         "loss_dice": total_dice_loss / max(slice_count, 1),
         "class_dice": class_dice,
-        "class_hd95": class_hd95,
         "mean_dice": mean_dice,
     }
 
@@ -333,14 +358,14 @@ def _save_periodic_checkpoint(model, args, performance, epoch_index):
     logging.info("save model to {}".format(local_path))
 
 
-def _save_last_epoch_checkpoint(model, args, epoch_num, performance):
+def _save_last_epoch_checkpoint(model, args, epoch_index, performance):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(args.ckpt_dir, exist_ok=True)
     local_path = os.path.join(
         args.ckpt_dir,
         args.ckpt_filename
         + "_epoch_"
-        + str(epoch_num)
+        + str(epoch_index)
         + "_LastEpoch_"
         + str(timestamp)
         + "_dice_"
@@ -393,11 +418,11 @@ def _log_bu_epoch_details(writer, details, epoch_index):
             writer.add_scalar(tag, details[key], epoch_index)
 
 
-def save_checkpoint(model, args, epoch_num, mean_dice):
+def save_checkpoint(model, args, epoch_index, mean_dice):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     local_path = os.path.join(
         args.ckpt_dir,
-        args.ckpt_filename + '_best_val_dice_' + str(mean_dice) + '_epoch_' + str(epoch_num) + '_' + str(timestamp) + '.pth',
+        args.ckpt_filename + '_best_val_dice_' + str(mean_dice) + '_epoch_' + str(epoch_index) + '_' + str(timestamp) + '.pth',
     )
     torch.save(model.state_dict(), local_path)
     logging.info("save model to {}".format(local_path))
