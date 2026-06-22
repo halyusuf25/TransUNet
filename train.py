@@ -134,7 +134,7 @@ parser.add_argument('--swin_pretrained_path', type=str,
 #########addtional arguments for debugging#########
 parser.add_argument('--verbose', action='store_true', 
                     help='whether to print detailed debug information during training')
-parser.add_argument('--verbos_iterations', type=int, default=2,
+parser.add_argument('--verbose_iterations', type=int, default=2,
                     help='number of iterations to print detailed debug information when --verbose is set')
 ###################################################
 
