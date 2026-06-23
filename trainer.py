@@ -91,13 +91,15 @@ def trainer(args, model, snapshot_path, teacher_model=None):
     lambda_ = args.lambda_
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(num_classes)
-    bu_loss = BULoss(loss_option=args.buloss_option, args=args)
-    bu_loss = bu_loss.to(next(model.parameters()).device)
     
     if args.verbose:
-        print(f"Verbose mode is ON. Training will be stopped after two iterations for debugging purposes.")
-        print(f"BU Loss parameters will be printed for the first two iterations.")
-        print(f"BU Loss parameters: {list(bu_loss.parameters())}")
+        print(f"Verbose mode is ON. Training will be stopped after {args.verbose_iterations} for debugging purposes.")
+        
+    if args.use_bu_loss:
+        bu_loss = BULoss(loss_option=args.buloss_option, args=args)
+        bu_loss = bu_loss.to(next(model.parameters()).device)
+        if args.verbose:
+            print(f"BU Loss parameters: {list(bu_loss.parameters())}")
 
 
     optimizer_param_groups = [
