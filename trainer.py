@@ -265,12 +265,15 @@ def trainer(args, model, snapshot_path, teacher_model=None):
                 )
                 sys.exit(0)
 
-            tau_value = float(bu_loss.get_tau().detach().item())
+            
             writer.add_scalar("info/lr", lr_, iter_num)
             writer.add_scalar("info/total_loss", loss, iter_num)
             writer.add_scalar("info/loss_ce", loss_ce, iter_num)
             writer.add_scalar("info/loss_dice", loss_dice, iter_num)
-            writer.add_scalar("info/tau", tau_value, iter_num)
+            
+            if args.use_bu_loss:
+                tau_value = float(bu_loss.get_tau().detach().item())
+                writer.add_scalar("info/tau", tau_value, iter_num)
 
             if args.use_kd and teacher_model is not None:
                 writer.add_scalar("info/loss_kd", kd_loss, iter_num)
@@ -304,22 +307,23 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             mean_total_loss = epoch_total_loss / epoch_batch_count
             mean_ce_loss = epoch_ce_loss / epoch_batch_count
             mean_dice_loss = epoch_dice_loss / epoch_batch_count
-            tau_value = float(bu_loss.get_tau().detach().item())
             writer.add_scalar("epoch/total_loss", mean_total_loss, epoch_index)
             writer.add_scalar("epoch/loss_ce", mean_ce_loss, epoch_index)
             writer.add_scalar("epoch/loss_dice", mean_dice_loss, epoch_index)
-            writer.add_scalar("epoch/tau", tau_value, epoch_index)
-            if args.use_bu_loss and last_bu_details is not None:
-                _log_bu_epoch_details(writer, last_bu_details, epoch_index)
+            
+            if args.use_bu_loss:
+                tau_value = float(bu_loss.get_tau().detach().item())
+                writer.add_scalar("epoch/tau", tau_value, epoch_index)
+                if last_bu_details is not None:
+                    _log_bu_epoch_details(writer, last_bu_details, epoch_index)
 
             epoch_end_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             logging.info(
-                "epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, tau : %f, timestamp: %s",
+                "epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, timestamp: %s",
                 epoch_index,
                 mean_total_loss,
                 mean_ce_loss,
                 mean_dice_loss,
-                tau_value,
                 epoch_end_timestamp,
             )
 
