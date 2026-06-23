@@ -12,8 +12,7 @@ from datasets.dataset_cataract import  Cataract1kDataset
 from utils import _sanitize_name
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--root_path', type=str,
-                    default='../../data/Synapse/train_npz', help='root dir for data')
+parser.add_argument('--root_path', type=str, default=None, help='root dir for data')
 parser.add_argument('--dataset', type=str,
                     default='Synapse', help='dataset name, and possible values are Synapse, ACDC, Cataract1k, and EndoVis2018')
 parser.add_argument('--list_dir', type=str,
@@ -185,7 +184,10 @@ if __name__ == "__main__":
         },
     }
     args.num_classes = dataset_config[dataset_name]['num_classes']
-    args.root_path = dataset_config[dataset_name]['root_path']
+    
+    if args.root_path is None: 
+        args.root_path = dataset_config[dataset_name]['root_path']
+    
     args.list_dir = dataset_config[dataset_name]['list_dir']
     args.is_pretrain = True
     args.ckpt_filename = args.ckpt 
