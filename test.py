@@ -355,7 +355,8 @@ def main():
     }
     
     dataset_name = args.dataset
-    args.volume_path = dataset_config[dataset_name]['volume_path']
+    if args.volume_path is None:
+        args.volume_path = dataset_config[dataset_name]['volume_path']
     args.num_classes = dataset_config[dataset_name]['num_classes']
     args.Dataset = dataset_config[dataset_name]['Dataset']
     args.z_spacing = dataset_config[dataset_name]['z_spacing']

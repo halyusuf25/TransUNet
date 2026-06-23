@@ -8,7 +8,7 @@ from utils import _safe_nanmean
 def build_test_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--volume_path', type=str,
-                        default='../../data/Synapse/test_vol_h5',
+                        default=None,
                         help='root dir for validation volume data')
     parser.add_argument('--dataset', type=str,
                         default='Synapse', help='experiment_name')
