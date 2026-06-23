@@ -28,9 +28,19 @@ def random_rotate(image, label):
 
 
 class RandomGenerator4EndoVis2018(object):
-    def __init__(self, output_size, augment=True):
+    def __init__(
+        self,
+        output_size,
+        augment=True,
+        normalize=True,
+        image_mean=(0.485, 0.456, 0.406),
+        image_std=(0.229, 0.224, 0.225),
+    ):
         self.output_size = output_size
         self.augment = augment
+        self.normalize = normalize
+        self.image_mean = np.asarray(image_mean, dtype=np.float32).reshape(1, 1, 3)
+        self.image_std = np.asarray(image_std, dtype=np.float32).reshape(1, 1, 3)
 
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
@@ -53,7 +63,12 @@ class RandomGenerator4EndoVis2018(object):
                 order=0,
             )
 
-        image = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)
+        image = image.astype(np.float32)
+        if self.normalize:
+            image = image / 255.0
+            image = (image - self.image_mean) / self.image_std
+
+        image = torch.from_numpy(image).permute(2, 0, 1)
         label = torch.from_numpy(label.astype(np.float32))
         sample = {'image': image, 'label': label.long()}
         return sample
