@@ -95,34 +95,38 @@ parser.add_argument('--kd_points' , type=str,
 parser.add_argument('--lambda_' , type=float, default=0.5, help='weighting factor for the loss function')
 parser.add_argument('--use_bu_loss', action='store_true', 
                     help='whether to use Boundary-Uncertainty (BU) loss for training')
-parser.add_argument('--tau', type=float, default=1.0, help='Boundry Decay parameter for BU loss')
+parser.add_argument('--tau', type=float, default=None, help='fixed (tau) Boundary Decay parameter for BU loss')
 parser.add_argument('--learn_tau', action='store_true',
                     help='if set, learn tau via tau=tau_min+softplus(rho)')
 parser.add_argument('--tau_min', type=float, default=1e-3,
                     help='strictly positive floor for learnable tau')
-parser.add_argument('--tau_init', type=float, default=1.0,
-                    help='initial value for tau (ignored if learn_tau=False)')
-parser.add_argument('--alpha', type=float, default=10, help='maximum value for the Weight Map in BU loss')
-parser.add_argument('--bm_min', type=float, default=0.2, help='Minimum value for the Boundary Map in BU loss')
-parser.add_argument('--bm_max', type=float, default=3.0, help='Maximum value for the Boundary Map in BU loss')
+parser.add_argument('--tau_init', type=float, default=None,
+                    help='initial value for learnable tau; if omitted with --learn_tau, --tau is used')
+parser.add_argument('--alpha', type=float, default=1.0,
+                    help='reweighting strength alpha in w=exp(alpha * B * U)')
 parser.add_argument('--distance_map_type', type=str, 
-                    default='unsigned', help='Type of Distance Map for BU loss: "dtm", "signed" or "unsigned"')
+                    default='unsigned', choices=['unsigned'],
+                    help='Type of Distance Map for BU loss; currently only "unsigned" is supported')
 parser.add_argument(
     "--boundary_radius",
     type=int,
     default=1,
-    help="Radius of local neighborhood N_alpha for BU boundary-set extraction."
+    help=(
+        "Local-neighborhood radius for multiclass ground-truth boundary detection; "
+        "1 means a 3x3 neighborhood, 2 means 5x5, and 3 means 7x7."
+    )
 )
-parser.add_argument('--buloss_option', type=str, default='C', help='Options for BU loss: "A, B, C"')
+parser.add_argument('--buloss_option', type=str, default='B', choices=['A', 'B', 'C'],
+                    help='Options for BU loss: "A, B, C"')
 parser.add_argument('--create_heatmaps', action='store_true',
                     help='if set, save BU-loss weight heatmap overlays during training')
 parser.add_argument('--heatmaps_dir', type=str, default='heatmaps',
                     help='directory where generated BU-loss heatmaps and raw weights are saved')
 parser.add_argument('--num_heatmap_slices', type=int, default=3,
                     help='number of evenly-spaced slices per case to save for each heatmap epoch')
-#OPTION A : \mathcal{L}_{total} = \mathcal{L}_{Dice}^w+ \mathcal{L}_{CE}^w
-#OPTION B : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}^w
-#OPTION C : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}
+#OPTION A : \mathcal{L}_{total} = (1-lambda) * \mathcal{L}_{Dice}^w + lambda * \mathcal{L}_{CE}^w
+#OPTION B : \mathcal{L}_{total} = (1-lambda) * \mathcal{L}_{Dice} + lambda * \mathcal{L}_{CE}^w
+#OPTION C : \mathcal{L}_{total} = (1-lambda) * \mathcal{L}_{Dice} + lambda * \mathcal{L}_{CE}
 #########################################
 
 ##########swin config arguments##########
@@ -224,6 +228,28 @@ if __name__ == "__main__":
         config_vit.transformer.num_layers = args.num_layers
         args.ckpt_filename +='_layer'+str(args.num_layers)
 
+    #verify arguments for BU Loss
+    if args.use_bu_loss:
+        if args.buloss_option not in ['A', 'B', 'C']:
+            raise ValueError(f"Invalid buloss_option: {args.buloss_option}. Must be one of 'A', 'B', or 'C'.")
+        if (args.learn_tau and args.tau is not None) or (not args.learn_tau and args.tau is None):
+            raise ValueError("you cannot specify both --learn_tau and a fixed --tau value. Choose one.")
+        if args.tau is not None and args.tau <= 0.0:
+            raise ValueError("Fixed tau must be strictly positive.")
+        if args.learn_tau and args.tau_init is None:
+            raise ValueError("When --learn_tau is set, you must provide an initial value for tau using --tau_init.")
+        if args.learn_tau and args.tau_init is not None and args.tau_init <= 0.0:
+            raise ValueError("tau_init must be strictly positive when --learn_tau is set.")
+        if args.learn_tau and args.tau_min <= 0.0:
+            raise ValueError("tau_min must be strictly positive when --learn_tau is set.")
+        if args.learn_tau and args.tau_init <= args.tau_min:
+            raise ValueError("tau_init must be greater than tau_min when --learn_tau is set.")
+        if args.boundary_radius not in [1, 2, 3]:
+            raise ValueError("boundary_radius must be one of 1, 2, or 3.")
+        if args.alpha < 0.0 or args.alpha > 1.0:
+            raise ValueError("alpha must be between 0.0 and 1.0.")
+        if args.distance_map_type not in ['unsigned']:
+            raise ValueError(f"Invalid distance_map_type: {args.distance_map_type}. Currently only 'unsigned' is supported.")
 
     #pass the args use_shsa to the config_vit
     if args.use_alternate_shsa and not args.use_shsa:

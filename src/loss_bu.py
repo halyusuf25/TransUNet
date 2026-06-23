@@ -1,5 +1,5 @@
 import math
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
 import torch.nn as nn
@@ -16,86 +16,97 @@ class BULoss(nn.Module):
 
     def __init__(
         self,
-        loss_option: str = "C",
-        #OPTION A : \mathcal{L}_{total} = \mathcal{L}_{Dice}^w+ \mathcal{L}_{CE}^w
-        #OPTION B : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}^w
-        #OPTION C : \mathcal{L}_{total} = \mathcal{L}_{Dice}+ \mathcal{L}_{CE}
+        loss_option: str = "B",
+        #OPTION A : \mathcal{L}_{total} = (1-lambda) * \mathcal{L}_{Dice}^w + lambda * \mathcal{L}_{CE}^w
+        #OPTION B : \mathcal{L}_{total} = (1-lambda) * \mathcal{L}_{Dice} + lambda * \mathcal{L}_{CE}^w
+        #OPTION C : \mathcal{L}_{total} = (1-lambda) * \mathcal{L}_{Dice} + lambda * \mathcal{L}_{CE}
         distance_type: str = "unsigned",
         tau_min: float = 1e-3,
-        bm_min: float = 0.2,
-        bm_max: float = 3.0,
-        alpha: float = 10.0,
-        eps: float = 1e-6,
+        alpha: float = 1.0,
+        eps: float = 1e-8,
         background_class: int = 0,
         cdist_chunk_size: int = 4096,
         args = None,
     ) -> None:
         super().__init__()
         self.args = args
-        self.tau_min = float(getattr(self.args, "tau_min", tau_min))
-        self.tau_init = float(getattr(self.args, "tau_init", 1.0))
-        
-        loss_option = getattr(self.args, "buloss_option", loss_option)
-        loss_option = loss_option.upper()
-        if loss_option not in {"A", "B", "C"}:
-            raise ValueError(
-                f"loss_option must be 'A', 'B', or 'C', got {loss_option!r}"
-            )
-        distance_type = getattr(self.args, "distance_map_type", distance_type)
-        distance_type = distance_type.lower()
-        if distance_type not in {"dtm", "unsigned", "signed"}:
-            raise ValueError(
-                "distance_type must be one of {'dtm','unsigned','signed'}, "
-                f"got {distance_type!r}"
-            )
 
-        if self.tau_init <= 0:
-            raise ValueError("tau must be > 0.")
-
-        self.loss_option = loss_option
-        self.distance_type = distance_type
+        self.loss_option = self.args.buloss_option
+        self.distance_type = self.args.distance_map_type
         print(f"Using BULoss with option {self.loss_option}, distance type {self.distance_type}")
-        self.learn_tau = bool(getattr(self.args, "learn_tau", False))
-        # Backward-compatible fallback for older args objects that may not expose tau_min.
-        if self.tau_min <= 0:
-            raise ValueError("tau_min must be > 0.")
+
+        self.learn_tau = self.args.learn_tau
+        self.tau_min = self.args.tau_min
 
         if self.learn_tau:
-            if self.tau_init <= self.tau_min:
-                raise ValueError(
-                    f"tau_init ({self.tau_init}) must be > tau_min ({self.tau_min}) when learn_tau=True."
-                )
+            self.tau_init = self.args.tau_init
             tau_delta = torch.tensor(self.tau_init - self.tau_min, dtype=torch.float32)
-            rho0 = torch.log(torch.expm1(tau_delta))
+            rho0 = tau_delta + torch.log(-torch.expm1(-tau_delta))
             self.rho = nn.Parameter(rho0.clone().detach())
-            # After loss.backward(), inspect tau raw gradient with: print(bu_loss.rho.grad)
+            if getattr(self.args, "verbose", False):
+                self.rho.register_hook(
+                    lambda grad: self._verbose_tensor_stats("rho.grad", grad)
+                )
         else:
-            self.register_buffer("_tau_fixed", torch.tensor(self.tau_init, dtype=torch.float32))
+            if self.args.tau <= 0:
+                raise ValueError("tau must be > 0 when learn_tau=False.")
+            self.tau_init = None
+            # Use provided fixed tau from args
+            self.register_buffer("_tau_fixed", torch.tensor(self.args.tau, dtype=torch.float32))
 
-        if args.verbose and self.args.learn_tau and self.args.buloss_option in {"A", "B"}:
+        if getattr(self.args, "verbose", False) and self.learn_tau and self.loss_option in {"A", "B"}:
             print(f"[BULoss] Initialized with tau={self.tau_init}, learn_tau={self.learn_tau}, tau_min={self.tau_min}")
             print(f"rho initial value: {rho0.item()} (corresponding to tau={self.tau_init})")
-                    
-        self.bm_min = float(getattr(self.args, "bm_min", bm_min))
-        self.bm_max = float(getattr(self.args, "bm_max", bm_max))
-        self.alpha = float(getattr(self.args, "alpha", alpha))
+
+        self.alpha = self.args.alpha
+
+        self.boundary_radius = self.args.boundary_radius
+        self.lambda_ = float(getattr(self.args, "lambda_", 0.5))
         self.eps = float(eps)
-        self.background_class = int(background_class)
-        self.cdist_chunk_size = int(cdist_chunk_size)
 
         self._ce_loss_function = CrossEntropyLoss()
-        num_classes = getattr(self.args, "num_classes", None)
-        if num_classes is None:
-            raise ValueError("args.num_classes must be provided for BULoss.")
+        num_classes = self.args.num_classes
         self._dice_loss_function = DiceLoss(num_classes)
-
-        # 3x3 kernel for binary erosion when estimating the boundary (Sec. 1.2).
-        self.register_buffer("_boundary_kernel", torch.ones(1, 1, 3, 3))
 
     def get_tau(self) -> torch.Tensor:
         if self.learn_tau:
             return self.tau_min + F.softplus(self.rho)
         return self._tau_fixed
+
+    def _is_verbose(self) -> bool:
+        return bool(getattr(self.args, "verbose", False))
+
+    def _verbose_tensor_stats(self, name: str, tensor: torch.Tensor) -> None:
+        tensor_detached = tensor.detach()
+        total_count = tensor_detached.numel()
+        if tensor_detached.is_floating_point() or tensor_detached.is_complex():
+            finite_mask = torch.isfinite(tensor_detached)
+            nan_count = int(torch.isnan(tensor_detached).sum().item())
+            posinf_count = int(torch.isposinf(tensor_detached).sum().item())
+            neginf_count = int(torch.isneginf(tensor_detached).sum().item())
+        else:
+            finite_mask = torch.ones_like(tensor_detached, dtype=torch.bool)
+            nan_count = 0
+            posinf_count = 0
+            neginf_count = 0
+        finite_count = int(finite_mask.sum().item())
+
+        if finite_count > 0:
+            finite_values = tensor_detached[finite_mask].float()
+            min_value = float(finite_values.min().item())
+            max_value = float(finite_values.max().item())
+            mean_value = float(finite_values.mean().item())
+        else:
+            min_value = float("nan")
+            max_value = float("nan")
+            mean_value = float("nan")
+
+        print(
+            f"[BULoss][debug] {name}: shape={tuple(tensor_detached.shape)} "
+            f"finite={finite_count}/{total_count} nan={nan_count} "
+            f"+inf={posinf_count} -inf={neginf_count} "
+            f"min={min_value:.6g} max={max_value:.6g} mean={mean_value:.6g}"
+        )
 
     def compute_uncertainty_map(self, probs: torch.Tensor) -> torch.Tensor:
         """Compute UM(x)=U(x) from entropy (loss_function.tex, Sec. 1.1.1-1.1.2)."""
@@ -116,30 +127,32 @@ class BULoss(nn.Module):
             raise ValueError("target must be [B, H, W]")
         target = target.long()
         with torch.no_grad():
-            foreground = target != self.background_class
-            boundary = self._compute_boundary_mask(foreground)
-            # if _scipy_distance_transform_edt is not None and np is not None:
-            #     distance = self._distance_transform_scipy(boundary)
-            # else:
-            #     distance = self._distance_transform_torch(boundary)
+            boundary = self._compute_boundary_mask(target)
             distance = self._distance_transform_scipy(boundary)
-
-            if self.distance_type == "dtm":
-                distance = distance * foreground.float()
-            elif self.distance_type == "signed":
-                distance = torch.where(foreground, -distance, distance)
+            if self._is_verbose():
+                boundary_counts = boundary.flatten(1).sum(dim=1)
+                no_boundary_count = int((boundary_counts == 0).sum().item())
+                print(
+                    f"[BULoss][debug] boundary pixels per sample: "
+                    f"{boundary_counts.detach().cpu().tolist()} | "
+                    f"no_boundary_samples={no_boundary_count}/{boundary.size(0)}"
+                )
+                self._verbose_tensor_stats("boundary_mask", boundary)
+                self._verbose_tensor_stats("distance_map_raw", distance)
 
         return distance.unsqueeze(1)
 
     def compute_boundary_map(self, distance: torch.Tensor) -> torch.Tensor:
-        """Compute BM(x) from D(x) (loss_function.tex, Eq. (bm_long))."""
+        """Convert the distance map D(x) into a boundary map BM(x).
+
+        Uses an exponential decay based on the distance to the nearest boundary, scaled by
+        tau. Invalid or infinite distances are kept masked out and remain zero in the output.
+        """
         tau = self.get_tau().to(device=distance.device, dtype=distance.dtype)
-        bm = torch.exp(-distance / tau)
-        if self.learn_tau:
-            return bm  # No clipping when tau is learnable, to preserve smooth gradients.
-        bm_mid = torch.where(bm < self.bm_min, torch.zeros_like(bm), bm)
-        bm_mid = torch.where(bm >= self.bm_max, torch.full_like(bm, self.alpha), bm_mid)
-        return bm_mid
+        finite_distance = torch.isfinite(distance)
+        safe_distance = distance.masked_fill(~finite_distance, 0.0)
+        boundary_map = torch.exp(-safe_distance / tau)
+        return boundary_map.masked_fill(~finite_distance, 0.0)
 
     def compute_weights(
         self,
@@ -147,11 +160,8 @@ class BULoss(nn.Module):
         uncertainty_map: torch.Tensor,
         # option_specific_masking: bool = False,
     ) -> torch.Tensor:
-        """Compute w(x)=exp(BM(x)*UM(x))"""
-        # if option_specific_masking:
-        #     # Reserved hook; no extra masking in the current spec.
-        #     pass
-        return torch.exp(boundary_map * uncertainty_map)
+        """Compute w(x)=exp(alpha*BM(x)*UM(x))."""
+        return torch.exp(self.alpha * boundary_map * uncertainty_map)
 
     def forward(
         self,
@@ -166,6 +176,11 @@ class BULoss(nn.Module):
             raise ValueError("target must be [B, H, W]")
         if getattr(self.args, "verbose", False):
             print(f"[BULoss] tau={float(self.get_tau().detach())}")
+            self._verbose_tensor_stats("logits", logits)
+            self._verbose_tensor_stats("target", target)
+            self._verbose_tensor_stats("tau", self.get_tau())
+            if self.learn_tau:
+                self._verbose_tensor_stats("rho", self.rho)
         
         target = target.to(device=logits.device, dtype=torch.long)
         
@@ -173,7 +188,13 @@ class BULoss(nn.Module):
             # Standard Dice + CE loss without boundary/uncertainty weighting.
             loss_ce = self._ce_loss_function(logits, target)
             loss_dice = self._dice_loss_function(logits, target, softmax=True)
-            total = self.mu_dice * loss_dice + self.mu_ce * loss_ce
+            total = (
+                (1.0 - self.lambda_) * loss_dice + self.lambda_ * loss_ce
+            )
+            if self._is_verbose():
+                self._verbose_tensor_stats("loss_ce", loss_ce)
+                self._verbose_tensor_stats("loss_dice", loss_dice)
+                self._verbose_tensor_stats("loss_total", total)
             if not return_details:
                 return total
             details: Dict[str, torch.Tensor] = {
@@ -181,29 +202,39 @@ class BULoss(nn.Module):
                 "L_Dice": loss_dice.detach(),
             }
             return total, details
-        
-        elif self.loss_option == "B":
-            loss_dice = self._dice_loss_function(logits, target, softmax=True)
-            
-        
+
         probs = F.softmax(logits, dim=1)
         uncertainty_map = self.compute_uncertainty_map(probs)
         distance_map = self.compute_distance_map(target)
         boundary_map = self.compute_boundary_map(distance_map)
         weights = self.compute_weights(boundary_map, uncertainty_map)
-
-        # log_probs = F.log_softmax(logits, dim=1)
-        # ce_per_pixel = -log_probs.gather(1, target.unsqueeze(1)).squeeze(1)
-        
+        if self._is_verbose():
+            self._verbose_tensor_stats("probs", probs)
+            self._verbose_tensor_stats("uncertainty_map", uncertainty_map)
+            self._verbose_tensor_stats("distance_map", distance_map)
+            self._verbose_tensor_stats("boundary_map", boundary_map)
+            self._verbose_tensor_stats("weights", weights)
 
         loss_wce = self._weighted_ce(logits, target, weights)
 
-        loss_wdice = self._dice_loss(probs, target, weights=weights)
-
         if self.loss_option == "A":
-            total = (1-self.args.lambda_) * loss_wdice + self.args.lambda_ * loss_wce
+            loss_wdice = self._weighted_dice_loss(probs, target, weights)
+            total = (
+                (1.0 - self.lambda_) * loss_wdice + self.lambda_ * loss_wce
+            )
         elif self.loss_option == "B":
-            total = (1-self.args.lambda_) * loss_dice + self.args.lambda_ * loss_wce
+            loss_dice = self._dice_loss_function(logits, target, softmax=True)
+            total = (
+                (1.0 - self.lambda_) * loss_dice + self.lambda_ * loss_wce
+            )
+
+        if self._is_verbose():
+            self._verbose_tensor_stats("loss_wce", loss_wce)
+            if self.loss_option == "A":
+                self._verbose_tensor_stats("loss_wdice", loss_wdice)
+            if self.loss_option == "B":
+                self._verbose_tensor_stats("loss_dice", loss_dice)
+            self._verbose_tensor_stats("loss_total", total)
 
         if not return_details:
             return total
@@ -217,8 +248,9 @@ class BULoss(nn.Module):
             "w_mean": weights.mean().detach(),
             "w_max": weights.max().detach(),
             "L_wCE": loss_wce.detach(),
-            "L_wDice": loss_wdice.detach(),
         }
+        if self.loss_option == "A":
+            details["L_wDice"] = loss_wdice.detach()
         if self.loss_option == "B":
             details["L_Dice"] = loss_dice.detach()
             
@@ -232,103 +264,84 @@ class BULoss(nn.Module):
     ) -> torch.Tensor:
         """Compute weighted CE loss (loss_function.tex, Sec. 1.3.2)."""
         ce_per_pixel = F.cross_entropy(logits, target, reduction="none")
-        weights_spatial = weights.squeeze(1)
-        weight_sum = weights_spatial.sum(dim=(1, 2)).clamp_min(self.eps)
-        loss_wce = (weights_spatial * ce_per_pixel).sum(dim=(1, 2)) / weight_sum
-        return loss_wce.mean()
+        weights_spatial = self._normalize_weights(weights, logits).squeeze(1)
+        weight_sum = weights_spatial.sum().clamp_min(self.eps)
+        return (weights_spatial * ce_per_pixel).sum() / weight_sum
 
-    def _dice_loss(
+    def _weighted_dice_loss(
         self,
         probs: torch.Tensor,
         target: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
+        weights: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute Dice loss, weighted if weights are provided (Sec. 1.3.3)."""
+        """Compute weighted multiclass Dice loss (loss_function.tex, Sec. 1.3.3)."""
         if probs.dim() != 4:
             raise ValueError("probs must be [B, C, H, W]")
         target = target.long()
         num_classes = probs.size(1)
         target_onehot = F.one_hot(target, num_classes=num_classes).permute(0, 3, 1, 2)
         target_onehot = target_onehot.to(dtype=probs.dtype, device=probs.device)
+        weights = self._normalize_weights(weights, probs)
 
-        if weights is None:
-            weights = torch.ones(
-                (probs.size(0), 1, probs.size(2), probs.size(3)),
-                device=probs.device,
-                dtype=probs.dtype,
-            )
-        else:
-            if weights.dim() == 3:
-                weights = weights.unsqueeze(1)
-            weights = weights.to(dtype=probs.dtype, device=probs.device)
-
-        smooth = 1e-5
+        eps = 1e-8
         dims = (0, 2, 3)
         intersection = (weights * probs * target_onehot).sum(dim=dims)
-        y_sum = (weights * target_onehot * target_onehot).sum(dim=dims)
-        z_sum = (weights * probs * probs).sum(dim=dims)
-        dice = (2.0 * intersection + smooth) / (z_sum + y_sum + smooth)
+        pred_sum = (weights * probs).sum(dim=dims)
+        target_sum = (weights * target_onehot).sum(dim=dims)
+        dice = (2.0 * intersection + eps) / (pred_sum + target_sum + eps)
         return (1.0 - dice).mean()
 
-    def _compute_boundary_mask(self, foreground: torch.Tensor) -> torch.Tensor:
-        """Approximate boundary B from the foreground mask (loss_function.tex, Sec. 1.2)."""
-        if foreground.dim() == 3:
-            foreground = foreground.unsqueeze(1)
-        foreground = foreground.to(dtype=self._boundary_kernel.dtype)
-        kernel = self._boundary_kernel.to(device=foreground.device)
-        neighbor_count = F.conv2d(foreground, kernel, padding=1)
-        eroded = neighbor_count == kernel.numel()
-        boundary = foreground.bool() & ~eroded
-        return boundary.squeeze(1)
+    def _normalize_weights(self, weights: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+        if weights.dim() == 3:
+            weights = weights.unsqueeze(1)
+        if weights.dim() != 4 or weights.size(1) != 1:
+            raise ValueError("weights must be [B, 1, H, W] or [B, H, W]")
+        if weights.size(0) != reference.size(0) or weights.shape[-2:] != reference.shape[-2:]:
+            raise ValueError("weights must match the batch and spatial dimensions of the reference tensor")
+        return weights.to(device=reference.device, dtype=reference.dtype)
+
+    def _compute_boundary_mask(self, target: torch.Tensor) -> torch.Tensor:
+        """Detect multiclass label boundaries using local shifted comparisons."""
+        if target.dim() != 3:
+            raise ValueError("target must be [B, H, W]")
+
+        batch, height, width = target.shape
+        boundary = torch.zeros((batch, height, width), device=target.device, dtype=torch.bool)
+        radius = self.boundary_radius
+
+        for dy in range(-radius, radius + 1):
+            y_start = max(0, -dy)
+            y_end = min(height, height - dy)
+            if y_start >= y_end:
+                continue
+            y_neighbor = slice(y_start + dy, y_end + dy)
+            y_current = slice(y_start, y_end)
+
+            for dx in range(-radius, radius + 1):
+                if dy == 0 and dx == 0:
+                    continue
+                x_start = max(0, -dx)
+                x_end = min(width, width - dx)
+                if x_start >= x_end:
+                    continue
+                x_neighbor = slice(x_start + dx, x_end + dx)
+                x_current = slice(x_start, x_end)
+                differs = target[:, y_current, x_current] != target[:, y_neighbor, x_neighbor]
+                boundary[:, y_current, x_current] |= differs
+
+        return boundary
 
     def _distance_transform_scipy(self, boundary: torch.Tensor) -> torch.Tensor:
         """Distance transform via SciPy (preferred when available)."""
+        if boundary.dim() != 3:
+            raise ValueError("boundary must be [B, H, W]")
+        boundary = boundary.bool()
         distance_maps = []
         for b in range(boundary.size(0)):
-            bmask = boundary[b].detach().cpu().numpy().astype(np.uint8)
-            if bmask.sum() == 0:
-                dist = np.zeros_like(bmask, dtype=np.float32)
+            bmask = boundary[b].detach().cpu().numpy().astype(bool)
+            if bmask.any():
+                dist = _scipy_distance_transform_edt(~bmask).astype(np.float32)
             else:
-                dist = _scipy_distance_transform_edt(bmask == 0).astype(np.float32)
+                dist = np.full(bmask.shape, np.inf, dtype=np.float32)
             distance_maps.append(torch.from_numpy(dist))
         return torch.stack(distance_maps, dim=0).to(device=boundary.device)
-
-    def _distance_transform_torch(self, boundary: torch.Tensor) -> torch.Tensor:
-        """Torch fallback distance transform (exact but slower; Sec. 1.2)."""
-        batch, height, width = boundary.shape
-        device = boundary.device
-        dtype = torch.float32
-
-        ys = torch.arange(height, device=device, dtype=dtype)
-        xs = torch.arange(width, device=device, dtype=dtype)
-        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-        coords = torch.stack([yy, xx], dim=-1).view(-1, 2)
-
-        distance_maps = []
-        for b in range(batch):
-            bmask = boundary[b].view(-1)
-            if not bmask.any():
-                distance_maps.append(torch.zeros((height, width), device=device, dtype=dtype))
-                continue
-            boundary_coords = coords[bmask]
-            min_dist = self._min_cdist(coords, boundary_coords)
-            distance_maps.append(min_dist.view(height, width))
-
-        return torch.stack(distance_maps, dim=0)
-
-    def _min_cdist(self, coords: torch.Tensor, boundary_coords: torch.Tensor) -> torch.Tensor:
-        """Compute min Euclidean distance from coords to boundary_coords (chunked)."""
-        if boundary_coords.numel() == 0:
-            return torch.zeros(coords.size(0), device=coords.device, dtype=coords.dtype)
-        if boundary_coords.size(0) == 1:
-            return torch.norm(coords - boundary_coords[0], dim=1)
-
-        chunk = max(1, self.cdist_chunk_size)
-        min_dist = torch.full(
-            (coords.size(0),), float("inf"), device=coords.device, dtype=coords.dtype
-        )
-        for start in range(0, coords.size(0), chunk):
-            chunk_coords = coords[start : start + chunk]
-            dist = torch.cdist(chunk_coords, boundary_coords)
-            min_dist[start : start + chunk] = dist.min(dim=1).values
-        return min_dist

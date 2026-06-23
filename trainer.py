@@ -99,13 +99,6 @@ def trainer(args, model, snapshot_path, teacher_model=None):
         print(f"BU Loss parameters will be printed for the first two iterations.")
         print(f"BU Loss parameters: {list(bu_loss.parameters())}")
 
-        if not hasattr(bu_loss, "rho"):
-            raise RuntimeError(
-                "args.learn_tau=True, but BULoss does not expose a learnable rho parameter."
-            )
-        else:
-            print(f"BU Loss rho parameter: {bu_loss.rho}")
-
 
     optimizer_param_groups = [
         {
@@ -263,10 +256,10 @@ def trainer(args, model, snapshot_path, teacher_model=None):
                 logger=logging,
             )
 
-            if args.verbose and iter_num >= args.verbos_iterations:
+            if args.verbose and iter_num >= args.verbose_iterations:
                 print(
-                    "Verbose mode is ON. Detailed training information were printed "
-                    "and training is stopped after two iterations."
+                    f"Verbose mode is ON. Detailed training information were printed "
+                    f"and training is stopped after {args.verbose_iterations} iterations."
                 )
                 sys.exit(0)
 
