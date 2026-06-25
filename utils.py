@@ -157,7 +157,7 @@ def calculate_metric_percase(pred, gt, voxelspacing=None):
     return 1.0, 0.0, 1.0  # many protocols treat this as perfect agreement for overlap
 
 
-def calculate_metric_percase_cataract(pred, gt, voxelspacing=None):
+def calculate_metric_percase_without_absent_reward(pred, gt, voxelspacing=None):
     """
     Metric helper that avoids rewarding absent classes with perfect scores.
     Returns NaNs when both prediction and ground-truth are empty so downstream
@@ -192,7 +192,7 @@ def _safe_nanmean(values):
         return float(np.nanmean(values))
 
 
-def _endovis_present_class_metric(prediction, label, class_id, voxelspacing=None):
+def _present_class_metric(prediction, label, class_id, voxelspacing=None):
     pred_mask = prediction == class_id
     gt_mask = label == class_id
     pred_present = pred_mask.sum() > 0
@@ -210,7 +210,11 @@ def _endovis_present_class_metric(prediction, label, class_id, voxelspacing=None
     return float(dice), float(hd95), float(iou), False
 
 
-def test_single_volume_endovis2018_rss(
+def _endovis_present_class_metric(prediction, label, class_id, voxelspacing=None):
+    return _present_class_metric(prediction, label, class_id, voxelspacing=voxelspacing)
+
+
+def test_single_frame_present_classes(
     image,
     label,
     net,
@@ -230,13 +234,13 @@ def test_single_volume_endovis2018_rss(
 
     if image.ndim != 3 or image.shape[2] != 3:
         raise ValueError(
-            "EndoVis2018 RSS evaluation expects image shape HxWx3 after squeeze, got {}".format(
+            "Present-class frame evaluation expects image shape HxWx3 after squeeze, got {}".format(
                 image.shape
             )
         )
     if label.ndim != 2:
         raise ValueError(
-            "EndoVis2018 RSS evaluation expects label shape HxW after squeeze, got {}".format(
+            "Present-class frame evaluation expects label shape HxW after squeeze, got {}".format(
                 label.shape
             )
         )
@@ -284,7 +288,7 @@ def test_single_volume_endovis2018_rss(
 
     if not discounted_frame:
         for class_id in present_class_ids:
-            dice, hd95, iou, ignored = _endovis_present_class_metric(
+            dice, hd95, iou, ignored = _present_class_metric(
                 prediction,
                 label,
                 class_id,
@@ -325,7 +329,8 @@ def test_single_volume_endovis2018_rss(
     if return_prediction:
         result["prediction"] = prediction
     return result
-    
+
+
 def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, dataset='Synapse'):
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()
     net.eval()
@@ -370,7 +375,7 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
         raise ValueError("Unknown dataset")
     
     metric_list = []
-    metric_fn = calculate_metric_percase_cataract if dataset in ['Cataract1k', 'EndoVis2018'] else calculate_metric_percase
+    metric_fn = calculate_metric_percase_without_absent_reward if dataset in ['Cataract1k', 'EndoVis2018'] else calculate_metric_percase
     for i in range(1, classes):
         metric_list.append(metric_fn(prediction == i, label == i))
 

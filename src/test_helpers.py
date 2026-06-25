@@ -87,26 +87,38 @@ def build_test_arg_parser():
     parser.add_argument('--verbose', action='store_true',
                         help='whether to print detailed debug information during inference')
     parser.add_argument(
+        "--normalize_present_class_eval",
         "--normalize_endovis_eval",
+        dest="normalize_present_class_eval",
         action="store_true",
-        help="Apply ImageNet normalization during EndoVis2018 evaluation. Use only if training used the same normalization.",
+        help="Apply ImageNet normalization during present-class frame evaluation. Use only if training used the same normalization.",
     )
     return parser
 
 
 def parse_test_args():
-    return build_test_arg_parser().parse_args()
+    args = build_test_arg_parser().parse_args()
+    args.normalize_endovis_eval = args.normalize_present_class_eval
+    return args
 
 
-def _endovis_sequence_name(case_name):
+def _case_group_name(case_name):
     return str(case_name).split('_', 1)[0]
 
 
-def _endovis_sequence_sort_key(sequence_name):
+def _case_group_sort_key(case_group_name):
     prefix = "seq"
-    if sequence_name.startswith(prefix) and sequence_name[len(prefix):].isdigit():
-        return 0, int(sequence_name[len(prefix):])
-    return 1, sequence_name
+    if case_group_name.startswith(prefix) and case_group_name[len(prefix):].isdigit():
+        return 0, int(case_group_name[len(prefix):])
+    return 1, case_group_name
+
+
+def _endovis_sequence_name(case_name):
+    return _case_group_name(case_name)
+
+
+def _endovis_sequence_sort_key(sequence_name):
+    return _case_group_sort_key(sequence_name)
 
 
 def _class_label(class_names, class_id):
@@ -121,4 +133,3 @@ def _mean_metric_array(metric_stack):
     for index in np.ndindex(mean_metrics.shape):
         mean_metrics[index] = _safe_nanmean(metric_stack[(slice(None),) + index])
     return mean_metrics
-
