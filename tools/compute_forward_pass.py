@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-ROOT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parents[1]
 _tmp_candidates = [
     ROOT_DIR / ".tmp",
     Path.home() / ".cache" / "transunet_tmp",
@@ -31,7 +31,7 @@ for path in (ROOT_DIR, DATASETS_DIR, NETWORKS_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from component_timer import time_model_components  # noqa: E402
+from tools.component_timer import time_model_components  # noqa: E402
 
 try:
     from datasets.dataset_synapse import Synapse_dataset, RandomGenerator  # noqa: E402
@@ -134,7 +134,7 @@ def parse_args() -> argparse.Namespace:
                         default=Path("/data/halyusuf/data/Synapse/train_npz/"),
                         help="Root directory with Synapse .npz slices.")
     parser.add_argument("--list_dir", type=Path,
-                        default=Path("./lists/lists_Synapse"),
+                        default=ROOT_DIR / "lists" / "lists_Synapse",
                         help="Directory containing train.txt/val.txt lists.")
     parser.add_argument("--split", type=str, default="train",
                         help="Dataset split to benchmark (train uses 2D slices).")

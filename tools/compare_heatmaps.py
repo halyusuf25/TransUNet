@@ -2,6 +2,7 @@
 import argparse
 import os
 import re
+import sys
 import warnings
 from typing import Dict, List, Optional, Tuple
 
@@ -10,6 +11,10 @@ import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 try:
     from src.visualize import _discrete_cmap as _visualize_discrete_cmap
@@ -149,13 +154,12 @@ def _index_heatmap_files(
 
 
 def _candidate_synapse_roots() -> List[str]:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     cwd = os.getcwd()
     candidates = [
         os.environ.get("SYNAPSE_TRAIN_NPZ"),
         "/data/halyusuf/data/Synapse/train_npz/",
-        os.path.join(script_dir, "data", "Synapse", "train_npz"),
-        os.path.abspath(os.path.join(script_dir, "..", "..", "data", "Synapse", "train_npz")),
+        os.path.join(ROOT_DIR, "data", "Synapse", "train_npz"),
+        os.path.abspath(os.path.join(ROOT_DIR, "..", "data", "Synapse", "train_npz")),
         os.path.abspath(os.path.join(cwd, "..", "..", "data", "Synapse", "train_npz")),
     ]
     deduped = []
