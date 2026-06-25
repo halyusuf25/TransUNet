@@ -103,15 +103,15 @@ class ACDC_Dataset(Dataset):
         # label = h5f['label'][:]
         # sample = {'image': image, 'label': label}
         if self.split == "train":
-            h5f = h5py.File(self._base_dir + "/ACDC_training_slices/{}".format(case), 'r')
-            image = h5f['image'][:]
-            label = h5f['label'][:]  # fix sup_type to label
+            with h5py.File(self._base_dir + "/ACDC_training_slices/{}".format(case), 'r') as h5f:
+                image = h5f['image'][:]
+                label = h5f['label'][:]  # fix sup_type to label
             sample = {'image': image, 'label': label}
             sample = self.transform(sample)
         else:
-            h5f = h5py.File(self._base_dir + "/ACDC_training_volumes/{}".format(case), 'r')
-            image = h5f['image'][:]
-            label = h5f['label'][:]
+            with h5py.File(self._base_dir + "/ACDC_training_volumes/{}".format(case), 'r') as h5f:
+                image = h5f['image'][:]
+                label = h5f['label'][:]
             sample = {'image': image, 'label': label}
         sample["idx"] = idx
         sample['case_name'] = case.replace('.h5', '')
