@@ -104,6 +104,12 @@ def _build_datasets(args):
                 [RandomGenerator4EndoVis2018(output_size, augment=True)]
             ),
         )
+        if hasattr(db_train, "num_classes") and db_train.num_classes != args.num_classes:
+            raise ValueError(
+            f"Dataset labels.json has {db_train.num_classes} classes, "
+            f"but args.num_classes={args.num_classes}"
+            )
+            
         db_val = EndoVis2018Dataset(
             base_dir=args.root_path,
             split="test",
@@ -111,6 +117,11 @@ def _build_datasets(args):
                 [RandomGenerator4EndoVis2018(output_size, augment=False)]
             ),
         )
+        if hasattr(db_val, "num_classes") and db_val.num_classes != args.num_classes:
+            raise ValueError(
+            f"Dataset labels.json has {db_val.num_classes} classes, "
+            f"but args.num_classes={args.num_classes}"
+            )
         validation_protocol = "image"
     elif args.dataset == "ACDC":
         db_train = ACDC_Dataset(
