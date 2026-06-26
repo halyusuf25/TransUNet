@@ -9,7 +9,6 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from benchmark import benchmark_segmentation_model, build_benchmark_loader
-from benchmark_quantize import benchmark_segmentation_quantize_model
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
@@ -25,7 +24,6 @@ from utils import (
 )
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
-from networks.quantizer import AWQViTSegQuantizer
 from datetime import datetime
 from src.test_helpers import (
     parse_test_args,
@@ -76,7 +74,7 @@ def inference(args, model, test_save_path=None):
                 model,
                 classes=args.num_classes,
                 patch_size=[args.img_size, args.img_size],
-                test_save_path=test_save_path,
+                test_save_path=None,
                 case=case_name,
                 z_spacing=args.z_spacing,
                 normalize=normalize_present_class_eval,
@@ -231,7 +229,7 @@ def inference(args, model, test_save_path=None):
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch['case_name'][0]
         metric_i = test_single_volume(image, label, model, classes=args.num_classes, patch_size=[args.img_size, args.img_size],
-                                      test_save_path=test_save_path, case=case_name, z_spacing=args.z_spacing, dataset=args.dataset)
+                                      test_save_path=None, case=case_name, z_spacing=args.z_spacing, dataset=args.dataset)
         metric_i = np.array(metric_i, dtype=np.float32)
         all_metrics.append(metric_i)
         with np.errstate(invalid="ignore"):
@@ -388,19 +386,6 @@ def main():
     
     # name the same snapshot defined in train script!
     args.exp = 'TU_' + dataset_name + str(args.img_size)
-    snapshot_path = "../model/{}/{}".format(args.exp, 'TU')
-    snapshot_path = snapshot_path + '_pretrain' if args.is_pretrain else snapshot_path
-    snapshot_path += '_' + args.vit_name
-    snapshot_path = snapshot_path + '_skip' + str(args.n_skip)
-    snapshot_path = snapshot_path + '_vitpatch' + str(args.vit_patches_size) if args.vit_patches_size!=16 else snapshot_path
-    snapshot_path = snapshot_path + '_epo' + str(args.max_epochs) if args.max_epochs != 30 else snapshot_path
-    if dataset_name == 'ACDC':  # using max_epoch instead of iteration to control training duration
-        snapshot_path = snapshot_path + '_' + str(args.max_iterations)[0:2] + 'k' if args.max_iterations != 30000 else snapshot_path
-    snapshot_path = snapshot_path+'_bs'+str(args.batch_size)
-    snapshot_path = snapshot_path + '_lr' + str(args.base_lr) if args.base_lr != 0.01 else snapshot_path
-    snapshot_path = snapshot_path + '_'+str(args.img_size)
-    snapshot_path = snapshot_path + '_s'+str(args.seed) if args.seed!=1234 else snapshot_path
-
     config_vit = CONFIGS_ViT_seg[args.vit_name]
     config_vit.verbose = args.verbose
     config_vit.n_classes = args.num_classes
@@ -443,24 +428,20 @@ def main():
         config_vit.patches.grid = (int(args.img_size/args.vit_patches_size), int(args.img_size/args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
     
-    snapshot = os.path.join(snapshot_path, 'best_model.pth')
-    if not os.path.exists(snapshot): snapshot = snapshot.replace('best_model', 'epoch_'+str(args.max_epochs-1))
-    # net.load_state_dict(torch.load(snapshot, weights_only=True))
-    # net = nn.DataParallel(net) #added by me to overcome testing error problem
     #get checkpoint path
     ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
     net.load_state_dict(torch.load(ckpt_path))
-    snapshot_name = snapshot_path.split('/')[-1]
 
     log_folder = './test_log/test_log_' + args.exp
     os.makedirs(log_folder, exist_ok=True)
-    logging.basicConfig(filename=log_folder + '/'+snapshot_name+".txt", level=logging.INFO, format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.basicConfig(filename=log_folder + '/'+args.ckpt+".txt", level=logging.INFO, format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
-    logging.info(snapshot_name)
+    logging.info(args.ckpt)
 
 
     if args.quantize:
+        from networks.quantizer import AWQViTSegQuantizer
         if args.dataset == 'Synapse':
             db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
         elif args.dataset in ['Cataract1k', 'EndoVis2018']:
@@ -495,15 +476,7 @@ def main():
         generate_qualitative_visualization(args, net, dataset_name)
         sys.exit(0)
 
-    if args.is_savenii:
-        args.test_save_dir = '../predictions'
-        test_save_path = os.path.join(args.test_save_dir, args.exp, snapshot_name)
-        os.makedirs(test_save_path, exist_ok=True)
-    else:
-        test_save_path = None
-    
-
-    performance = inference(args, net, test_save_path)
+    performance = inference(args, net, test_save_path=None)
     
     # ---------------- Benchmark (runs AFTER inference is done) ----------------
     # For throughput, use a reasonable batch size (fixed HxW works best with cudnn.benchmark)
@@ -511,6 +484,7 @@ def main():
     test_loader_bench = build_benchmark_loader(args, batch_size=36, num_workers=0, shuffle=False)
 
     if args.quantize:
+        from benchmark_quantize import benchmark_segmentation_quantize_model
         results = benchmark_segmentation_quantize_model(
             model=net,
             test_loader=test_loader_bench,                 # real test samples
