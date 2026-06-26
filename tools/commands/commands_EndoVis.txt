@@ -1,0 +1,156 @@
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --verbose \
+         2>&1 | tee console_output24.txt
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt default12Class_224 \
+         --description "endovis12Class"
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --img_size 640 \
+         --batch_size 4 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt default_640 \
+         --description "endovis_640"
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt default \
+         --description "EndoVis_2"
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt default12Class_640_512 \
+         --description "endovis12Class_640x512"
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --img_size 512 \
+         --ckpt default12Class_512_EndoVis2018__epoch_149_LastEpoch_20260616_021345.pth
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --max_iterations 120000 \
+         --img_size 512 \
+         --batch_size 4 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt baseline2 \
+         --description "Baseline2_EndoVis"
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --max_iterations 100000 \
+         --img_size 512 \
+         --batch_size 4 \
+         --use_bu_loss \
+         --buloss_option=B \
+         --learn_tau \
+         --tau_init 1.0 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt buLoss_BeforeTHEChaning \
+         --description "buLoss_beforeChangingTHECode"
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --max_iterations 120000 \
+         --img_size 512 \
+         --batch_size 4 \
+         --use_bu_loss \
+         --buloss_option=B \
+         --learn_tau \
+         --tau_init 1.0 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt buLoss_FixedNormalization \
+         --description "EndoVis_buLoss_fixedNormalization"
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --img_size 512 \
+         --normalize_endovis_eval \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt buLoss_FixedNormalization_EndoVis2018__best_val_dice_0.3581322456895239_epoch_26_20260623_140621.pth \
+         --description "TransUNet with BU-Loss function on EndoVis2018 Dataset (512x512) - After fixing normalization with --normalize_endovis_eval argument "
+
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --img_size 512 \
+         --batch_size 4 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt buLoss_AfterTHEChaning_EndoVis2018__best_val_dice_0.37425235919696576_epoch_39_20260623_094714.pth \
+         --description "TransUNet with BU-Loss function on EndoVis2018 Dataset (512x512) - After the change of bu_loss code"
+
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --img_size 512 \
+         --batch_size 4 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt buLoss_BeforeTHEChaning_EndoVis2018__best_val_dice_0.38391584491342357_epoch_58_20260622_061342.pth \
+         --description "TransUNet with BU-Loss function on EndoVis2018 Dataset (512x512) - Before the change of bu_loss code"
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --img_size 512 \
+         --batch_size 4 \
+         --max_iterations 40000 \
+         --topk_attn 0.75 \
+         --use_ats \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt ATS_BeforeChanging \
+         --description "EndoVis2018_ATS_BeforeChangingTHECode __(ratio 0.75)__"
+
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --img_size 512 \
+         --batch_size 4 \
+         --max_iterations 40000 \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt Gumbel_BeforeChanging \
+         --description "EndoVis2018_Gumbel_BeforeChangingTHECode (ratio 0.75)"
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --img_size 512 \
+         --batch_size 4 \
+         --max_iterations 40000 \
+         --topk_attn 0.75 \
+         --ckpt_dir ckpt_EndoVis2018 \
+         --ckpt TopK_BeforeChanging \
+         --description "EndoVis2018_TopK_BeforeChangingTHECode (ratio 0.75)"

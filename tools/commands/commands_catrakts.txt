@@ -1,0 +1,405 @@
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --use_bu_loss \
+         --tau 1.5 \
+         --buloss_option A \
+         --ckpt bulossA_Tau15
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --use_bu_loss \
+         --tau 1.5 \
+         --buloss_option B \
+         --ckpt bulossB_Tau15
+
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --use_bu_loss \
+         --tau 2.0 \
+         --buloss_option A \
+         --ckpt bulossA_Tau20
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --use_bu_loss \
+         --tau 2.0 \
+         --buloss_option B \
+         --ckpt bulossB_Tau20
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --use_bu_loss \
+         --tau 2.5 \
+         --buloss_option A \
+         --ckpt bulossA_Tau25
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --use_bu_loss \
+         --tau 2.5 \
+         --buloss_option B \
+         --ckpt bulossB_Tau25
+
+
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --use_bu_loss \
+         --tau 3.0 \
+         --buloss_option A \
+         --ckpt bulossA_Tau30
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --use_bu_loss \
+         --learn_tau \
+         --buloss_option B \
+         --ckpt bulossB_Cataract_LearnTau_NoWeightDecay
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --use_se_block \
+         --ckpt SEBLOOK_2_ \
+         --verbose
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --use_bu_loss \
+         --learn_tau \
+         --buloss_option B \
+         --ckpt_dir ckpt_Cataract1k \
+         --create_heatmaps \
+         --ckpt bulossB_Cataract_LearnTau_HeatMap
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt bulossA_Tau15_Cataract1k__epoch_215_20260125_074220.pth \
+         --description "Benchmarking TransUNet with Boundry (Cataract1k)-Uncertainty Loss (Option A) using \tau = 1.5" 
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt bulossB_Tau15_Cataract1k__epoch_215_20260125_075117.pth \
+         --description "Benchmarking TransUNet with Boundry (Cataract1k)-Uncertainty Loss (Option B) using \tau = 1.5" 
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt bulossA_Tau20_Cataract1k__epoch_215_20260125_073534.pth \
+         --description "Benchmarking TransUNet with Boundry (Cataract1k)-Uncertainty Loss (Option A) using \tau = 2.0"
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt bulossB_Tau20_Cataract1k__epoch_215_20260125_075444.pth \
+         --description "Benchmarking TransUNet with Boundry (Cataract1k)-Uncertainty Loss (Option B) using \tau = 2.0"
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt bulossA_Tau25_Cataract1k__epoch_215_20260125_075436.pth \
+         --description "Benchmarking TransUNet with Boundry (Cataract1k)-Uncertainty Loss (Option A) using \tau = 2.5"
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt bulossB_Tau25_Cataract1k__epoch_215_20260125_073550.pth \
+         --description "Benchmarking TransUNet with Boundry (Cataract1k)-Uncertainty Loss (Option B) using \tau = 2.5"
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt bulossA_Tau30_Cataract1k__epoch_215_20260125_075043.pth \
+         --description "Benchmarking TransUNet with Boundry (Cataract1k)-Uncertainty Loss (Option A) using \tau = 3.0"
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt bulossB_Tau30_Cataract1k__epoch_215_20260125_075103.pth \
+         --description "Benchmarking TransUNet with Boundry (Cataract1k)-Uncertainty Loss (Option B) using \tau = 3.0"
+
+
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt SEBLOOK_2__Cataract1k__epoch_215_20260202_060921.pth \
+         --use_se_block \
+         --quantize \
+         --description "Benchmarking TransUNet (Cataract1k) + SE Quantization (Dropped SE-Block after Quantization) - New"
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt SEBLOOK_2__Cataract1k__epoch_215_20260202_060921.pth \
+         --use_se_block \
+         --description "Benchmarking TransUNet (Cataract1k) with SE Block (Dropped SE-Block during testing) 3"
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt__ \
+         --ckpt default_ckpt_name_Cataract1k__epoch_215_20260121_150058.pth \
+         --quantize \
+         --description "Benchmarking TransUNet (Cataract1k) + awq Quantization - New 22"
+
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --ckpt bulossB_Cataract_LearnTau_HeatMap_Cataract1k__epoch_215_20260211_074331.pth \
+         --benchmark_dict benchmark_Cataract1k \
+         --description "Benchmarking TransUNet (Cataract1k) + Learnable Tau"
+
+
+CUDA_VISIBLE_DEVICES=5 print_model.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt__ \
+         --ckpt default_ckpt_name_Cataract1k__epoch_215_20260121_150058.pth 
+
+
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.9 \
+         --ckpt topk90
+
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.75 \
+         --ckpt topk75
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.50 \
+         --ckpt topk50
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.9 \
+         --use_gumbel_topk \
+         --ckpt topk90_gumbeltopk
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --ckpt topk75_gumbeltopk
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.50 \
+         --use_gumbel_topk \
+         --ckpt test_CUDA5
+
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.50 \
+         --ckpt topk50_Cataract1k__epoch_215_20260227_061947.pth \
+         --benchmark_dict benchmark_Cataract1k \
+         --description "Benchmarking TransUNet (Cataract1k) with Top-K token selection = 50% "
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.75 \
+         --ckpt topk75_Cataract1k__epoch_215_20260227_061914.pth \
+         --benchmark_dict benchmark_Cataract1k \
+         --description "Benchmarking TransUNet (Cataract1k) with Top-K token selection = 75% "
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.9 \
+         --ckpt topk90_Cataract1k__epoch_215_20260227_061922.pth \
+         --benchmark_dict benchmark_Cataract1k \
+         --description "Benchmarking TransUNet (Cataract1k) with Top-K token selection = 90% "
+
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.50 \
+         --use_gumbel_topk \
+         --ckpt topk50_gumbeltopk_Cataract1k__epoch_215_20260227_062257.pth \
+         --benchmark_dict benchmark_Cataract1k \
+         --description "Benchmarking TransUNet (Cataract1k) with Gumbel-Top-K token selection = 50% "
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --ckpt topk75_gumbeltopk_Cataract1k__epoch_215_20260227_062159.pth \
+         --benchmark_dict benchmark_Cataract1k \
+         --description "Benchmarking TransUNet (Cataract1k) with Gumbel-Top-K token selection = 75% "
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epochs 216 \
+         --ckpt_dir ckpt_Cataract1k \
+         --topk_attn 0.9 \
+         --use_gumbel_topk \
+         --ckpt topk90_gumbeltopk_Cataract1k__epoch_215_20260227_062119.pth \
+         --benchmark_dict benchmark_Cataract1k \
+         --description "Benchmarking TransUNet (Cataract1k) with Gumbel-Top-K token selection = 90% "
+
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_iterations 35000 \
+         --ckpt_dir ckpt_Cataract1k \
+         --ckpt baseline2 \
+         --description "Baseline2_Catarakt"
+
+
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_iterations 30000 \
+         --use_bu_loss \
+         --buloss_option=B \
+         --learn_tau \
+         --tau_init 1.0 \
+         --ckpt_dir ckpt_Cataract1k \
+         --ckpt buLoss_AfterTHEChaning \
+         --description "Cataract1k_buLoss_AfterChangingTHECode"
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt_Cataract1k \
+         --ckpt buLoss_AfterTHEChaning_Cataract1k__best_val_dice_0.9448775433831744_epoch_392_20260623_120938.pth \
+         --description "TransUNet with BU-Loss function on Cataract1k Dataset (224x224) - After the change of bu_loss code"
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt_Cataract1k \
+         --ckpt buLoss_BeforeTHEChaning_Cataract1k__best_val_dice_0.8455788128905827_epoch_164_20260622_040830.pth \
+         --description "TransUNet with BU-Loss function on Cataract1k Dataset (224x224) - Before the change of bu_loss code"
+
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_iterations 30000 \
+         --topk_attn 0.75 \
+         --use_ats \
+         --ckpt_dir ckpt_Cataract1k \
+         --ckpt ATS_BeforeChanging \
+         --description "ckpt_Cataract1k_ATS_BeforeChangingTHECode (ratio 0.75)"
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_iterations 30000 \
+         --topk_attn 0.75 \
+         --ckpt_dir ckpt_Cataract1k \
+         --ckpt TopK_BeforeChanging \
+         --description "ckpt_Cataract1k_TopK_BeforeChangingTHECode (ratio 0.75)"

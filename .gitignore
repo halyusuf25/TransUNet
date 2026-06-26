@@ -176,7 +176,6 @@ ckpt__/
 myckpt/
 checkpoints/
 *.json
-*.txt
 *.png
 
 
@@ -186,3 +185,6 @@ tensorboard_logs/
 *.npy
 
 label_check_reports/
+test_log/
+
+log.txt
