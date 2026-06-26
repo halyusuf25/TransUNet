@@ -208,14 +208,16 @@ class TopkAttention(nn.Module):
         # Full attention map over all query-key token pairs: [B, H, N, N].
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-        if attn.shape != (B, self.num_heads, N, N):
-            raise RuntimeError(f"Expected attn shape {(B, self.num_heads, N, N)}, got {tuple(attn.shape)}.")
-
         # Token importance score from attention, aggregated over heads and queries: [B, N].
         token_score = attn.mean(dim=1).mean(dim=1)
         if token_score.shape != (B, N):
             raise RuntimeError(f"Expected token_score shape {(B, N)}, got {tuple(token_score.shape)}.")
+
+        attn = self.attn_drop(attn)
+        
+        if attn.shape != (B, self.num_heads, N, N):
+            raise RuntimeError(f"Expected attn shape {(B, self.num_heads, N, N)}, got {tuple(attn.shape)}.")
+
 
         # Select top-k query tokens per sample.
         k_keep = self._num_tokens_to_keep(N)
