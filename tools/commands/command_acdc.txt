@@ -155,14 +155,14 @@ CUDA_VISIBLE_DEVICES=4 python test.py \
 
 
 
-CUDA_VISIBLE_DEVICES=1 python train.py \
+CUDA_VISIBLE_DEVICES=4 python train.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
          --max_iterations 10000 \
          --topk_attn 0.75 \
          --ckpt_dir ckpt_ACDC \
-         --ckpt TopK_BeforeChanging \
-         --description "ACDC_TopK_BeforeChangingTHECode"
+         --ckpt TopK_AFTERChanging \
+         --description "ACDC_TopK_AFTERChangingTHECode"
 
 CUDA_VISIBLE_DEVICES=2 python train.py \
          --dataset ACDC \

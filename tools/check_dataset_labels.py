@@ -17,28 +17,28 @@ raw target values.
 Examples
 --------
 # Synapse, using the same default paths as your train.py config:
-CUDA_VISIBLE_DEVICES=5 python tools/check_dataset_labels.py --dataset Synapse \
+python check_dataset_labels.py --dataset Synapse \
   --root_path /data/halyusuf/data/Synapse/train_npz \
   --list_dir ./lists/lists_Synapse \
   --num_classes 9
 
 # ACDC:
-CUDA_VISIBLE_DEVICES=5 python tools/check_dataset_labels.py --dataset ACDC \
+python check_dataset_labels.py --dataset ACDC \
   --root_path /data/halyusuf/data/ACDC \
   --num_classes 4
 
 # Cataract1k:
-CUDA_VISIBLE_DEVICES=5 python tools/check_dataset_labels.py --dataset Cataract1k \
+python check_dataset_labels.py --dataset Cataract1k \
   --root_path /data/halyusuf/data/CataractData \
   --num_classes 5
 
 # EndoVis2018:
-CUDA_VISIBLE_DEVICES=5 python tools/check_dataset_labels.py --dataset EndoVis2018 \
+python check_dataset_labels.py --dataset EndoVis2018 \
   --root_path /data/halyusuf/data/EndoVis_2018 \
   --num_classes 12
 
 # Make the command fail with a non-zero exit code if problems are found:
-CUDA_VISIBLE_DEVICES=5 python tools/check_dataset_labels.py --dataset ACDC --root_path /data/halyusuf/data/ACDC --fail-on-problem
+python check_dataset_labels.py --dataset ACDC --root_path /data/halyusuf/data/ACDC --fail-on-problem
 """
 
 from __future__ import annotations
@@ -58,12 +58,10 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 import numpy as np
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 DEFAULT_DATASET_CONFIG = {
     "Synapse": {
         "root_path": "/data/halyusuf/data/Synapse/train_npz/",
-        "list_dir": str(PROJECT_ROOT / "lists" / "lists_Synapse"),
+        "list_dir": "./lists/lists_Synapse",
         "num_classes": 9,
     },
     "Cataract1k": {
@@ -85,7 +83,9 @@ DEFAULT_DATASET_CONFIG = {
 
 CATARACT_CLASS_MAP = {
     "Pupil": 1,
+    "pupil1": 1,
     "Cornea": 2,
+    "cornea1": 2,
     "Lens": 3,
     "Instruments": 4,
 }

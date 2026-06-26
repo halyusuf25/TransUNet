@@ -345,13 +345,13 @@ CUDA_VISIBLE_DEVICES=0 python test.py \
 
 
 
-CUDA_VISIBLE_DEVICES=2 python train.py \
+CUDA_VISIBLE_DEVICES=1 python train.py \
          --dataset Cataract1k \
          --vit_name R50-ViT-B_16 \
          --max_iterations 35000 \
          --ckpt_dir ckpt_Cataract1k \
-         --ckpt baseline2 \
-         --description "Baseline2_Catarakt"
+         --ckpt baseline_afterFixingDataset \
+         --description "Baseline_Catarakt_AfterFixingDataset"
 
 
 
@@ -401,5 +401,5 @@ CUDA_VISIBLE_DEVICES=3 python train.py \
          --max_iterations 30000 \
          --topk_attn 0.75 \
          --ckpt_dir ckpt_Cataract1k \
-         --ckpt TopK_BeforeChanging \
-         --description "ckpt_Cataract1k_TopK_BeforeChangingTHECode (ratio 0.75)"
+         --ckpt TopK_AfterChanging \
+         --description "ckpt_Cataract1k_TopK_AfterChangingTHECode (ratio 0.75)"
