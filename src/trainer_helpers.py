@@ -32,7 +32,10 @@ def _fast_dice(pred, gt):
 
 def make_worker_init_fn(seed):
     def worker_init_fn(worker_id):
-        random.seed(seed + worker_id)
+        worker_seed = torch.utils.data.get_worker_info().seed % (2**32)
+        random.seed(worker_seed)
+        np.random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
 
     return worker_init_fn
 
