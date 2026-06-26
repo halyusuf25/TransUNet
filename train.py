@@ -34,6 +34,8 @@ parser.add_argument('--img_size', type=int,
                     default=224, help='input patch size of network input')
 parser.add_argument('--seed', type=int,
                     default=1234, help='random seed')
+parser.add_argument('--dataloader_num_workers', type=int, default=8,
+                    help='number of workers for the dataloader')
 parser.add_argument('--fold_id', type=int, default=0,
                     help='ACDC fold id to use when --random_split is set; valid values are 0-4') #TODO:need to do it for all datasets
 parser.add_argument('--n_skip', type=int,
@@ -192,23 +194,10 @@ if __name__ == "__main__":
     args.is_pretrain = True
     args.ckpt_filename = args.ckpt 
     args.exp = 'TU_' + dataset_name + str(args.img_size)
-    snapshot_path = "../model/{}/{}".format(args.exp, 'TU')
-    snapshot_path = snapshot_path + '_pretrain' if args.is_pretrain else snapshot_path
-    snapshot_path += '_' + args.vit_name
-    snapshot_path = snapshot_path + '_skip' + str(args.n_skip)
-    snapshot_path = snapshot_path + '_vitpatch' + str(args.vit_patches_size) if args.vit_patches_size!=16 else snapshot_path
-    snapshot_path = snapshot_path+'_'+str(args.max_iterations)[0:2]+'k' if args.max_iterations != 30000 else snapshot_path
-    snapshot_path = snapshot_path + '_epo' +str(args.max_epochs) if args.max_epochs != 30 else snapshot_path
-    snapshot_path = snapshot_path+'_bs'+str(args.batch_size)
-    snapshot_path = snapshot_path + '_lr' + str(args.base_lr) if args.base_lr != 0.01 else snapshot_path
-    snapshot_path = snapshot_path + '_'+str(args.img_size)
-    snapshot_path = snapshot_path + '_s'+str(args.seed) if args.seed!=1234 else snapshot_path
 
     args.tensorboard_run_name = _sanitize_name(f"{args.ckpt}__{args.description}")
     args.tensorboard_run_dir = os.path.join(args.tensorboard_logdir, args.tensorboard_run_name)
 
-    if not os.path.exists(snapshot_path):
-        os.makedirs(snapshot_path)
         
     if not os.path.exists(args.ckpt_dir):
         os.makedirs(args.ckpt_dir)
@@ -340,6 +329,6 @@ if __name__ == "__main__":
     # print(f"arguments for training: {args}")
     # print(f"configuration of the vit model for training: {config_vit}") 
     if args.use_kd:
-        trainer(args, net, snapshot_path, teacher_model=teacher_net)
+        trainer(args, net, args.ckpt_dir, teacher_model=teacher_net)
     else:
-        trainer(args, net, snapshot_path)
+        trainer(args, net, args.ckpt_dir)

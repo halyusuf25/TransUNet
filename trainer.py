@@ -77,7 +77,7 @@ def trainer(args, model, snapshot_path, teacher_model=None):
         db_train,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=8,
+        num_workers=args.dataloader_num_workers,
         pin_memory=True,
         worker_init_fn=worker_init_fn,
     )
