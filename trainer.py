@@ -153,8 +153,14 @@ def trainer(args, model, snapshot_path, teacher_model=None):
 
     iter_num = 0
     max_iterations = args.max_iterations
-    max_epoch = max_iterations // len(trainloader) + 1
-    logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
+    iterations_per_epoch = len(trainloader)
+    max_epoch = (max_iterations + iterations_per_epoch - 1) // iterations_per_epoch
+    logging.info(
+        "%d iterations per epoch. %d max iterations. %d total epochs.",
+        iterations_per_epoch,
+        max_iterations,
+        max_epoch,
+    )
 
     best_performance = 0.0
     iterator = tqdm(range(max_epoch), ncols=70)
