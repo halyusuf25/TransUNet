@@ -385,15 +385,20 @@ CUDA_VISIBLE_DEVICES=3 python test.py \
 
 
 
-CUDA_VISIBLE_DEVICES=2 python train.py \
+CUDA_VISIBLE_DEVICES=4 python train.py \
          --dataset Cataract1k \
          --vit_name R50-ViT-B_16 \
-         --max_iterations 30000 \
+         --max_iterations 20000 \
          --topk_attn 0.75 \
-         --use_ats \
+         --use_bu_loss \
+         --buloss_option B \
+         --learn_tau \
+         --alpha 1.0 \
+         --tau_init 1.0 \
+         --use_gumbel_topk \
          --ckpt_dir ckpt_Cataract1k \
-         --ckpt ATS_BeforeChanging \
-         --description "ckpt_Cataract1k_ATS_BeforeChangingTHECode (ratio 0.75)"
+         --ckpt Gumbel_buloss \
+         --description "ckpt_Cataract1k_ATS and BULOss (ratio 0.75)"
 
 CUDA_VISIBLE_DEVICES=3 python train.py \
          --dataset Cataract1k \
@@ -403,3 +408,6 @@ CUDA_VISIBLE_DEVICES=3 python train.py \
          --ckpt_dir ckpt_Cataract1k \
          --ckpt TopK_AfterChanging \
          --description "ckpt_Cataract1k_TopK_AfterChangingTHECode (ratio 0.75)"
+
+
+

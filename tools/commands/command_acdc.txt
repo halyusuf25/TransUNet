@@ -183,3 +183,19 @@ CUDA_VISIBLE_DEVICES=3 python train.py \
          --ckpt_dir ckpt_ACDC \
          --ckpt ATS_BeforeChanging \
          --description "ACDC_ATS_BeforeChangingTHECode (ratio 0.75)"
+
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --max_iterations 10000 \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --use_bu_loss \
+         --buloss_option B \
+         --learn_tau \
+         --alpha 1.0 \
+         --tau_init 1.0 \
+         --ckpt_dir ckpt_ACDC \
+         --ckpt Gumbel_BULoss \
+         --description "ACDC_Gumbel and BULoss BeforeChangingTHECode(ration 0.75)__"

@@ -253,6 +253,9 @@ if __name__ == "__main__":
     if args.use_ats and args.topk_attn <= 0.0:
         raise ValueError("The --use_ats flag requires --topk_attn to be greater than 0.0.")
 
+    if args.use_ats and args.use_gumbel_topk:
+        raise ValueError("--use_ats and --use_gumbel_topk are mutually exclusive.")
+    
     if args.create_heatmaps:
         buloss_option_upper = str(args.buloss_option).upper()
         if buloss_option_upper not in {"A", "B"}:

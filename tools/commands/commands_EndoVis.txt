@@ -131,17 +131,22 @@ CUDA_VISIBLE_DEVICES=5 python train.py \
          --description "EndoVis2018_ATS_BeforeChangingTHECode __(ratio 0.75)__"
 
 
-CUDA_VISIBLE_DEVICES=1 python train.py \
+CUDA_VISIBLE_DEVICES=2 python train.py \
          --dataset EndoVis2018 \
          --vit_name R50-ViT-B_16 \
          --img_size 512 \
          --batch_size 4 \
-         --max_iterations 40000 \
+         --max_iterations 120000 \
          --topk_attn 0.75 \
+         --use_bu_loss \
+         --buloss_option B \
+         --learn_tau \
+         --alpha 1.0 \
+         --tau_init 1.0 \
          --use_gumbel_topk \
          --ckpt_dir ckpt_EndoVis2018 \
-         --ckpt Gumbel_BeforeChanging \
-         --description "EndoVis2018_Gumbel_BeforeChangingTHECode (ratio 0.75)"
+         --ckpt Gumbel_BULoss_BeforeChanging \
+         --description "EndoVis2018_Gumbel and BULOSS BeforeChangingTHECode(ratio 0.75)_"
 
 
 CUDA_VISIBLE_DEVICES=2 python train.py \
@@ -154,3 +159,5 @@ CUDA_VISIBLE_DEVICES=2 python train.py \
          --ckpt_dir ckpt_EndoVis2018 \
          --ckpt TopK_AfterChanging \
          --description "EndoVis2018_TopK_AfterCHANGETHEcode (ratio 0.75)"
+
+
