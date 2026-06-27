@@ -19,7 +19,7 @@ from scipy import ndimage
 from . import vit_seg_configs as configs
 from .vit_seg_modeling_resnet_skip import ResNetV2
 
-from .attention import SHSAttention, TopkAttention, AdaptiveSpatialAttention, ATSAttention
+from .attention import SHSAttention, TopkAttention, ATSAttention
 from .swin_transformer_official import SwinTransformer
 from torchvision.models.efficientnet import MBConvConfig, MBConv
 from .efficientnetpp import EfficientNetppDecoderBlock
@@ -263,8 +263,6 @@ class Block(nn.Module):
             if self.args.verbose:
                 print(f"Using Top-k Attention with keep_rate={self.topk_attn}.")
             self.attn = TopkAttention(config, config.hidden_size, keep_rate=self.topk_attn)
-        elif self.args.adaptive_attn_threshold > 0.0:
-            self.attn = AdaptiveSpatialAttention(config, alpha=self.args.adaptive_attn_threshold)
         else:
             self.attn = Attention(config, vis)    
 
@@ -304,7 +302,7 @@ class Block(nn.Module):
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
         with torch.no_grad():
-            if not self.use_shsa and self.topk_attn <= 0.0 and self.args.adaptive_attn_threshold <= 0.0:
+            if not self.use_shsa and self.topk_attn <= 0.0:
                 query_weight = np2th(weights[pjoin(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 key_weight = np2th(weights[pjoin(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                 value_weight = np2th(weights[pjoin(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()

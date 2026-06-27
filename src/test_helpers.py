@@ -52,8 +52,6 @@ def build_test_arg_parser():
                         help='if >0.0, use top-k attention (fraction of k) instead of full attention (mutually exclusive with --use_shsa)')
     parser.add_argument('--use_gumbel_topk', action='store_true',
                         help='whether to use Gumbel-Softmax sampling for Top-k attention (it has to be used with --topk_attn > 0.0)')
-    parser.add_argument('--adaptive_attn_threshold', type=float,
-                        default=0.0, help='threshold for adaptive attention to select tokens (0.0 means not using adaptive attention)')
     parser.add_argument('--use_ats', action='store_true',
                         help='whether to use Adaptive Token Sampling (ATS) for attention')
     parser.add_argument('--benchmark_dict', type=str, default='benchmark/', help='directory to save benchmark results')

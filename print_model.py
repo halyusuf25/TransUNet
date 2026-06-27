@@ -30,12 +30,7 @@ def build_args():
     parser.add_argument("--use_efficientnet", action="store_true", help="use EfficientNet decoder")
     parser.add_argument("--use_alternate_shsa", action="store_true", help="use alternate partial attention")
     parser.add_argument("--topk_attn", type=float, default=0.0, help="top-k attention fraction")
-    parser.add_argument(
-        "--adaptive_attn_threshold",
-        type=float,
-        default=0.0,
-        help="adaptive attention threshold",
-    )
+
     parser.add_argument("--use_se_block", action="store_true", help="use SE block")
     parser.add_argument("--verbose", action="store_true", help="enable verbose config")
     parser.add_argument(
@@ -63,11 +58,6 @@ def main():
     if args.use_shsa and args.topk_attn > 0.0:
         raise ValueError("The --use_shsa flag is mutually exclusive with --topk_attn > 0.0.")
 
-    if args.adaptive_attn_threshold > 0.0 and (args.use_shsa or args.topk_attn > 0.0):
-        raise ValueError(
-            "The --adaptive_attn_threshold argument is mutually exclusive with --use_shsa and --topk_attn > 0.0."
-        )
-
     config_vit = CONFIGS_ViT_seg[args.vit_name]
     config_vit.verbose = args.verbose
     config_vit.n_classes = args.num_classes
@@ -81,7 +71,6 @@ def main():
     config_vit.topk_attn = args.topk_attn
     config_vit.use_shsa = args.use_shsa
     config_vit.use_alternate_shsa = args.use_alternate_shsa
-    config_vit.adaptive_attn_threshold = args.adaptive_attn_threshold
     config_vit.use_efficientnet = args.use_efficientnet
     config_vit.use_swin = args.use_swin
     if args.vit_name.find("R50") != -1:
