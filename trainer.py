@@ -152,11 +152,11 @@ def trainer(args, model, snapshot_path, teacher_model=None):
         logging.info("BU-loss heatmap generation disabled on non-primary process.")
 
     iter_num = 0
-    max_iterations = args.max_iterations
     iterations_per_epoch = len(trainloader)
-    max_epoch = (max_iterations + iterations_per_epoch - 1) // iterations_per_epoch
+    max_epoch = args.max_epochs
+    max_iterations = max_epoch * iterations_per_epoch
     logging.info(
-        "%d iterations per epoch. %d max iterations. %d total epochs.",
+        "%d iterations per epoch. %d planned iterations. %d max epochs.",
         iterations_per_epoch,
         max_iterations,
         max_epoch,
@@ -165,7 +165,6 @@ def trainer(args, model, snapshot_path, teacher_model=None):
     best_performance = 0.0
     iterator = tqdm(range(max_epoch), ncols=70)
     last_bu_details = None
-    stop_training = False
 
     for epoch_num in iterator:
         epoch_index = epoch_num + 1
@@ -305,10 +304,6 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             # if iter_num % 20 == 0:
             #     _log_train_images(writer, image_batch, label_batch, outputs, iter_num)
 
-            if iter_num >= max_iterations:
-                stop_training = True
-                break
-
         if epoch_batch_count > 0:
             mean_total_loss = epoch_total_loss / epoch_batch_count
             mean_ce_loss = epoch_ce_loss / epoch_batch_count
@@ -385,11 +380,6 @@ def trainer(args, model, snapshot_path, teacher_model=None):
 
         if epoch_index % 50 == 0:
             _save_periodic_checkpoint(model, args, performance, epoch_index)
-
-        if stop_training:
-            _save_last_epoch_checkpoint(model, args, epoch_index, performance)
-            iterator.close()
-            break
 
         if epoch_num >= max_epoch - 1:
             _save_last_epoch_checkpoint(model, args, epoch_index, performance)

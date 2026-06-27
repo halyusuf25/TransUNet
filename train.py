@@ -20,8 +20,8 @@ parser.add_argument('--list_dir', type=str,
 parser.add_argument('--num_classes', type=int,
                     default=9, help='output channel of network')
 parser.add_argument('--max_iterations', type=int,
-                    default=30000, help='maximum iteration counts to train')
-parser.add_argument('--max_epochs', type=int,
+                    default=30000, help='deprecated; training length is controlled by --max_epochs')
+parser.add_argument('--max_epochs', '--max_epoch', type=int,
                     default=150, help='maximum epoch number to train')
 parser.add_argument('--batch_size', type=int,
                     default=24, help='batch_size per gpu')
@@ -196,7 +196,6 @@ if __name__ == "__main__":
     args.tensorboard_run_name = _sanitize_name(f"{args.ckpt}__{args.description}")
     args.tensorboard_run_dir = os.path.join(args.tensorboard_logdir, args.tensorboard_run_name)
 
-        
     if not os.path.exists(args.ckpt_dir):
         os.makedirs(args.ckpt_dir)
         
