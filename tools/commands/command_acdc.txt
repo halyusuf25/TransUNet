@@ -1,201 +1,51 @@
-
-
-CUDA_VISIBLE_DEVICES=5 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt defaultF0 \
-         --description "ACDC_F0" \
-         --verbose
+Baseline
 
 CUDA_VISIBLE_DEVICES=1 python train.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --fold_id 1 \
-         --ckpt defaultFold1 \
-         --description "ACDC_Fold1"
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt BaselineFinal \
+         --description "ACDC_BaselineFinal"
+
+
+
+
+
+Gumbel-TopK
 
 CUDA_VISIBLE_DEVICES=2 python train.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --fold_id 2 \
-         --ckpt defaultFold2 \
-         --description "ACDC_Fold2"
-
-CUDA_VISIBLE_DEVICES=4 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --fold_id 4 \
-         --ckpt defaultFold4 \
-         --description "ACDC_Fold4"
-
-CUDA_VISIBLE_DEVICES=4 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt fixedfold \
-         --description "ACDC_FixedFold"
-
-CUDA_VISIBLE_DEVICES=5 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --fold_id 3 \
-         --ckpt defaultFold3 \
-         --description "ACDC_Fold3"
-
-CUDA_VISIBLE_DEVICES=3 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --random_split \
-         --fold_id 3 \
-         --ckpt defaultF3 \
-         --description "ACDC_F3"
-
-
-CUDA_VISIBLE_DEVICES=4 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --random_split \
-         --fold_id 4 \
-         --ckpt defaultF4 \
-         --description "ACDC_F4"
-
-CUDA_VISIBLE_DEVICES=5 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --random_split \
-         --fold_id 3 \
-         --ckpt defaultF3 \
-         --description "ACDC_F3"
-
-CUDA_VISIBLE_DEVICES=5 python test.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --fold_id 0 \
-         --ckpt defaultFold0_dice_0.8865741196317591_epoch_142_20260612_092748.pth 
-
-CUDA_VISIBLE_DEVICES=5 python test.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --fold_id 1 \
-         --ckpt defaultFold1_dice_0.8882346873800584_epoch_403_20260612_104520.pth 
-
-CUDA_VISIBLE_DEVICES=5 python test.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --fold_id 2 \
-         --ckpt defaultFold2_dice_0.9072794843401434_epoch_293_20260612_101457.pth 
-
-CUDA_VISIBLE_DEVICES=5 python test.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt fixedfold_dice_0.9030422265519246_epoch_198_20260615_031303.pth 
-
-CUDA_VISIBLE_DEVICES=4 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --max_iterations 35000 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt baseline2 \
-         --description "Baseline2_ACDC"
-
-
-
-CUDA_VISIBLE_DEVICES=3 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --max_iterations 30000 \
-         --use_bu_loss \
-         --buloss_option=B \
-         --learn_tau \
-         --tau_init 1.0 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt buLoss_BeforeTHEChaning \
-         --description "buLoss_beforeChangingTHECode"
-
-
-CUDA_VISIBLE_DEVICES=4 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --max_iterations 30000 \
-         --use_bu_loss \
-         --buloss_option=B \
-         --learn_tau \
-         --tau_init 1.0 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt buLoss_AfterTHEChaning \
-         --description "ACDC_buLoss_AfterChangingTHECode"
-
-
-CUDA_VISIBLE_DEVICES=4 python test.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt buLoss_AfterTHEChaning_ACDC__best_val_dice_0.8928144574165344_epoch_116_20260623_074209.pth \
-         --description "TransUNet with BU-Loss function on ACDC Dataset (224x224) - After the change of bu_loss code"
-
-CUDA_VISIBLE_DEVICES=4 python test.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt buLoss_BeforeTHEChaning_ACDC__best_val_dice_0.8940874934196472_epoch_90_20260622_023217.pth \
-         --description "TransUNet with BU-Loss function on ACDC Dataset (224x224) - Before the change of bu_loss code"
-
-
-
-
-CUDA_VISIBLE_DEVICES=4 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --max_iterations 10000 \
-         --topk_attn 0.75 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt TopK_AFTERChanging \
-         --description "ACDC_TopK_AFTERChangingTHECode"
-
-CUDA_VISIBLE_DEVICES=2 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --max_iterations 10000 \
-         --topk_attn 0.75 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.50 \
          --use_gumbel_topk \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt Gumbel_BeforeChanging \
-         --description "ACDC_Gumbel_BeforeChangingTHECode (ration 0.75)"
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt GumbelTopK \
+         --description "ACDC_GumbelTopK - ratio 0.5"
 
-CUDA_VISIBLE_DEVICES=3 python train.py \
+
+Gumbel-TopK + BU Loss
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
-         --max_iterations 10000 \
-         --topk_attn 0.75 \
-         --use_ats \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt ATS_BeforeChanging \
-         --description "ACDC_ATS_BeforeChangingTHECode (ratio 0.75)"
-
-
-CUDA_VISIBLE_DEVICES=1 python train.py \
-         --dataset ACDC \
-         --vit_name R50-ViT-B_16 \
-         --max_iterations 10000 \
-         --topk_attn 0.75 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.50 \
          --use_gumbel_topk \
          --use_bu_loss \
          --buloss_option B \
          --learn_tau \
          --alpha 1.0 \
          --tau_init 1.0 \
-         --ckpt_dir ckpt_ACDC \
-         --ckpt Gumbel_BULoss \
-         --description "ACDC_Gumbel and BULoss BeforeChangingTHECode(ration 0.75)__"
+         --boundary_radius 1 \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt GumbelTopK_BULoss \
+         --description "ACDC_GumbelTopK and BULoss - ratio 0.5"
+
