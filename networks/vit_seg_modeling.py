@@ -366,9 +366,20 @@ class Encoder(nn.Module):
     def forward(self, hidden_states):
         attn_weights = []
         kept_indices = None  # absolute indices into the original (pre-prune) sequence
+        absolute_indices = None
         # layer_block_id = 0
         if self.args.verbose:
             print(f"input shape for the Encoder Transformer Layers: {hidden_states.shape}")
+
+        if self.args.topk_attn > 0.0:
+            B, N0, _ = hidden_states.shape
+            absolute_indices = torch.arange(
+                N0,
+                device=hidden_states.device,
+                dtype=torch.long,
+            ).unsqueeze(0).expand(B, N0)
+            if self.args.verbose:
+                print(f"Encoder absolute kept_indices initialized with shape: {absolute_indices.shape}")
 
         se_layers = getattr(self, "SELayer", None)
         drop_se = getattr(self.args, "drop_se_block", False)
@@ -383,13 +394,34 @@ class Encoder(nn.Module):
                 print(f"Encoder layer#{layer_block_id} input hidden_states shape: {hidden_states.shape}")
 
             if self.args.topk_attn > 0.0:
-                hidden_states, attn, kept_indices = layer_block(hidden_states, return_indices=True)
+                hidden_states, attn, local_idx = layer_block(hidden_states, return_indices=True)
+                local_idx = local_idx.to(device=absolute_indices.device, dtype=torch.long)
+                if self.args.verbose:
+                    print(
+                        f"Encoder layer#{layer_block_id} local_idx min/max: "
+                        f"{local_idx.min().item()}/{local_idx.max().item()} "
+                        f"within current token range [0, {absolute_indices.size(1) - 1}]"
+                )
+                absolute_indices = torch.gather(
+                    absolute_indices,
+                    dim=1,
+                    index=local_idx,
+                )
+                if self.args.verbose:
+                    print(
+                        f"Encoder layer#{layer_block_id} absolute kept_indices min/max: "
+                        f"{absolute_indices.min().item()}/{absolute_indices.max().item()} "
+                        f"within original patch range [0, {N0 - 1}]"
+                )
+                kept_indices = absolute_indices
             else:
                 hidden_states, attn = layer_block(hidden_states)
             
             if self.args.verbose:
                 print(f"Encoder layer#{layer_block_id} output hidden_states shape: {hidden_states.shape}")
                 print(f"Encoder layer#{layer_block_id} attention weights shape: {attn.shape}")
+                if kept_indices is not None:
+                    print(f"Encoder layer#{layer_block_id} absolute kept_indices shape: {kept_indices.shape}")
 
             
             attn_weights.append(attn)
@@ -643,11 +675,36 @@ class VisionTransformer(nn.Module):
         x, attn_weights, features, kept_indices, orig_n_patches, se_scale = self.transformer(x)  # (B, n_patch, hidden)
         # If pruning occurred, scatter tokens back to the original grid length
         if kept_indices is not None:
+            if x.dim() != 3:
+                raise RuntimeError(f"Expected encoded tokens to be [B, K, C], got {tuple(x.shape)}.")
+            if kept_indices.dim() != 2:
+                raise RuntimeError(f"Expected kept_indices to be [B, K], got {tuple(kept_indices.shape)}.")
             B, K, C = x.size()
+            if kept_indices.shape != (B, K):
+                raise RuntimeError(
+                    f"Expected kept_indices shape {(B, K)} to match encoded tokens, got {tuple(kept_indices.shape)}."
+                )
+            kept_indices = kept_indices.to(device=x.device, dtype=torch.long)
+            if kept_indices.numel() == 0:
+                raise RuntimeError("kept_indices must not be empty before decoder scatter.")
+            
+            if self.args.verbose:
+                min_kept = kept_indices.min().item()
+                max_kept = kept_indices.max().item()
+                if min_kept < 0 or max_kept >= orig_n_patches:
+                    raise RuntimeError(
+                        f"kept_indices out of range for scatter: min={min_kept}, max={max_kept}, "
+                        f"orig_n_patches={orig_n_patches}."
+                    )
+                else:
+                    print(f"Decoder scatter kept_indices min/max: {min_kept}/{max_kept}, orig_n_patches={orig_n_patches}.")
+            
             # total_n = orig_n_patches
             full = x.new_zeros(B, orig_n_patches, C)
-            scatter_index = kept_indices.long().unsqueeze(-1).expand(-1, -1, C)  # (B, K, C)
+            scatter_index = kept_indices.unsqueeze(-1).expand(-1, -1, C)  # (B, K, C)
             full.scatter_(1, scatter_index, x)
+            if self.args.verbose:
+                print(f"Decoder scatter kept_indices shape: {kept_indices.shape}, full sequence shape: {full.shape}")
             x = self.decoder(full, features)
         else:
             x = self.decoder(x, features)
