@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 import copy
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Tuple, Iterable, List
+from typing import Dict, Any, Optional, Tuple, Iterable, List, NamedTuple
 
 import torch
 from torch import nn
@@ -133,9 +133,16 @@ def build_benchmark_loader(args, batch_size=1, num_workers=0, shuffle=False):
 
 # ============================== Core helpers ===============================
 
-def count_parameters(model: nn.Module) -> int:
-    """Total trainable parameters."""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+class ParameterCounts(NamedTuple):
+    trainable: int
+    total: int
+
+
+def count_parameters(model: nn.Module) -> ParameterCounts:
+    """Return trainable and total parameter counts."""
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    return ParameterCounts(trainable=int(trainable_params), total=int(total_params))
 
 
 def _percentiles(values: List[float], qs=(50, 90, 95, 99)) -> Dict[str, float]:
@@ -219,24 +226,35 @@ def _build_thop_custom_ops_for_vit(model: nn.Module):
     return custom_ops
 
 
-def _try_count_macs_and_params_with_thop(model: nn.Module, example: torch.Tensor) -> Optional[Tuple[int, int]]:
+def _try_count_macs_and_params_with_thop(
+    model: nn.Module,
+    example: torch.Tensor,
+) -> Optional[Tuple[int, ParameterCounts]]:
     """
     Prefer THOP with our custom ops so attention matmuls are counted correctly.
-    Returns (MACs, Params) or None if THOP is not available.
+    Returns (MACs, ParameterCounts) or None if THOP is not available.
     """
     try:
         # Work on a copy to avoid altering the caller's model device
         model_cpu = copy.deepcopy(model).to("cpu").eval()
         custom_ops = _build_thop_custom_ops_for_vit(model_cpu)
         with torch.no_grad():
-            macs, params = profile(model_cpu, inputs=(example.to("cpu"),),
-                                   custom_ops=custom_ops, verbose=False)
-        return int(macs), int(params)
+            macs, _ = profile(
+                model_cpu,
+                inputs=(example.to("cpu"),),
+                custom_ops=custom_ops,
+                verbose=False,
+            )
+        params = count_parameters(model_cpu)
+        return int(macs), params
     except Exception:
         return None
 
 
-def _try_count_macs_with_fvcore(model: nn.Module, example: torch.Tensor) -> Optional[Tuple[int, int]]:
+def _try_count_macs_with_fvcore(
+    model: nn.Module,
+    example: torch.Tensor,
+) -> Optional[Tuple[int, ParameterCounts]]:
     """
     fvcore fallback (Detectron2 tool). Counts MACs; params via PyTorch.
     """
@@ -246,7 +264,7 @@ def _try_count_macs_with_fvcore(model: nn.Module, example: torch.Tensor) -> Opti
         with torch.no_grad():
             macs = FlopCountAnalysis(model_cpu, example.to("cpu")).total()
         params = count_parameters(model_cpu)
-        return int(macs), int(params)
+        return int(macs), params
     except Exception:
         return None
 
@@ -327,9 +345,9 @@ def _fallback_hook_macs_vit(model: nn.Module, example: torch.Tensor) -> int:
     return int(macs_total)
 
 
-def count_flops_gflops(model: nn.Module, example: torch.Tensor) -> Tuple[float, int]:
+def count_flops_gflops(model: nn.Module, example: torch.Tensor) -> Tuple[float, ParameterCounts]:
     """
-    Return (GFLOPs, #params) for ONE IMAGE in `example`.
+    Return (GFLOPs, ParameterCounts) for ONE IMAGE in `example`.
 
     Counting order:
       1) THOP with custom ops (preferred)
@@ -352,8 +370,20 @@ def count_flops_gflops(model: nn.Module, example: torch.Tensor) -> Tuple[float, 
 
     # hook fallback
     macs = _fallback_hook_macs_vit(model, example)
-    params = count_parameters(model)
-    return (2.0 * macs) / 1e9, params
+    parameter_counts = count_parameters(model)
+    return (2.0 * macs) / 1e9, parameter_counts
+
+
+def _parameter_metrics(parameter_counts: ParameterCounts) -> Dict[str, Any]:
+    total_params = int(parameter_counts.total)
+    trainable_params = int(parameter_counts.trainable)
+    return {
+        "params": round(float(total_params) / 1e6, 3),
+        "trainable_params": trainable_params,
+        "total_params": total_params,
+        "trainable_params_m": round(float(trainable_params) / 1e6, 3),
+        "total_params_m": round(float(total_params) / 1e6, 3),
+    }
 
 
 # ========================== Timing (GPU/CPU) ================================
@@ -382,7 +412,7 @@ def _timed_forward_cpu(model: nn.Module, images: torch.Tensor) -> float:
 
 @dataclass
 class BenchmarkResults:
-    metrics: Dict[str, float] = field(default_factory=dict)
+    metrics: Dict[str, Any] = field(default_factory=dict)
     notes: Dict[str, Any] = field(default_factory=dict)
 
     def pretty(self) -> str:
@@ -394,7 +424,9 @@ class BenchmarkResults:
                 lines.append(f"{k:28s}: {v:.2f}")
             elif "ms" in k:
                 lines.append(f"{k:28s}: {v:.2f}")
-            elif "params" in k:
+            elif k == "params" or k.endswith("_params_m"):
+                lines.append(f"{k:28s}: {v:.3f}")
+            elif k.endswith("_params"):
                 lines.append(f"{k:28s}: {int(v):,}")
             else:
                 lines.append(f"{k:28s}: {v}")
@@ -420,7 +452,8 @@ def benchmark_segmentation_model(
       - throughput_img_s
       - latency_ms_mean (from throughput loop)
       - latency_ms_p50/p90/p95/p99 (from B=1 real images)
-      - params
+      - trainable_params / total_params
+      - trainable_params_m / total_params_m
       - flops_gflops_per_image
 
     Notes include device, warmup, batch shape, etc.
@@ -438,7 +471,7 @@ def benchmark_segmentation_model(
 
     # Count FLOPs & params on a real example (1 image)
     example = first_imgs[:1].contiguous()
-    gflops, n_params = count_flops_gflops(model, example)
+    gflops, parameter_counts = count_flops_gflops(model, example)
 
     # ---------------- Warm-up ----------------
     n_warm = max(0, warmup_steps)
@@ -512,7 +545,7 @@ def benchmark_segmentation_model(
         "latency_ms_p90": percentiles.get("p90", float("nan")),
         "latency_ms_p95": percentiles.get("p95", float("nan")),
         "latency_ms_p99": percentiles.get("p99", float("nan")),
-        "params": round(float(n_params) / 1e6, 3),
+        **_parameter_metrics(parameter_counts),
         "flops_gflops_per_image": float(gflops),  # per single image in `example`
         "image_shape_HxW": float(H * W),
         "channels": float(C),

@@ -18,14 +18,14 @@ from thop import profile
 
 from benchmark import (
     BenchmarkResults,
+    ParameterCounts,
     _build_thop_custom_ops_for_vit,
     _extract_images,
+    _parameter_metrics,
     _percentiles,
     _set_cudnn_benchmark,
     _timed_forward_gpu,
-    count_parameters,
-    count_flops_gflops,
-    )
+)
 
 # try:
 #     from awq.quantize.qmodule import WQLinear
@@ -40,11 +40,12 @@ def _linear_like_macs(x: torch.Tensor, in_features: int, out_features: int) -> i
     return int(n_instances * in_features * out_features)
 
 
-def count_parameters_quantized(model: nn.Module) -> int:
+def count_parameters_quantized(model: nn.Module) -> ParameterCounts:
     """Count logical parameters for quantized models (treat WQLinear as dense)."""
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
     if WQLinear is None:
-        return int(total_params)
+        return ParameterCounts(trainable=int(trainable_params), total=int(total_params))
 
     def _logical_wqlinear_params(wq: nn.Module) -> int:
         in_features = getattr(wq, "in_features", None)
@@ -57,7 +58,8 @@ def count_parameters_quantized(model: nn.Module) -> int:
             count += int(bias.numel())
         return count
 
-    adjusted = int(total_params)
+    adjusted_trainable = int(trainable_params)
+    adjusted_total = int(total_params)
     seen: set[int] = set()
     for mod in model.modules():
         wq = None
@@ -68,11 +70,15 @@ def count_parameters_quantized(model: nn.Module) -> int:
         if wq is None or id(wq) in seen:
             continue
         seen.add(id(wq))
-        stored = sum(p.numel() for p in wq.parameters(recurse=False))
+        direct_params = list(wq.parameters(recurse=False))
+        stored = sum(p.numel() for p in direct_params)
+        stored_trainable = sum(p.numel() for p in direct_params if p.requires_grad)
         logical = _logical_wqlinear_params(wq)
-        adjusted += logical - int(stored)
+        adjusted_total += logical - int(stored)
+        if stored_trainable > 0:
+            adjusted_trainable += logical - int(stored_trainable)
 
-    return int(adjusted)
+    return ParameterCounts(trainable=int(adjusted_trainable), total=int(adjusted_total))
 
 
 def _build_thop_custom_ops_for_vit_quantized(model: nn.Module) -> Dict[type, Any]:
@@ -98,18 +104,19 @@ def _build_thop_custom_ops_for_vit_quantized(model: nn.Module) -> Dict[type, Any
 def _try_count_macs_and_params_with_thop_quantized(
     model: nn.Module,
     example: torch.Tensor,
-) -> Optional[Tuple[int, int]]:
+) -> Optional[Tuple[int, ParameterCounts]]:
     try:
         model_gpu = copy.deepcopy(model).to(example.device).eval()
         custom_ops = _build_thop_custom_ops_for_vit_quantized(model_gpu)
         with torch.no_grad():
-            macs, params = profile(
+            macs, _ = profile(
                 model_gpu,
                 inputs=(example,),
                 custom_ops=custom_ops,
                 verbose=False,
             )
-        return int(macs), int(params)
+        params = count_parameters_quantized(model_gpu)
+        return int(macs), params
     except Exception:
         return None
 
@@ -117,13 +124,13 @@ def _try_count_macs_and_params_with_thop_quantized(
 def _try_count_macs_with_fvcore_quantized(
     model: nn.Module,
     example: torch.Tensor,
-) -> Optional[Tuple[int, int]]:
+) -> Optional[Tuple[int, ParameterCounts]]:
     try:
         model_gpu = copy.deepcopy(model).to(example.device).eval()
         with torch.no_grad():
             macs = FlopCountAnalysis(model_gpu, example).total()
-        params = count_parameters(model_gpu)
-        return int(macs), int(params)
+        params = count_parameters_quantized(model_gpu)
+        return int(macs), params
     except Exception:
         return None
 
@@ -201,7 +208,7 @@ def _fallback_hook_macs_vit_quantized(model: nn.Module, example: torch.Tensor) -
     return int(macs_total)
 
 
-def count_flops_gflops_quantized(model: nn.Module, example: torch.Tensor) -> Tuple[float, int]:
+def count_flops_gflops_quantized(model: nn.Module, example: torch.Tensor) -> Tuple[float, ParameterCounts]:
     # thop_res = _try_count_macs_and_params_with_thop_quantized(model, example)
     # if thop_res is not None:
     #     print(f"THOB result used for quantized model FLOPs and Params counting.")
@@ -215,8 +222,8 @@ def count_flops_gflops_quantized(model: nn.Module, example: torch.Tensor) -> Tup
     #     return (2.0 * macs) / 1e9, params
 
     macs = _fallback_hook_macs_vit_quantized(model, example)
-    params = count_parameters_quantized(model)
-    return (2.0 * macs) / 1e9, params
+    parameter_counts = count_parameters_quantized(model)
+    return (2.0 * macs) / 1e9, parameter_counts
 
 
 def benchmark_segmentation_quantize_model(
@@ -238,7 +245,8 @@ def benchmark_segmentation_quantize_model(
       - throughput_img_s
       - latency_ms_mean (from throughput loop)
       - latency_ms_p50/p90/p95/p99 (from B=1 real images)
-      - params
+      - trainable_params / total_params
+      - trainable_params_m / total_params_m
       - flops_gflops_per_image
     """
     assert measure_batches > 0
@@ -260,7 +268,7 @@ def benchmark_segmentation_quantize_model(
 
     # Count FLOPs & params on a real example (1 image)
     example = first_imgs[:1].contiguous().to(device, non_blocking=True)
-    gflops, n_params = count_flops_gflops_quantized(model, example)
+    gflops, parameter_counts = count_flops_gflops_quantized(model, example)
     
     # ---------------- Warm-up ----------------
     n_warm = max(0, warmup_steps)
@@ -331,7 +339,7 @@ def benchmark_segmentation_quantize_model(
         "latency_ms_p90": percentiles.get("p90", float("nan")),
         "latency_ms_p95": percentiles.get("p95", float("nan")),
         "latency_ms_p99": percentiles.get("p99", float("nan")),
-        "params": round(float(n_params) / 1e6, 3),
+        **_parameter_metrics(parameter_counts),
         "flops_gflops_per_image": float(gflops),
         "image_shape_HxW": float(h * w),
         "channels": float(c),
