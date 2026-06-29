@@ -14,6 +14,17 @@ from torch.utils.data import Dataset
 # from skimage import io
 # import cv2
 
+SPACING_KEYS = (
+    "voxelspacing_zyx",
+    "spacing_zyx",
+    "voxelspacing",
+    "spacing",
+    "spacing_mm",
+    "pixdim",
+    "zooms",
+)
+SPACING_ZYX_KEYS = {"voxelspacing_zyx", "spacing_zyx"}
+
 class ACDC_Dataset(Dataset):
     def __init__(self, base_dir=None, split='train', list_dir=None, transform=None, fold_id=0):
         self._base_dir = base_dir
@@ -92,6 +103,74 @@ class ACDC_Dataset(Dataset):
 
         return [training_set, validation_set, testing_set]
 
+    def _normalize_spacing_zyx(self, spacing, key, case):
+        spacing = np.asarray(spacing, dtype=np.float32).reshape(-1)
+        if key == "pixdim" and spacing.size >= 4:
+            spacing = spacing[1:4]
+        else:
+            spacing = spacing[:3]
+        if spacing.size != 3:
+            raise ValueError("ACDC case {} spacing key {} must contain 3 spatial values".format(case, key))
+        if key not in SPACING_ZYX_KEYS:
+            spacing = spacing[::-1]
+        if not np.all(np.isfinite(spacing)) or np.any(spacing <= 0):
+            raise ValueError("ACDC case {} spacing key {} has invalid values {}".format(case, key, spacing.tolist()))
+        return spacing.astype(np.float32)
+
+    def _spacing_from_h5(self, h5f, case):
+        for key in SPACING_KEYS:
+            if key in h5f.attrs:
+                return self._normalize_spacing_zyx(h5f.attrs[key], key, case)
+            if key in h5f:
+                return self._normalize_spacing_zyx(h5f[key][()], key, case)
+            for dataset_key in ("image", "label"):
+                if dataset_key in h5f and key in h5f[dataset_key].attrs:
+                    return self._normalize_spacing_zyx(h5f[dataset_key].attrs[key], key, case)
+        return None
+
+    def _nifti_spacing_zyx(self, path, case):
+        try:
+            import nibabel as nib
+
+            return self._normalize_spacing_zyx(nib.load(path).header.get_zooms()[:3], "zooms", case)
+        except ImportError:
+            pass
+
+        try:
+            import SimpleITK as sitk
+
+            return self._normalize_spacing_zyx(sitk.ReadImage(path).GetSpacing()[:3], "spacing", case)
+        except ImportError:
+            pass
+        return None
+
+    def _original_nifti_candidates(self, case):
+        stem = case.replace(".h5", "")
+        patient_id = stem.split("_")[0]
+        directories = [
+            self._base_dir,
+            os.path.join(self._base_dir, "ACDC_training_volumes"),
+            os.path.join(self._base_dir, patient_id),
+            os.path.join(self._base_dir, "training", patient_id),
+            os.path.join(self._base_dir, "database", "training", patient_id),
+            os.path.join(self._base_dir, "ACDC_training", patient_id),
+        ]
+        candidates = []
+        for directory in directories:
+            candidates.append(os.path.join(directory, stem + ".nii.gz"))
+            candidates.append(os.path.join(directory, stem + ".nii"))
+        return candidates
+
+    def _volume_spacing_zyx(self, h5f, case):
+        spacing = self._spacing_from_h5(h5f, case)
+        if spacing is not None:
+            return spacing
+        for path in self._original_nifti_candidates(case):
+            if os.path.exists(path):
+                spacing = self._nifti_spacing_zyx(path, case)
+                if spacing is not None:
+                    return spacing
+        return None
 
     def __len__(self):
         return len(self.sample_list)
@@ -112,7 +191,10 @@ class ACDC_Dataset(Dataset):
             with h5py.File(self._base_dir + "/ACDC_training_volumes/{}".format(case), 'r') as h5f:
                 image = h5f['image'][:]
                 label = h5f['label'][:]
+                voxelspacing_zyx = self._volume_spacing_zyx(h5f, case)
             sample = {'image': image, 'label': label}
+            if voxelspacing_zyx is not None:
+                sample['voxelspacing_zyx'] = voxelspacing_zyx
         sample["idx"] = idx
         sample['case_name'] = case.replace('.h5', '')
         return sample

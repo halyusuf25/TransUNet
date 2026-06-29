@@ -49,3 +49,23 @@ CUDA_VISIBLE_DEVICES=2 python train.py \
          --ckpt GumbelTopK_BULoss \
          --description "ACDC_GumbelTopK and BULoss - ratio 0.5"
 
+
+
+Test Commands
+
+python tools/run_test_checkpoints.py \
+  --cuda-visible-devices 2
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt BaselineFinal_ACDC__best_val_dice_0.8838059306144714_epoch_30_20260627_153550.pth \
+         --description "TransUNet on ACDC Dataset (224x224) - changed evaluation"
+
+
+Mean class Left Ventricle (idx 3) mean_dice 0.954189 mean_hd95 1.726857 mean_iou 0.912625
+Testing performance in best val model: mean_dice : 0.889844 mean_hd95 : 2.332790 mean_iou : 0.808736
+Testing Finished!
+total 40 samples

@@ -131,6 +131,29 @@ class JaccardLoss(nn.Module):
 
 
 # --- utils.py ---
+def _hd95_empty_mask_penalty(shape, voxelspacing=None):
+    """
+    Return the maximum possible image/volume diagonal distance for HD95
+    when exactly one of prediction/GT is empty.
+    """
+    shape_arr = np.asarray(shape, dtype=np.float64)
+    if shape_arr.ndim != 1:
+        shape_arr = shape_arr.reshape(-1)
+
+    if voxelspacing is None:
+        spacing_arr = np.ones_like(shape_arr, dtype=np.float64)
+    else:
+        spacing_arr = np.asarray(voxelspacing, dtype=np.float64).reshape(-1)
+        if spacing_arr.size != shape_arr.size:
+            raise ValueError(
+                f"voxelspacing length {spacing_arr.size} does not match mask ndim {shape_arr.size}; "
+                f"shape={tuple(shape_arr)}, voxelspacing={voxelspacing}"
+            )
+
+    side_lengths = np.maximum(shape_arr - 1.0, 0.0) * spacing_arr
+    return float(np.linalg.norm(side_lengths))
+
+
 def calculate_metric_percase(pred, gt, voxelspacing=None):
     """
     General metric helper matching the original Synapse evaluation protocol,
@@ -147,14 +170,14 @@ def calculate_metric_percase(pred, gt, voxelspacing=None):
 
     if P and not G:
         # predicted spurious organ
-        return 0.0, np.nan, 0.0  # or np.nan; but DO NOT make it (1,0)
+        return 0.0, _hd95_empty_mask_penalty(pred.shape, voxelspacing), 0.0
 
     if not P and G:
         # missed organ completely
-        return 0.0, np.nan, 0.0  # or np.nan
+        return 0.0, _hd95_empty_mask_penalty(pred.shape, voxelspacing), 0.0
 
     # both empty: agree on absence
-    return 1.0, 0.0, 1.0  # many protocols treat this as perfect agreement for overlap
+    return 1.0, np.nan, 1.0  # many protocols treat this as perfect agreement for overlap
 
 
 def calculate_metric_percase_without_absent_reward(pred, gt, voxelspacing=None):
@@ -176,10 +199,10 @@ def calculate_metric_percase_without_absent_reward(pred, gt, voxelspacing=None):
     #     return 0, 0, 0
 
     if P and not G:
-        return 0.0, np.nan, 0.0
+        return 0.0, _hd95_empty_mask_penalty(pred.shape, voxelspacing), 0.0
 
     if not P and G:
-        return 0.0, np.nan, 0.0
+        return 0.0, _hd95_empty_mask_penalty(pred.shape, voxelspacing), 0.0
 
     return np.nan, np.nan, np.nan
 
@@ -202,7 +225,7 @@ def _present_class_metric(prediction, label, class_id, voxelspacing=None):
         return np.nan, np.nan, np.nan, True
 
     if not pred_present:
-        return 0.0, np.nan, 0.0, False
+        return 0.0, _hd95_empty_mask_penalty(gt_mask.shape, voxelspacing), 0.0, False
 
     dice = metric.binary.dc(pred_mask, gt_mask)
     hd95 = metric.binary.hd95(pred_mask, gt_mask, voxelspacing=voxelspacing)
@@ -331,7 +354,7 @@ def test_single_frame_present_classes(
     return result
 
 
-def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, dataset='Synapse'):
+def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, dataset='Synapse', voxelspacing=None):
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()
     net.eval()
     # if len(image.shape) == 3:
@@ -374,10 +397,29 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256], test_s
     else:
         raise ValueError("Unknown dataset")
     
+    if dataset == 'Synapse':
+        metric_voxelspacing = None
+    elif dataset == 'ACDC':
+        if voxelspacing is None:
+            raise ValueError("ACDC HD95 requires per-case voxelspacing_zyx for case {}".format(case))
+        metric_voxelspacing = tuple(float(v) for v in np.asarray(voxelspacing).reshape(-1))
+        if len(metric_voxelspacing) != prediction.ndim:
+            raise ValueError(
+                "ACDC HD95 voxelspacing for case {} must have {} values for prediction shape {}, got {}".format(
+                    case, prediction.ndim, prediction.shape, metric_voxelspacing
+                )
+            )
+        if not np.all(np.isfinite(metric_voxelspacing)) or np.any(np.asarray(metric_voxelspacing) <= 0):
+            raise ValueError("ACDC HD95 voxelspacing for case {} must be positive finite values, got {}".format(case, metric_voxelspacing))
+    elif dataset in ['Cataract1k', 'EndoVis2018']:
+        metric_voxelspacing = (1, 1)
+    else:
+        metric_voxelspacing = voxelspacing
+
     metric_list = []
     metric_fn = calculate_metric_percase_without_absent_reward if dataset in ['Cataract1k', 'EndoVis2018'] else calculate_metric_percase
     for i in range(1, classes):
-        metric_list.append(metric_fn(prediction == i, label == i))
+        metric_list.append(metric_fn(prediction == i, label == i, voxelspacing=metric_voxelspacing))
 
     if test_save_path is not None:
         img_itk = sitk.GetImageFromArray(image.astype(np.float32))

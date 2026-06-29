@@ -30,6 +30,8 @@ from src.test_helpers import (
     _case_group_name,
     _case_group_sort_key,
     _class_label,
+    _extract_acdc_voxelspacing_zyx,
+    _fallback_acdc_voxelspacing_zyx,
     _mean_metric_array,
 )
 from src.visualize import (
@@ -228,8 +230,13 @@ def inference(args, model, test_save_path=None):
 
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch['case_name'][0]
+        case_voxelspacing_zyx = None
+        if args.dataset == "ACDC":
+            case_voxelspacing_zyx = _fallback_acdc_voxelspacing_zyx(args, case_name)
+            logging.info("ACDC case %s HD95 voxelspacing_zyx=%s", case_name, case_voxelspacing_zyx)
         metric_i = test_single_volume(image, label, model, classes=args.num_classes, patch_size=[args.img_size, args.img_size],
-                                      test_save_path=None, case=case_name, z_spacing=args.z_spacing, dataset=args.dataset)
+                                      test_save_path=None, case=case_name, z_spacing=args.z_spacing,
+                                      dataset=args.dataset, voxelspacing=case_voxelspacing_zyx)
         metric_i = np.array(metric_i, dtype=np.float32)
         all_metrics.append(metric_i)
         with np.errstate(invalid="ignore"):
@@ -325,7 +332,7 @@ def main():
             'volume_path': '/data/halyusuf/data/ACDC/',
             'list_dir': None,  # Not needed for ACDC
             'num_classes': 4,  # Background (0), RV (1), Myo (2), LV (3)
-            'z_spacing': 5, #TODO: confirm the z-spacing for ACDC and update accordingly.
+            'z_spacing': 5,  # NIfTI save metadata only; HD95 uses per-case spacing or --acdc_zspacing fallback.
             'info': '3D',
             'class_names': [
                 'Background',

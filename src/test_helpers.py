@@ -1,8 +1,74 @@
 import argparse
 
 import numpy as np
+import torch
 
 from utils import _safe_nanmean
+
+
+ACDC_SPACING_KEYS = (
+    "voxelspacing_zyx",
+    "spacing_zyx",
+    "voxelspacing",
+    "spacing",
+    "spacing_mm",
+    "pixdim",
+    "zooms",
+)
+ACDC_SPACING_ZYX_KEYS = {"voxelspacing_zyx", "spacing_zyx"}
+
+
+def _spacing_value_to_vector(value):
+    if torch.is_tensor(value):
+        return value.detach().cpu().numpy().reshape(-1)
+    if isinstance(value, np.ndarray):
+        return value.reshape(-1)
+    if isinstance(value, (list, tuple)):
+        if len(value) == 1:
+            return _spacing_value_to_vector(value[0])
+        return np.concatenate([_spacing_value_to_vector(item) for item in value])
+    return np.asarray(value).reshape(-1)
+
+
+def _normalize_acdc_spacing_zyx(value, key, case_name):
+    spacing = _spacing_value_to_vector(value).astype(np.float32)
+    if key == "pixdim" and spacing.size >= 4:
+        spacing = spacing[1:4]
+    else:
+        spacing = spacing[:3]
+    if spacing.size != 3:
+        raise ValueError(
+            "ACDC case {} spacing key {} must provide 3 spatial values, got {}".format(
+                case_name, key, spacing.tolist()
+            )
+        )
+    if key not in ACDC_SPACING_ZYX_KEYS:
+        spacing = spacing[::-1]
+    if not np.all(np.isfinite(spacing)) or np.any(spacing <= 0):
+        raise ValueError(
+            "ACDC case {} spacing key {} must be positive finite values, got {}".format(
+                case_name, key, spacing.tolist()
+            )
+        )
+    return tuple(float(v) for v in spacing)
+
+
+def _extract_acdc_voxelspacing_zyx(sampled_batch, case_name):
+    for key in ACDC_SPACING_KEYS:
+        if key in sampled_batch:
+            return _normalize_acdc_spacing_zyx(sampled_batch[key], key, case_name)
+    return None
+
+
+def _fallback_acdc_voxelspacing_zyx(args, case_name):
+    z_spacing = float(getattr(args, "acdc_zspacing", 5.0))
+    if not np.isfinite(z_spacing) or z_spacing <= 0:
+        raise ValueError(
+            "ACDC case {} fallback --acdc_zspacing must be a positive finite value, got {}".format(
+                case_name, z_spacing
+            )
+        )
+    return (z_spacing, 1.0, 1.0)
 
 
 def build_test_arg_parser():
@@ -25,6 +91,8 @@ def build_test_arg_parser():
     parser.add_argument('--is_savenii', action="store_true", help='whether to save results during inference')
     parser.add_argument('--fold_id', type=int, default=0,
                         help='ACDC fold id to use when --random_split is set; valid values are 0-4')
+    parser.add_argument('--acdc_zspacing', type=float, default=5.0,
+                        help='fallback ACDC z-spacing in mm when per-case spacing metadata is unavailable')
 
     parser.add_argument('--n_skip', type=int, default=3, help='using number of skip-connect, default is num')
     parser.add_argument('--vit_name', type=str, default='ViT-B_16', help='select one vit model')
