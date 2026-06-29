@@ -6,7 +6,7 @@ from datetime import datetime
 import numpy as np
 import torch
 from scipy.ndimage import zoom
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from datasets.dataset_acdc import ACDC_Dataset, RandomGenerator4ACDC
@@ -38,23 +38,6 @@ def make_worker_init_fn(seed):
         torch.manual_seed(worker_seed)
 
     return worker_init_fn
-
-
-def _make_random_half_validation_subset(dataset, seed):
-    dataset_size = len(dataset)
-    if dataset_size <= 1:
-        return dataset
-
-    subset_size = max(1, dataset_size // 2)
-    indices = list(range(dataset_size))
-    rng = random.Random(seed)
-    rng.shuffle(indices)
-    selected_indices = sorted(indices[:subset_size])
-
-    subset = Subset(dataset, selected_indices)
-    subset.full_validation_size = dataset_size
-    subset.validation_subset_indices = selected_indices
-    return subset
 
 
 def _synapse_validation_root(args):
@@ -144,8 +127,6 @@ def _build_datasets(args):
             "Unsupported dataset: {}. Supported datasets are: Synapse, "
             "Cataract1k, ACDC, and EndoVis2018.".format(args.dataset)
         )
-
-    db_val = _make_random_half_validation_subset(db_val, args.seed)
 
     return db_train, db_val, validation_protocol
 

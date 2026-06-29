@@ -53,22 +53,14 @@ def trainer(args, model, snapshot_path, teacher_model=None):
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
     db_train, db_val, validation_protocol = _build_datasets(args)
-    full_validation_size = getattr(db_val, "full_validation_size", len(db_val))
 
     print("The length of train set is: {}".format(len(db_train)))
-    print(
-        "The length of validataion set is: {} / {}".format(
-            len(db_val),
-            full_validation_size,
-        )
-    )
+    print("The length of validation set is: {}".format(len(db_val)))
     logging.info(
-        "%s train samples: %d | val samples: %d/%d | validation subset seed: %d",
+        "%s train samples: %d | val samples: %d",
         args.dataset,
         len(db_train),
         len(db_val),
-        full_validation_size,
-        args.seed,
     )
     _append_dataset_to_checkpoint_name(args)
 
@@ -163,6 +155,7 @@ def trainer(args, model, snapshot_path, teacher_model=None):
     )
 
     best_performance = 0.0
+    performance = best_performance
     iterator = tqdm(range(max_epoch), ncols=70)
     last_bu_details = None
 
@@ -338,7 +331,7 @@ def trainer(args, model, snapshot_path, teacher_model=None):
                 ", ".join(missing_samples),
             )
 
-        if epoch_batch_count > 0:
+        if epoch_batch_count > 0 and (epoch_index - 1) % 3 == 0:
             val_metrics = _validate(
                 model,
                 valloader,
