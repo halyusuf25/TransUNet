@@ -418,7 +418,9 @@ class BenchmarkResults:
     def pretty(self) -> str:
         lines = ["== Segmentation Inference Benchmark =="]
         for k, v in self.metrics.items():
-            if "gflops" in k:
+            if isinstance(v, (list, tuple, dict)):
+                lines.append(f"{k:28s}: {v}")
+            elif "gflops" in k:
                 lines.append(f"{k:28s}: {v:.3f}")
             elif "img_s" in k:
                 lines.append(f"{k:28s}: {v:.2f}")
@@ -480,6 +482,18 @@ def benchmark_segmentation_model(
         if (device.startswith("cuda") and autocast)
         else torch.no_grad()
     )
+    repeated_runs = args.repeated_runs 
+    n_repeated = args.repeated_runs
+    repeated_metrics: Dict[str, Any] = {}
+
+    def _run_summary(values: List[float]) -> Dict[str, Any]:
+        arr = np.array(values, dtype=np.float64)
+        return {
+            "runs": [float(v) for v in values],
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr)),
+        }
+
     with ctx:
         it = iter(test_loader)
         for _ in range(n_warm):
@@ -495,48 +509,85 @@ def benchmark_segmentation_model(
                 _ = _timed_forward_cpu(model, imgs)
 
     # ---------------- Throughput loop ----------------
-    total_imgs = 0
-    total_ms = 0.0
-    with ctx:
-        it = iter(test_loader)
-        for _ in range(measure_batches):
-            try:
-                batch = next(it)
-            except StopIteration:
-                it = iter(test_loader)
-                batch = next(it)
-            imgs = _extract_images(batch)
-            bs = int(imgs.shape[0])
-            imgs = imgs.to(device, non_blocking=device.startswith("cuda"))
-            ms = _timed_forward_gpu(model, imgs) if device.startswith("cuda") else _timed_forward_cpu(model, imgs)
-            total_imgs += bs
-            total_ms += ms
-
-    throughput_img_s = (total_imgs / (total_ms / 1000.0)) if total_ms > 0 else float("nan")
-    mean_latency_ms_per_image = (total_ms / max(1, total_imgs))
-
-    # ---------------- Single-image latency percentiles ----------------
-    single_lat_ms: List[float] = []
-    if single_image_latency_samples > 0:
-        it = iter(test_loader)
-        collected = 0
+    throughput_img_s_runs: List[float] = []
+    latency_ms_mean_runs: List[float] = []
+    for _ in range(n_repeated):
+        total_imgs = 0
+        total_ms = 0.0
         with ctx:
-            while collected < single_image_latency_samples:
+            it = iter(test_loader)
+            for _ in range(measure_batches):
                 try:
                     batch = next(it)
                 except StopIteration:
                     it = iter(test_loader)
                     batch = next(it)
                 imgs = _extract_images(batch)
-                for i in range(imgs.shape[0]):
-                    x = imgs[i : i + 1].to(device, non_blocking=device.startswith("cuda"))
-                    ms = _timed_forward_gpu(model, x) if device.startswith("cuda") else _timed_forward_cpu(model, x)
-                    single_lat_ms.append(ms)
-                    collected += 1
-                    if collected >= single_image_latency_samples:
-                        break
+                bs = int(imgs.shape[0])
+                imgs = imgs.to(device, non_blocking=device.startswith("cuda"))
+                ms = _timed_forward_gpu(model, imgs) if device.startswith("cuda") else _timed_forward_cpu(model, imgs)
+                total_imgs += bs
+                total_ms += ms
 
-    percentiles = _percentiles(single_lat_ms) if len(single_lat_ms) else {}
+        throughput_img_s_runs.append((total_imgs / (total_ms / 1000.0)) if total_ms > 0 else float("nan"))
+        latency_ms_mean_runs.append(total_ms / max(1, total_imgs))
+
+    throughput_img_s = throughput_img_s_runs[0]
+    mean_latency_ms_per_image = latency_ms_mean_runs[0]
+    if repeated_runs > 1:
+        throughput_summary = _run_summary(throughput_img_s_runs)
+        latency_mean_summary = _run_summary(latency_ms_mean_runs)
+        throughput_img_s = throughput_summary["mean"]
+        mean_latency_ms_per_image = latency_mean_summary["mean"]
+        repeated_metrics.update({
+            "repeated_runs": repeated_runs,
+            "throughput_img_s_runs": throughput_summary["runs"],
+            "throughput_img_s_mean": throughput_summary["mean"],
+            "throughput_img_s_std": throughput_summary["std"],
+            "latency_ms_mean_runs": latency_mean_summary["runs"],
+            "latency_ms_mean_mean": latency_mean_summary["mean"],
+            "latency_ms_mean_std": latency_mean_summary["std"],
+        })
+
+    # ---------------- Single-image latency percentiles ----------------
+    percentile_runs: List[Dict[str, float]] = []
+    for _ in range(n_repeated):
+        single_lat_ms: List[float] = []
+        if single_image_latency_samples > 0:
+            it = iter(test_loader)
+            collected = 0
+            with ctx:
+                while collected < single_image_latency_samples:
+                    try:
+                        batch = next(it)
+                    except StopIteration:
+                        it = iter(test_loader)
+                        batch = next(it)
+                    imgs = _extract_images(batch)
+                    for i in range(imgs.shape[0]):
+                        x = imgs[i : i + 1].to(device, non_blocking=device.startswith("cuda"))
+                        ms = _timed_forward_gpu(model, x) if device.startswith("cuda") else _timed_forward_cpu(model, x)
+                        single_lat_ms.append(ms)
+                        collected += 1
+                        if collected >= single_image_latency_samples:
+                            break
+        percentile_runs.append(_percentiles(single_lat_ms) if len(single_lat_ms) else {})
+
+    percentiles = percentile_runs[0]
+    if repeated_runs > 1:
+        for q in (50, 90, 95, 99):
+            percentile_key = f"p{q}"
+            metric_key = f"latency_ms_p{q}"
+            summary = _run_summary([
+                run.get(percentile_key, float("nan"))
+                for run in percentile_runs
+            ])
+            percentiles[percentile_key] = summary["mean"]
+            repeated_metrics.update({
+                f"{metric_key}_runs": summary["runs"],
+                f"{metric_key}_mean": summary["mean"],
+                f"{metric_key}_std": summary["std"],
+            })
 
     metrics = {
         "throughput_img_s": throughput_img_s,
@@ -550,6 +601,7 @@ def benchmark_segmentation_model(
         "image_shape_HxW": float(H * W),
         "channels": float(C),
         "batch_size_first": float(B),
+        **repeated_metrics,
     }
     notes = {
         "checkpoint" : args.ckpt if args is not None else "N/A",

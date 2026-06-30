@@ -422,6 +422,9 @@ def main():
     if args.use_ats and args.use_gumbel_topk:
         raise ValueError("--use_ats and --use_gumbel_topk are mutually exclusive.")
 
+    if not isinstance(args.repeated_runs, int) or args.repeated_runs < 1 or args.repeated_runs > 10:
+        raise ValueError("The --repeated_runs argument must be an integer between 1 and 10.")
+
     config_vit.topk_attn = args.topk_attn
     config_vit.use_ats = args.use_ats
     config_vit.use_gumbel_topk = args.use_gumbel_topk

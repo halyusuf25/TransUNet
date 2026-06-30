@@ -123,6 +123,8 @@ def build_test_arg_parser():
     parser.add_argument('--use_ats', action='store_true',
                         help='whether to use Adaptive Token Sampling (ATS) for attention')
     parser.add_argument('--benchmark_dict', type=str, default='benchmark/', help='directory to save benchmark results')
+    parser.add_argument('--repeated_runs', type=int, default=1,
+                        help='number of repeated throughput/latency benchmark runs')
 
     parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
     parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
