@@ -441,10 +441,11 @@ def benchmark_segmentation_model(
     device: str = "cuda",
     warmup_steps: int = 20,
     measure_batches: int = 50,
-    single_image_latency_samples: int = 200,
+    single_image_latency_samples: int = 1000,
     enable_cudnn_benchmark: bool = True,
     autocast: bool = False,
     amp_dtype: Optional[torch.dtype] = torch.float16,
+    single_image_warmup_steps: int = 50,
     args: Any = None,
 ) -> BenchmarkResults:
     """
@@ -549,7 +550,40 @@ def benchmark_segmentation_model(
             "latency_ms_mean_std": latency_mean_summary["std"],
         })
 
-    # ---------------- Single-image latency percentiles ----------------
+    # ---------------- Single-image warm-up for B=1 latency path ----------------
+    
+    #---single image warmup for B=1 latency path---
+    n_single_warm = max(0, int(single_image_warmup_steps))
+    if single_image_latency_samples > 0 and n_single_warm > 0:
+        it = iter(test_loader)
+        warmed = 0
+        with ctx:
+            while warmed < n_single_warm:
+                try:
+                    batch = next(it)
+                except StopIteration:
+                    it = iter(test_loader)
+                    batch = next(it)
+
+                imgs = _extract_images(batch)
+                for i in range(imgs.shape[0]):
+                    x = imgs[i : i + 1].to(
+                        device,
+                        non_blocking=device.startswith("cuda"),
+                    )
+                    if device.startswith("cuda"):
+                        _ = _timed_forward_gpu(model, x)
+                    else:
+                        _ = _timed_forward_cpu(model, x)
+
+                    warmed += 1
+                    if warmed >= n_single_warm:
+                        break
+    #------end of single image warmup for B=1 latency path------
+    
+                    
+    #---------------- Single-image latency path ----------------
+                    
     percentile_runs: List[Dict[str, float]] = []
     for _ in range(n_repeated):
         single_lat_ms: List[float] = []
