@@ -71,7 +71,24 @@ def _fallback_acdc_voxelspacing_zyx(args, case_name):
     return (z_spacing, 1.0, 1.0)
 
 
-def build_test_arg_parser():
+def add_visualization_args(parser):
+    parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
+    parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
+    parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
+    parser.add_argument('--viz_save', type=str, default='viz/', help='path to save figure (file or directory)')
+    parser.add_argument('--viz_out', type=str, default=None,
+                        help='output filename for the saved figure (used if --viz_save is a directory or not provided)')
+    parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
+    parser.add_argument('--viz_suffix', type=str, default=None,
+                        help='suffix to append to the output filename (before extension)')
+    parser.add_argument('--viz_hide_input', action='store_true',
+                        help='hide input column in visualization (show only prediction and ground truth)')
+    parser.add_argument('--num_slices_to_overlay', type=int, default=None,
+                        help='number of slices to overlay for visualization (clamped to [2,20])')
+    return parser
+
+
+def build_test_arg_parser(include_visualization_args=False):
     parser = argparse.ArgumentParser()
     parser.add_argument('--volume_path', type=str,
                         default=None,
@@ -128,19 +145,8 @@ def build_test_arg_parser():
     parser.add_argument('--repeated_runs', type=int, default=1,
                         help='number of repeated throughput/latency benchmark runs')
 
-    parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
-    parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
-    parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
-    parser.add_argument('--viz_save', type=str, default=None, help='path to save figure (file or directory)')
-    parser.add_argument('--viz_out', type=str, default=None,
-                        help='output filename for the saved figure (used if --viz_save is a directory or not provided)')
-    parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
-    parser.add_argument('--viz_suffix', type=str, default=None,
-                        help='suffix to append to the output filename (before extension)')
-    parser.add_argument('--viz_hide_input', action='store_true',
-                        help='hide input column in visualization (show only prediction and ground truth)')
-    parser.add_argument('--num_slices_to_overlay', type=int, default=None,
-                        help='number of slices to overlay for visualization (clamped to [2,20])')
+    if include_visualization_args:
+        add_visualization_args(parser)
 
     parser.add_argument('--swin_pretrained_path', type=str,
                         default='/data/halyusuf/data/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth',
@@ -166,8 +172,8 @@ def build_test_arg_parser():
     return parser
 
 
-def parse_test_args():
-    args = build_test_arg_parser().parse_args()
+def parse_test_args(include_visualization_args=False):
+    args = build_test_arg_parser(include_visualization_args=include_visualization_args).parse_args()
     args.normalize_endovis_eval = args.normalize_present_class_eval
     return args
 

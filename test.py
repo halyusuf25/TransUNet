@@ -34,9 +34,6 @@ from src.test_helpers import (
     _fallback_acdc_voxelspacing_zyx,
     _mean_metric_array,
 )
-from src.visualize import (
-    generate_qualitative_visualization,
-)
 
 
 PRESENT_CLASS_FRAME_EVAL_DATASETS = {'EndoVis2018', 'Cataract1k'}
@@ -481,11 +478,6 @@ def main():
             logging.info("Dropped SE-blocks after quantization.")
 
         
-    # Optional qualitative visualization before running full inference
-    if args.viz:
-        generate_qualitative_visualization(args, net, dataset_name)
-        sys.exit(0)
-
     performance = inference(args, net, test_save_path=None)
     
     # ---------------- Benchmark (runs AFTER inference is done) ----------------
