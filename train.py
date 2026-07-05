@@ -66,6 +66,9 @@ parser.add_argument('--topk_attn', type=float,
                     default=0.0, help='keep rate for Top-k attention (0.0 means not using Top-k attention)')
 parser.add_argument('--use_gumbel_topk', action='store_true',
                     help='whether to use Gumbel-Softmax sampling for Top-k attention (it has to be used with --topk_attn > 0.0)')
+parser.add_argument('--gumbel_sampling_mode', type=str, default='dist', choices=['dist', 'manual'],
+                        help='mode for Gumbel-Softmax sampling (default: dist, which uses the distribution directly; sample uses sampling from the distribution)')
+    
 parser.add_argument('--use_ats', action='store_true', 
                     help='whether to use Adaptive Token Sampling (ATS) for attention')
 parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
@@ -275,6 +278,7 @@ if __name__ == "__main__":
     config_vit.topk_attn = args.topk_attn
     config_vit.use_ats = args.use_ats
     config_vit.use_gumbel_topk = args.use_gumbel_topk
+    config_vit.gumbel_sampling_mode = args.gumbel_sampling_mode
     config_vit.use_shsa = args.use_shsa
     config_vit.use_alternate_shsa = args.use_alternate_shsa
     config_vit.use_efficientnet = args.use_efficientnet

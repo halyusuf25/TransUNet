@@ -399,6 +399,7 @@ def main():
     config_vit.n_skip = args.n_skip
     config_vit.use_se_block = args.use_se_block
     config_vit.drop_se_block = args.drop_se_block
+    config_vit.gumbel_sampling_mode = args.gumbel_sampling_mode
     
     config_vit.patches.size = (args.vit_patches_size, args.vit_patches_size)
     if args.num_heads is not None:
@@ -500,7 +501,7 @@ def main():
             device="cuda",
             warmup_steps=20,                               # stabilize kernels
             measure_batches=50,                            # how many batches to time
-            single_image_latency_samples=200,              # B=1 latency percentiles
+            single_image_latency_samples=1000,              # B=1 latency percentiles
             enable_cudnn_benchmark=True,                   # True if fixed image size
             autocast=False,                                 # set True to benchmark AMP
             args=args,
@@ -512,7 +513,7 @@ def main():
             device="cuda" if torch.cuda.is_available() else "cpu",
             warmup_steps=20,                               # stabilize kernels
             measure_batches=50,                            # how many batches to time
-            single_image_latency_samples=200,              # B=1 latency percentiles
+            single_image_latency_samples=1000,              # B=1 latency percentiles
             enable_cudnn_benchmark=True,                   # True if fixed image size
             autocast=False,                        # set True to benchmark AMP      
             args=args,    

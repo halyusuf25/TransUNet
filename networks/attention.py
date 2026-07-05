@@ -180,17 +180,60 @@ class TopkAttention(nn.Module):
         gather_index = topk_idx[:, None, :, None].expand(B, H, k, N)
         return torch.gather(attn, dim=2, index=gather_index)
 
-    def _gumbel_topk(self, x: torch.Tensor, K: int = 8) -> torch.Tensor:
+    def _gumbel_topk(self, x: torch.Tensor, K: int = 8, mode: str = "dist") -> torch.Tensor:
         if K <= 0:
             raise ValueError(f"K must be positive, got {K}.")
         if K > x.shape[-1]:
             raise ValueError(f"K ({K}) cannot exceed x dimension ({x.shape[-1]}).")
+        
+        if mode == "dist":
+            # Original implementation.
+            loc = torch.zeros_like(x, dtype=torch.float32)
+            scale = torch.ones_like(x, dtype=torch.float32)
+            gumbel = torch.distributions.Gumbel(loc, scale)
+            gumbel_noise = gumbel.sample().to(dtype=x.dtype)
 
-        loc =torch.zeros_like(x, dtype=torch.float32)
-        scale = torch.ones_like(x, dtype=torch.float32)
-        gumbel = torch.distributions.Gumbel(loc, scale)
-        scores = torch.log(x) + gumbel.sample().to(dtype=x.dtype)
-        return scores.topk(K, dim=-1, largest=True, sorted=True).indices
+        elif mode == "manual":
+            # Manual standard Gumbel(0, 1): g = -log(-log(U)).
+            # This avoids constructing torch.distributions.Gumbel every forward.
+            finfo = torch.finfo(torch.float32)
+            u = torch.rand(x.shape, device=x.device, dtype=torch.float32)
+            u = u.clamp_(min=finfo.tiny, max=1.0 - finfo.eps)
+            gumbel_noise = (-torch.log(-torch.log(u))).to(dtype=x.dtype)
+
+        # elif mode == "cached":
+        #     # Profiling only: reuse one shape-specific Gumbel tensor.
+        #     # This removes per-forward random generation and log/log overhead.
+        #     cache = getattr(self, "_profile_gumbel_noise", None)
+        #     if (
+        #         cache is None
+        #         or cache.shape != x.shape
+        #         or cache.device != x.device
+        #     ):
+        #         finfo = torch.finfo(torch.float32)
+        #         u = torch.rand(x.shape, device=x.device, dtype=torch.float32)
+        #         u = u.clamp_(min=finfo.tiny, max=1.0 - finfo.eps)
+        #         cache = -torch.log(-torch.log(u))
+        #         self._profile_gumbel_noise = cache
+        #     gumbel_noise = cache.to(dtype=x.dtype)
+
+        # elif mode == "zero":
+        #     # Profiling only: deterministic no-noise selector.
+        #     # This removes Gumbel sampling entirely.
+        #     gumbel_noise = torch.zeros_like(x)
+
+        
+        else:
+            raise ValueError(
+                f"Unknown GUMBEL_NOISE_IMPL={mode}. "
+                "Use one of: dist, manual, cached, zero."
+            )
+
+        scores = torch.log(x) + gumbel_noise
+        return scores.topk(K, dim=-1, largest=True, sorted=True).indices       
+        
+        # scores = torch.log(x) + gumbel.sample().to(dtype=x.dtype)
+        # return scores.topk(K, dim=-1, largest=True, sorted=True).indices
 
     def forward(self, x: torch.Tensor, return_indices: bool = False):
 
@@ -223,7 +266,7 @@ class TopkAttention(nn.Module):
         k_keep = self._num_tokens_to_keep(N)
         if self.args.use_gumbel_topk:
             normalized_token_scores = self._compute_significance_score(attn, v)  # (B, N)
-            topk_idx = self._gumbel_topk(normalized_token_scores, K=k_keep)
+            topk_idx = self._gumbel_topk(normalized_token_scores, K=k_keep, mode=self.args.gumbel_sampling_mode)  # [B, k]
         else:
             topk_idx = token_score.topk(k_keep, dim=-1, largest=True, sorted=True).indices  # [B, k]
 
