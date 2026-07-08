@@ -1,12 +1,69 @@
 import os
 import re
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.ndimage import zoom
+
+
+GRID_ONLY_ARG_NAMES = (
+    'viz_view',
+    'viz_title',
+    'viz_legend_mode',
+    'grid_rows',
+    'grid_indices',
+    'grid_cols',
+    'grid_ckpts',
+    'grid_model_names',
+    'multi_datasets',
+    'multi_dataset_args',
+    'multi_model_names',
+    'multi_ckpts',
+)
+
+
+def add_visualization_args(parser):
+    parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
+    parser.add_argument('--viz_view', type=str, default='default', choices=['default', 'grid', 'multiple_datasets'],
+                        help='visualization view mode')
+    parser.add_argument('--viz_title', type=str, default=None,
+                        help='optional title for grid or multiple_datasets visualization')
+    parser.add_argument('--viz_legend_mode', type=str, default='global', choices=['global', 'per_row'],
+                        help='legend placement for grid visualization; multiple_datasets requires per_row')
+    parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
+    parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
+    parser.add_argument('--viz_save', type=str, default='viz/', help='path to save figure (file or directory)')
+    parser.add_argument('--viz_out', type=str, default=None,
+                        help='output filename for the saved figure (used if --viz_save is a directory or not provided)')
+    parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
+    parser.add_argument('--viz_suffix', type=str, default=None,
+                        help='suffix to append to the output filename (before extension)')
+    parser.add_argument('--viz_hide_input', action='store_true',
+                        help='hide input column in visualization (show only prediction and ground truth)')
+    parser.add_argument('--num_slices_to_overlay', type=int, default=None,
+                        help='number of slices to overlay for visualization (clamped to [2,20])')
+    parser.add_argument('--grid_rows', type=int, default=3,
+                        help='number of image/sample rows in grid visualization; must match --multi_datasets in multiple_datasets mode')
+    parser.add_argument('--grid_indices', type=int, nargs='*', default=None,
+                        help='optional dataset indices for each grid row; omitted means random samples')
+    parser.add_argument('--grid_cols', type=int, default=3,
+                        help='number of model-output columns in grid visualization; must match --multi_ckpts in multiple_datasets mode')
+    parser.add_argument('--grid_ckpts', nargs='*', default=None,
+                        help='checkpoint paths or names to render as model-output columns; append ::args for per-checkpoint model args')
+    parser.add_argument('--grid_model_names', nargs='*', default=None,
+                        help='optional display names for grid model-output columns')
+    parser.add_argument('--multi_datasets', nargs='*', default=None,
+                        help='dataset names to render as rows in multiple_datasets visualization')
+    parser.add_argument('--multi_dataset_args', nargs='*', default=None,
+                        help='optional per-dataset visualization args, e.g. Dataset::--viz_index 0 --viz_slice 60 --num_slices_to_overlay 5')
+    parser.add_argument('--multi_model_names', nargs='*', default=None,
+                        help='optional display names for multiple_datasets model-output columns')
+    parser.add_argument('--multi_ckpts', nargs='*', default=None,
+                        help='one semicolon-separated Dataset=checkpoint::args mapping per multiple_datasets model column')
+    return parser
 
 
 def _ensure_matplotlib():
@@ -958,6 +1015,226 @@ def resolve_visualization_save_path(args, default_name: str):
     if ext in img_exts:
         return base
     return os.path.join(base, name)
+
+
+def _prediction_triplet_for_volume(
+    model: torch.nn.Module,
+    volume: np.ndarray,
+    label: np.ndarray,
+    slice_index: Optional[int],
+    img_size: int,
+    num_slices_to_overlay: Optional[int],
+    device: str,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    overlay_indices = None
+    if volume.ndim == 3:
+        D, H, W = volume.shape
+        overlay_indices = _resolve_overlay_indices(D, num_slices_to_overlay)
+        if overlay_indices and label.ndim != 3:
+            overlay_indices = None
+        if slice_index is None:
+            if overlay_indices:
+                slice_index = overlay_indices[len(overlay_indices) // 2]
+            else:
+                slice_index = D // 2
+        img2d = volume[slice_index]
+        if overlay_indices:
+            gt_slices = [label[i] for i in overlay_indices]
+            gt2d = _overlay_class_maps(gt_slices)
+        else:
+            gt2d = label[slice_index] if label.ndim == 3 else label
+    elif volume.ndim == 2:
+        img2d = volume
+        gt2d = label
+    else:
+        raise ValueError("Volume sample must be 2D or 3D array")
+
+    if overlay_indices:
+        pred_slices = [
+            _infer_slice_prediction(model, volume[i], img_size, device) for i in overlay_indices
+        ]
+        pred = _overlay_class_maps(pred_slices)
+    else:
+        pred = _infer_slice_prediction(model, img2d, img_size, device)
+    return img2d, pred, gt2d
+
+
+def _prediction_triplet_for_rgb_image(
+    model: torch.nn.Module,
+    image: np.ndarray,
+    label: np.ndarray,
+    img_size: int,
+    device: str,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("Frame sample must be an RGB image with shape [H, W, 3]")
+
+    H, W, _ = image.shape
+    resized_channels = []
+    for ch in range(3):
+        resized_channels.append(zoom(image[:, :, ch], (img_size / H, img_size / W), order=3))
+    img_resized = np.stack(resized_channels, axis=0)
+
+    with torch.no_grad():
+        input_tensor = torch.from_numpy(img_resized).unsqueeze(0).float().to(device)
+        outputs = model(input_tensor)
+        if isinstance(outputs, (list, tuple)):
+            outputs = outputs[0]
+        pred_small = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0).cpu().numpy()
+
+    pred = zoom(pred_small, (H / img_size, W / img_size), order=0)
+    return image, pred, label
+
+
+def build_grid_prediction_entry(
+    model: torch.nn.Module,
+    sample: Dict[str, np.ndarray],
+    args,
+    dataset_name: str,
+    device: Optional[str] = None,
+) -> Dict[str, np.ndarray]:
+    model.eval()
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+    if dataset_name in ['Synapse', 'ACDC']:
+        image, pred, gt = _prediction_triplet_for_volume(
+            model=model,
+            volume=sample['image'],
+            label=sample['label'],
+            slice_index=args.viz_slice,
+            img_size=args.img_size,
+            num_slices_to_overlay=args.num_slices_to_overlay,
+            device=device,
+        )
+    elif dataset_name in ['Cataract1k', 'EndoVis2018']:
+        image, pred, gt = _prediction_triplet_for_rgb_image(
+            model=model,
+            image=sample['image'],
+            label=sample['label'],
+            img_size=args.img_size,
+            device=device,
+        )
+    else:
+        raise ValueError(f"Unsupported dataset for grid visualization: {dataset_name}")
+
+    return {
+        'image': image,
+        'pred': pred,
+        'gt': gt,
+    }
+
+
+def plot_grid_qualitative_visualization(
+    rows: List[Dict],
+    model_names: List[str],
+    include_input: bool = True,
+    figure_title: Optional[str] = None,
+    save_path: Optional[str] = None,
+    figsize: Optional[Tuple[float, float]] = None,
+    legend_mode: str = 'global',
+):
+    if not _ensure_matplotlib():
+        raise RuntimeError("Matplotlib is not available. Please install it to use this function.")
+
+    import matplotlib.pyplot as plt
+
+    if not rows:
+        raise ValueError("No rows were provided for grid visualization.")
+    if legend_mode not in ('global', 'per_row'):
+        raise ValueError("legend_mode must be 'global' or 'per_row', got {}".format(legend_mode))
+
+    num_rows = len(rows)
+    num_models = len(model_names)
+    ncols = num_models + 2 if include_input else num_models + 1
+    if figsize is None:
+        figsize = (max(4.0 * ncols, 8.0), max(3.4 * num_rows, 3.4))
+
+    fig, axes = plt.subplots(num_rows, ncols, figsize=figsize, constrained_layout=True)
+    axes = np.asarray(axes)
+    if axes.ndim == 1:
+        axes = axes.reshape(1, -1)
+
+    last_im = None
+    if legend_mode == 'global':
+        global_n_classes = max(int(row['num_classes']) for row in rows)
+        class_labels = rows[0].get('class_labels')
+        cmap, norm, labels = _discrete_cmap(global_n_classes, class_labels)
+
+    for row_index, row in enumerate(rows):
+        dataset_name = row['dataset_name']
+        row_title = row.get('row_title', dataset_name)
+        image = row['image']
+        gt = row['gt']
+        predictions = row['predictions']
+        col_index = 0
+        if legend_mode == 'per_row':
+            cmap, norm, labels = _discrete_cmap(int(row['num_classes']), row.get('class_labels'))
+
+        if include_input:
+            input_ax = axes[row_index, col_index]
+            _imshow_input(input_ax, image)
+            input_ax.set_ylabel(row_title, fontsize=11)
+            if row_index == num_rows - 1:
+                input_ax.set_xlabel('Input', fontsize=12)
+            input_ax.set_xticks([])
+            input_ax.set_yticks([])
+            col_index += 1
+        else:
+            axes[row_index, col_index].set_ylabel(row_title, fontsize=11)
+
+        for model_index, pred in enumerate(predictions):
+            pred_ax = axes[row_index, col_index]
+            _imshow_input(pred_ax, image)
+            pred_mask = np.ma.masked_where(pred == 0, pred)
+            last_im = pred_ax.imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+            _draw_gt_boundaries(pred_ax, gt)
+            if row_index == num_rows - 1:
+                pred_ax.set_xlabel(model_names[model_index], fontsize=12)
+            pred_ax.set_xticks([])
+            pred_ax.set_yticks([])
+            col_index += 1
+
+        gt_ax = axes[row_index, col_index]
+        _imshow_input(gt_ax, image)
+        gt_mask = np.ma.masked_where(gt == 0, gt)
+        last_im = gt_ax.imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+        _draw_gt_boundaries(gt_ax, gt)
+        if row_index == num_rows - 1:
+            gt_ax.set_xlabel('Ground Truth', fontsize=12)
+        gt_ax.set_xticks([])
+        gt_ax.set_yticks([])
+
+        if legend_mode == 'per_row':
+            cbar = fig.colorbar(
+                last_im,
+                ax=axes[row_index, :].ravel().tolist(),
+                ticks=np.arange(0, int(row['num_classes']), 1),
+                fraction=0.025,
+                pad=0.01,
+            )
+            cbar.ax.set_yticklabels(labels)
+
+    if legend_mode == 'global':
+        cbar = fig.colorbar(
+            last_im,
+            ax=axes.ravel().tolist(),
+            ticks=np.arange(0, global_n_classes, 1),
+            fraction=0.025,
+            pad=0.01,
+        )
+        cbar.ax.set_yticklabels(labels)
+
+    if figure_title:
+        fig.suptitle(figure_title, fontsize=13)
+
+    if save_path is not None:
+        dirpath = os.path.dirname(save_path)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved visualization grid to: {save_path}")
+
+    plt.show()
 
 
 def generate_qualitative_visualization(args, model, dataset_name):
