@@ -328,7 +328,7 @@ class AWQViTSegQuantizer:
         patch_size = self._resolve_patch_size(image)
         input_images = []
         image = image.squeeze(0).cpu().detach().numpy()
-        if self.args.dataset == 'Synapse':
+        if self.args.dataset in ['Synapse', 'ACDC']:
             for ind in range(image.shape[0]):
                 slice = image[ind, :, :]    
                 x, y = slice.shape[0], slice.shape[1]

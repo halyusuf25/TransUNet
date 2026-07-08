@@ -71,24 +71,15 @@ def _fallback_acdc_voxelspacing_zyx(args, case_name):
     return (z_spacing, 1.0, 1.0)
 
 
-def add_visualization_args(parser):
-    parser.add_argument('--viz', action='store_true', help='show qualitative visualization for a sample')
-    parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
-    parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
-    parser.add_argument('--viz_save', type=str, default='viz/', help='path to save figure (file or directory)')
-    parser.add_argument('--viz_out', type=str, default=None,
-                        help='output filename for the saved figure (used if --viz_save is a directory or not provided)')
-    parser.add_argument('--viz_count', type=int, default=4, help='number of samples to visualize (default: 4)')
-    parser.add_argument('--viz_suffix', type=str, default=None,
-                        help='suffix to append to the output filename (before extension)')
-    parser.add_argument('--viz_hide_input', action='store_true',
-                        help='hide input column in visualization (show only prediction and ground truth)')
-    parser.add_argument('--num_slices_to_overlay', type=int, default=None,
-                        help='number of slices to overlay for visualization (clamped to [2,20])')
+def add_quantization_args(parser):
+    parser.add_argument('--quantize', action='store_true', help='whether to quantize the model')
+    parser.add_argument('--quantize_calibrate_batch_size', type=int, default=8,
+                        help='batch size for calibration (default: 8)')
+    parser.add_argument('--drop_se_block', action='store_true', help='whether to drop SE block during quantization')
     return parser
 
 
-def build_test_arg_parser(include_visualization_args=False):
+def build_test_arg_parser(include_visualization_args=False, include_quantization_args=True):
     parser = argparse.ArgumentParser()
     parser.add_argument('--volume_path', type=str,
                         default=None,
@@ -104,7 +95,8 @@ def build_test_arg_parser(include_visualization_args=False):
     parser.add_argument('--max_epochs', type=int, default=30, help='maximum epoch number to train')
     parser.add_argument('--batch_size', type=int, default=24,
                         help='batch_size per gpu')
-    parser.add_argument('--img_size', type=int, default=224, help='input patch size of network input')
+    parser.add_argument('--img_size', '--image_size', dest='img_size',
+                        type=int, default=224, help='input patch size of network input')
     parser.add_argument('--is_savenii', action="store_true", help='whether to save results during inference')
     parser.add_argument('--fold_id', type=int, default=0,
                         help='ACDC fold id to use when --random_split is set; valid values are 0-4')
@@ -146,17 +138,16 @@ def build_test_arg_parser(include_visualization_args=False):
                         help='number of repeated throughput/latency benchmark runs')
 
     if include_visualization_args:
+        from src.visualize import add_visualization_args
         add_visualization_args(parser)
 
     parser.add_argument('--swin_pretrained_path', type=str,
                         default='/data/halyusuf/data/pretrained_backbones/swin/swin_large_patch4_window7_224_22k.pth',
                         help='path to swin pretrained model')
 
-    parser.add_argument('--quantize', action='store_true', help='whether to quantize the model')
-    parser.add_argument('--quantize_calibrate_batch_size', type=int, default=8,
-                        help='batch size for calibration (default: 8)')
+    if include_quantization_args:
+        add_quantization_args(parser)
     parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
-    parser.add_argument('--drop_se_block', action='store_true', help='whether to drop SE block during quantization')
 
     parser.add_argument('--description', type=str, default='no description for this test run',
                         help='description for the experiment')
@@ -172,8 +163,11 @@ def build_test_arg_parser(include_visualization_args=False):
     return parser
 
 
-def parse_test_args(include_visualization_args=False):
-    args = build_test_arg_parser(include_visualization_args=include_visualization_args).parse_args()
+def parse_test_args(include_visualization_args=False, include_quantization_args=True):
+    args = build_test_arg_parser(
+        include_visualization_args=include_visualization_args,
+        include_quantization_args=include_quantization_args,
+    ).parse_args()
     args.normalize_endovis_eval = args.normalize_present_class_eval
     return args
 

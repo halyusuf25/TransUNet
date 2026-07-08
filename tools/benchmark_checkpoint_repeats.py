@@ -19,7 +19,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from benchmark import (  # noqa: E402
+from src.benchmark import (  # noqa: E402
     _extract_images,
     _set_cudnn_benchmark,
     _timed_forward_cpu,

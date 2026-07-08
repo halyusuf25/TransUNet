@@ -8,7 +8,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from benchmark import benchmark_segmentation_model, build_benchmark_loader
+from src.benchmark import benchmark_segmentation_model, build_benchmark_loader
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
@@ -449,7 +449,7 @@ def main():
 
     if args.quantize:
         from networks.quantizer import AWQViTSegQuantizer
-        if args.dataset == 'Synapse':
+        if args.dataset in ['Synapse', 'ACDC']:
             db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
         elif args.dataset in ['Cataract1k', 'EndoVis2018']:
             db_calib = args.Dataset(base_dir=args.volume_path, split="test",)
@@ -485,31 +485,18 @@ def main():
     # bench_bs = 1 if args.dataset == 'Synapse' else max(1, min(args.batch_size, 16))
     test_loader_bench = build_benchmark_loader(args, batch_size=36, num_workers=0, shuffle=False)
 
-    if args.quantize:
-        from benchmark_quantize import benchmark_segmentation_quantize_model
-        results = benchmark_segmentation_quantize_model(
-            model=net,
-            test_loader=test_loader_bench,                 # real test samples
-            device="cuda",
-            warmup_steps=20,                               # stabilize kernels
-            measure_batches=50,                            # how many batches to time
-            single_image_latency_samples=1000,              # B=1 latency percentiles
-            enable_cudnn_benchmark=True,                   # True if fixed image size
-            autocast=False,                                 # set True to benchmark AMP
-            args=args,
-        )
-    else:
-        results = benchmark_segmentation_model(
-            model=net,
-            test_loader=test_loader_bench,                 # real test samples
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            warmup_steps=20,                               # stabilize kernels
-            measure_batches=50,                            # how many batches to time
-            single_image_latency_samples=1000,              # B=1 latency percentiles
-            enable_cudnn_benchmark=True,                   # True if fixed image size
-            autocast=False,                        # set True to benchmark AMP      
-            args=args,    
-        )
+    results = benchmark_segmentation_model(
+        model=net,
+        test_loader=test_loader_bench,                 # real test samples
+        device="cuda" if args.quantize else ("cuda" if torch.cuda.is_available() else "cpu"),
+        warmup_steps=20,                               # stabilize kernels
+        measure_batches=50,                            # how many batches to time
+        single_image_latency_samples=1000,              # B=1 latency percentiles
+        enable_cudnn_benchmark=True,                   # True if fixed image size
+        autocast=False,                                # set True to benchmark AMP
+        quantized_model=args.quantize,
+        args=args,
+    )
 
     pretty = "\n" + results.pretty()
     # print(pretty)

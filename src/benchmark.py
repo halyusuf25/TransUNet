@@ -4,6 +4,7 @@
 # - Uses real samples from your test DataLoader (no dummy tensors)
 # - Throughput (img/s), Latency (mean & p50/p90/p95/p99 in ms)
 # - #Params, FLOPs (GFLOPs)  --- includes custom counting for Attention/SHSA
+# - Optional quantized-model counting for AWQ WQLinear layers
 # - Clean, modular, easy to extend
 # ---------------------------------------------------------------------------
 
@@ -21,6 +22,11 @@ import numpy as np
 
 from fvcore.nn import FlopCountAnalysis
 from thop import profile
+
+try:
+    from awq.quantize.qmodule import WQLinear
+except Exception:  # pragma: no cover - optional dependency for quantized benchmarks
+    WQLinear = None  # type: ignore[assignment]
 
 # ============================= Safe collate =============================
 
@@ -143,6 +149,52 @@ def count_parameters(model: nn.Module) -> ParameterCounts:
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
     return ParameterCounts(trainable=int(trainable_params), total=int(total_params))
+
+
+def _linear_like_macs(x: torch.Tensor, in_features: int, out_features: int) -> int:
+    n_instances = x.numel() // in_features
+    return int(n_instances * in_features * out_features)
+
+
+def count_parameters_quantized(model: nn.Module) -> ParameterCounts:
+    """Count logical parameters for quantized models, treating WQLinear as dense."""
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    if WQLinear is None:
+        return ParameterCounts(trainable=int(trainable_params), total=int(total_params))
+
+    def _logical_wqlinear_params(wq: nn.Module) -> int:
+        in_features = getattr(wq, "in_features", None)
+        out_features = getattr(wq, "out_features", None)
+        if in_features is None or out_features is None:
+            return sum(p.numel() for p in wq.parameters(recurse=False))
+        count = int(in_features) * int(out_features)
+        bias = getattr(wq, "bias", None)
+        if bias is not None:
+            count += int(bias.numel())
+        return count
+
+    adjusted_trainable = int(trainable_params)
+    adjusted_total = int(total_params)
+    seen: set[int] = set()
+    for mod in model.modules():
+        wq = None
+        if isinstance(mod, WQLinear):
+            wq = mod
+        elif hasattr(mod, "inner") and isinstance(getattr(mod, "inner"), WQLinear):
+            wq = getattr(mod, "inner")
+        if wq is None or id(wq) in seen:
+            continue
+        seen.add(id(wq))
+        direct_params = list(wq.parameters(recurse=False))
+        stored = sum(p.numel() for p in direct_params)
+        stored_trainable = sum(p.numel() for p in direct_params if p.requires_grad)
+        logical = _logical_wqlinear_params(wq)
+        adjusted_total += logical - int(stored)
+        if stored_trainable > 0:
+            adjusted_trainable += logical - int(stored_trainable)
+
+    return ParameterCounts(trainable=int(adjusted_trainable), total=int(adjusted_total))
 
 
 def _percentiles(values: List[float], qs=(50, 90, 95, 99)) -> Dict[str, float]:
@@ -269,12 +321,17 @@ def _try_count_macs_with_fvcore(
         return None
 
 
-def _fallback_hook_macs_vit(model: nn.Module, example: torch.Tensor) -> int:
+def _fallback_hook_macs_vit(
+    model: nn.Module,
+    example: torch.Tensor,
+    quantized_model: bool = False,
+) -> int:
     """
     Robust last-resort MACs counter via forward hooks.
     Covers:
       - Conv2d / ConvTranspose2d
       - Linear
+      - WQLinear when quantized_model=True
       - Attention (full MHA): counts QK^T + A*V
       - SHSAttention: counts QK^T (qk_dim) + A*V (pdim)
     Pool/Norm/Act/Upsample are typically omitted in FLOPs tables.
@@ -296,6 +353,14 @@ def _fallback_hook_macs_vit(model: nn.Module, example: torch.Tensor) -> int:
         x = inp[0]                        # (..., in_features)
         n_instances = x.numel() // m.in_features
         macs_total += n_instances * m.in_features * m.out_features
+
+    def wqlinear_hook(m, inp, out):
+        nonlocal macs_total
+        in_features = getattr(m, "in_features", None)
+        out_features = getattr(m, "out_features", None)
+        if in_features is None or out_features is None:
+            return
+        macs_total += _linear_like_macs(inp[0], int(in_features), int(out_features))
 
     def convt_hook(m: nn.ConvTranspose2d, inp, out):
         nonlocal macs_total
@@ -322,9 +387,11 @@ def _fallback_hook_macs_vit(model: nn.Module, example: torch.Tensor) -> int:
         pdim   = int(getattr(m, "pdim"))
         macs_total += B * S * S * (qk_dim + pdim)
 
-    # Register hooks on a CPU copy to avoid mutating the original model
-    model_cpu = copy.deepcopy(model)
-    for mod in model_cpu.modules():
+    # Register hooks on a copy to avoid mutating the original model. Quantized
+    # WQLinear kernels are CUDA-only, so keep that path on the example device.
+    target_device = example.device if quantized_model else torch.device("cpu")
+    model_copy = copy.deepcopy(model).to(target_device).eval()
+    for mod in model_copy.modules():
         cname = mod.__class__.__name__
         if isinstance(mod, nn.Conv2d):
             handles.append(mod.register_forward_hook(conv_hook))
@@ -332,20 +399,25 @@ def _fallback_hook_macs_vit(model: nn.Module, example: torch.Tensor) -> int:
             handles.append(mod.register_forward_hook(linear_hook))
         elif isinstance(mod, nn.ConvTranspose2d):
             handles.append(mod.register_forward_hook(convt_hook))
+        elif quantized_model and WQLinear is not None and isinstance(mod, WQLinear):
+            handles.append(mod.register_forward_hook(wqlinear_hook))
         elif cname == "Attention":
             handles.append(mod.register_forward_hook(mha_hook))
         elif cname == "SHSAttention":
             handles.append(mod.register_forward_hook(shsa_hook))
 
-    model_cpu = model_cpu.to("cpu").eval()
     with torch.no_grad():
-        _ = model_cpu(example.to("cpu"))
+        _ = model_copy(example.to(target_device))
     for h in handles:
         h.remove()
     return int(macs_total)
 
 
-def count_flops_gflops(model: nn.Module, example: torch.Tensor) -> Tuple[float, ParameterCounts]:
+def count_flops_gflops(
+    model: nn.Module,
+    example: torch.Tensor,
+    quantized_model: bool = False,
+) -> Tuple[float, ParameterCounts]:
     """
     Return (GFLOPs, ParameterCounts) for ONE IMAGE in `example`.
 
@@ -369,8 +441,8 @@ def count_flops_gflops(model: nn.Module, example: torch.Tensor) -> Tuple[float, 
     #     return (2.0 * macs) / 1e9, params
 
     # hook fallback
-    macs = _fallback_hook_macs_vit(model, example)
-    parameter_counts = count_parameters(model)
+    macs = _fallback_hook_macs_vit(model, example, quantized_model=quantized_model)
+    parameter_counts = count_parameters_quantized(model) if quantized_model else count_parameters(model)
     return (2.0 * macs) / 1e9, parameter_counts
 
 
@@ -446,6 +518,7 @@ def benchmark_segmentation_model(
     autocast: bool = False,
     amp_dtype: Optional[torch.dtype] = torch.float16,
     single_image_warmup_steps: int = 50,
+    quantized_model: bool = False,
     args: Any = None,
 ) -> BenchmarkResults:
     """
@@ -462,6 +535,13 @@ def benchmark_segmentation_model(
     Notes include device, warmup, batch shape, etc.
     """
     assert measure_batches > 0
+    device = str(device)
+    if quantized_model:
+        if not torch.cuda.is_available():
+            raise RuntimeError("Quantized benchmarking requires CUDA.")
+        if not device.startswith("cuda"):
+            raise ValueError("Quantized benchmarking must run on a CUDA device.")
+
     model = model.to(device).eval()
     _set_cudnn_benchmark(enable_cudnn_benchmark)
 
@@ -474,7 +554,13 @@ def benchmark_segmentation_model(
 
     # Count FLOPs & params on a real example (1 image)
     example = first_imgs[:1].contiguous()
-    gflops, parameter_counts = count_flops_gflops(model, example)
+    if quantized_model:
+        example = example.to(device, non_blocking=True)
+    gflops, parameter_counts = count_flops_gflops(
+        model,
+        example,
+        quantized_model=quantized_model,
+    )
 
     # ---------------- Warm-up ----------------
     n_warm = max(0, warmup_steps)
@@ -483,8 +569,8 @@ def benchmark_segmentation_model(
         if (device.startswith("cuda") and autocast)
         else torch.no_grad()
     )
-    repeated_runs = args.repeated_runs 
-    n_repeated = args.repeated_runs
+    repeated_runs = max(1, int(getattr(args, "repeated_runs", 1)))
+    n_repeated = repeated_runs
     repeated_metrics: Dict[str, Any] = {}
 
     def _run_summary(values: List[float]) -> Dict[str, Any]:
@@ -645,5 +731,6 @@ def benchmark_segmentation_model(
         "single_image_latency_samples": single_image_latency_samples,
         "cudnn_benchmark": enable_cudnn_benchmark,
         "amp_autocast": bool(autocast),
+        "quantized_model": bool(quantized_model),
     }
     return BenchmarkResults(metrics=metrics, notes=notes)
