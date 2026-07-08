@@ -36,73 +36,40 @@ DEFAULT_CUDA_VISIBLE_DEVICES = "4"
 #   {"ckpt": "model.pth", "description": "description for this checkpoint"}
 CHECKPOINTS = [
     (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8704541325569153_epoch_21_20260627_153901.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 21 - dice 0.870",
+        "GumbelTopK_Synapse__best_val_dice_0.7858279943466187_epoch_103_20260703_152127.pth",
+        "TransUNet with Gumbel Top-K on Synapse Dataset (512x512) epoch 103 - dice 0.785",
     ),
     (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8711482882499695_epoch_33_20260627_154458.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 33 - dice 0.871",
+        "GumbelTopK_Synapse__best_val_dice_0.7897534370422363_epoch_121_20260703_153117.pth",
+        "TransUNet with Gumbel Top-K on Synapse Dataset (512x512) epoch 121 - dice 0.789",
     ),
     (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8794137835502625_epoch_36_20260627_154631.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 36 - dice 0.879",
+        "GumbelTopK_Synapse__best_val_dice_0.7908648252487183_epoch_184_20260703_160541.pth",
+        "TransUNet with Gumbel Top-K on Synapse Dataset (512x512) epoch 184 - dice 0.790",
     ),
     (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8894398212432861_epoch_41_20260627_154859.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 41 - dice 0.889",
+        "GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth",
+        "TransUNet with Gumbel Top-K on Synapse Dataset (512x512) epoch 190 - dice 0.791",
     ),
     (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8907464146614075_epoch_50_20260627_155327.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 50 - dice 0.890",
+        "GumbelTopK_Synapse__epoch_250_dice_0.7876302003860474_20260703_164143.pth",
+        "TransUNet with Gumbel Top-K on Synapse Dataset (512x512) epoch 250 - dice 0.787",
     ),
     (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8927702903747559_epoch_57_20260627_155657.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 57 - dice 0.892",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8930007815361023_epoch_89_20260627_161251.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 89 - dice 0.893",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8934466242790222_epoch_107_20260627_162150.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 107 - dice 0.893",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__best_val_dice_0.8964883685112_epoch_125_20260627_163047.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 125 - dice 0.896",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__epoch_100_dice_0.878413200378418_20260627_161822.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 100 - dice 0.878",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__epoch_150_dice_0.8810567855834961_20260627_164311.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 150 - dice 0.881",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__epoch_200_dice_0.8858199119567871_20260627_170759.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 200 - dice 0.885",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__epoch_250_dice_0.8895947337150574_20260627_172642.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 250 - dice 0.889",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__epoch_270_LastEpoch_20260627_173222_dice_0.88946932554245.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 270 - dice 0.889",
-    ),
-    (
-        "GumbelTopK_BULoss_ACDC__epoch_50_dice_0.8907464146614075_20260627_155328.pth",
-        "TransUNet with Gumbel Top-K and BU Loss on ACDC Dataset (512x512) epoch 50 - dice 0.890",
+        "GumbelTopK_Synapse__epoch_270_LastEpoch_20260703_165205_dice_0.7854651808738708.pth",
+        "TransUNet with Gumbel Top-K on Synapse Dataset (512x512) epoch 270 - dice 0.785",
     ),
 ]
 
 BASE_TEST_ARGS = [
-    "--dataset", "ACDC",
+    "--dataset", "Synapse",
     "--vit_name", "R50-ViT-B_16",
-    "--ckpt_dir", "ckpt/ckpt_ACDC",
+    "--benchmark_dict", "benchmarkTest",
+    "--ckpt_dir", "ckpt/ckpt_Synapse",
     "--topk_attn", "0.50",
     "--use_gumbel_topk",
+    "--repeated_runs", "10",
+    "--gumbel_sampling_mode", "manual",
 ]
 
 
