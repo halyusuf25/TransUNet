@@ -26,6 +26,33 @@ CUDA_VISIBLE_DEVICES=4 python train.py \
          --ckpt GumbelTopK \
          --description "EndoVis2018_GumbelTopK - ratio 0.5"
 
+CUDA_VISIBLE_DEVICES=3 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 6 \
+         --img_size 512 \
+         --topk_attn 0.50 \
+         --use_ats \
+         --ckpt_dir ckpt/ckpt_EndoVis2018 \
+         --ckpt ATS50 \
+         --description "EndoVis2018_ATS - ratio 0.5"
+
+
+
+
+TopK
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset EndoVis2018 \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 6 \
+         --img_size 512 \
+         --topk_attn 0.50 \
+         --ckpt_dir ckpt/ckpt_EndoVis2018 \
+         --ckpt TopK50 \
+         --description "EndoVis2018_Topk - ratio 0.5"
+
 
 Gumbel-TopK + BU Loss
 
@@ -50,3 +77,35 @@ CUDA_VISIBLE_DEVICES=5 python train.py \
 
 
 
+CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
+  --viz_view grid \
+  --dataset EndoVis2018 \
+  --vit_name R50-ViT-B_16 \
+  --grid_rows 5 \
+  --grid_cols 5 \
+  --viz_out testing \
+  --viz_title "Comparing Models on EndoVis2018 Dataset" \
+  --grid_model_names Baseline TopK ATS Gumbel Gumbel-BULoss \
+  --grid_ckpts \
+    "ckpt/ckpt_EndoVis2018/BaselineFinal_EndoVis2018__best_val_dice_0.43721536352471463_epoch_247_20260628_110138.pth::--image_size 512" \
+    "ckpt/ckpt_EndoVis2018/TopK50_EndoVis2018__best_val_dice_0.2483151510932737_epoch_31_20260629_180751.pth::--topk_attn 0.5 --image_size 512" \
+    "ckpt/ckpt_EndoVis2018/ATS50_EndoVis2018__best_val_dice_0.25460184302514627_epoch_79_20260629_213649.pth::--topk_attn 0.5 --use_ats --image_size 512" \
+    "ckpt/ckpt_EndoVis2018/GumbelTopK_EndoVis2018__best_val_dice_0.28901255559319966_epoch_240_20260628_102653.pth::--topk_attn 0.5 --use_gumbel_topk --image_size 512" \
+    "ckpt/ckpt_EndoVis2018/GumbelTopK_BULoss_EndoVis2018__best_val_dice_0.2500708542414562_epoch_23_20260627_172210.pth::--topk_attn 0.5 --use_gumbel_topk --image_size 512"
+
+
+
+CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
+  --viz_view grid \
+  --dataset EndoVis2018 \
+  --vit_name R50-ViT-B_16 \
+  --grid_rows 10 \
+  --grid_cols 4 \
+  --viz_out testing \
+  --viz_title "Comparing Models on EndoVis2018 Dataset" \
+  --grid_model_names Baseline TopK ATS Gumbel \
+  --grid_ckpts \
+    "ckpt/ckpt_EndoVis2018/BaselineFinal_EndoVis2018__best_val_dice_0.43721536352471463_epoch_247_20260628_110138.pth::--image_size 512" \
+    "ckpt/ckpt_EndoVis2018/TopK50_EndoVis2018__best_val_dice_0.2483151510932737_epoch_31_20260629_180751.pth::--topk_attn 0.5 --image_size 512" \
+    "ckpt/ckpt_EndoVis2018/ATS50_EndoVis2018__best_val_dice_0.25460184302514627_epoch_79_20260629_213649.pth::--topk_attn 0.5 --use_ats --image_size 512" \
+    "ckpt/ckpt_EndoVis2018/GumbelTopK_EndoVis2018__best_val_dice_0.28901255559319966_epoch_240_20260628_102653.pth::--topk_attn 0.5 --use_gumbel_topk --image_size 512"

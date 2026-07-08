@@ -16,20 +16,58 @@ CUDA_VISIBLE_DEVICES=5 python train.py \
 
 Baseline run command:
 
-CUDA_VISIBLE_DEVICES=1 python train.py \
+CUDA_VISIBLE_DEVICES=0 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --use_se_block \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt SEBlock \
+         --description "Synapse_SEBlock"
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
          --dataset Synapse \
          --vit_name R50-ViT-B_16 \
          --max_epoch 270 \
          --batch_size 24 \
          --img_size 224 \
-         --ckpt_dir ckpt/ckpt_BTCV \
+
+         --ckpt_dir ckpt/ckpt_Synapse \
          --ckpt BaselineFinal \
          --description "Synapse_BaselineFinal"
+
+TopK
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.50 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt TopK50 \
+         --description "Synapse_TopK - ratio 0.5"
+
+ATS
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.50 \
+         --use_ats \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt ATS50 \
+         --description "Synapse_ATS - ratio 0.5"
 
 
 Gumbel-TopK
 
-CUDA_VISIBLE_DEVICES=1 python train.py \
+CUDA_VISIBLE_DEVICES=3 python train.py \
          --dataset Synapse \
          --vit_name R50-ViT-B_16 \
          --max_epoch 270 \
@@ -37,14 +75,14 @@ CUDA_VISIBLE_DEVICES=1 python train.py \
          --img_size 224 \
          --topk_attn 0.50 \
          --use_gumbel_topk \
-         --ckpt_dir ckpt/ckpt_BTCV \
+         --ckpt_dir ckpt/ckpt_Synapse \
          --ckpt GumbelTopK \
          --description "Synapse_GumbelTopK - ratio 0.5"
 
 
 Gumbel-TopK + BU Loss
 
-CUDA_VISIBLE_DEVICES=1 python train.py \
+CUDA_VISIBLE_DEVICES=2 python train.py \
          --dataset Synapse \
          --vit_name R50-ViT-B_16 \
          --max_epoch 270 \
@@ -59,6 +97,265 @@ CUDA_VISIBLE_DEVICES=1 python train.py \
          --tau_init 1.0 \
          --boundary_radius 1 \
          --ckpt_dir ckpt/ckpt_BTCV \
-         --ckpt GumbelTopK_BULoss \
-         --description "Synapse_GumbelTopK and BULoss - ratio 0.5"
+         --ckpt Gumbel50_BULoss1 \
+         --description "Synapse_GumbelTopK and BULoss (r=0.5) - N3x3"
 
+CUDA_VISIBLE_DEVICES=5 python tools/visualize.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.50 \
+         --use_gumbel_topk \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt TopK50_Synapse__epoch_250_dice_0.7912229895591736_20260702_013423.pth \
+         --viz \
+         --num_slices_to_overlay 4
+
+BULoss
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --use_bu_loss \
+         --buloss_option B \
+         --learn_tau \
+         --alpha 1.0 \
+         --tau_init 1.0 \
+         --boundary_radius 1 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt BULoss1 \
+         --description "Synapse with BULoss - N3x3"
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --use_bu_loss \
+         --buloss_option B \
+         --learn_tau \
+         --alpha 1.0 \
+         --tau_init 1.0 \
+         --boundary_radius 2 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt BULoss2 \
+         --description "Synapse with BULoss - N5x5"
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --use_bu_loss \
+         --buloss_option B \
+         --learn_tau \
+         --alpha 1.0 \
+         --tau_init 1.0 \
+         --boundary_radius 3 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt BULoss3 \
+         --description "Synapse with BULoss - N7x7"
+
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
+         --description "TransUNet Baseline for Synapse"
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 5 \
+         --topk_attn 0.5 \
+         --use_gumbel_topk \
+         --benchmark_dict benchmarkTest \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt GumbelTopK50_BuLoss_Synapse__best_val_dice_0.7860113382339478_epoch_140_20260628_081715.pth \
+         --description "TransUNet with GumbelTopK (r=0.5) and BULoss (N3x3) for Synapse"
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_ats \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth \
+         --description "TransUNet with ATS (r=0.5) for Synapse"
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth \
+         --description "TransUNet with ToK (r=0.5) for Synapse"
+
+
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --topk_attn 0.5 \
+         --use_gumbel_topk \
+         --
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt GumbelTopK50_Synapse__epoch_200_dice_0.7834523320198059_20260628_010957.pth \
+         --description "TransUNet with Gumbel (r=0.5) for Synapse - gumbel sampling mode is manual"
+
+
+
+
+abilation study tau fixed value:
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --use_bu_loss \
+         --buloss_option B \
+         --alpha 1.0 \
+         --tau 1.0 \
+         --boundary_radius 1 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt Tau1 \
+         --description "Synapse with BULoss - N3x3 - Fixed tau = 1.0"
+
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --use_bu_loss \
+         --buloss_option B \
+         --alpha 1.0 \
+         --tau 2.0 \
+         --boundary_radius 1 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt Tau2 \
+         --description "Synapse with BULoss - N3x3 - Fixed tau = 2.0"
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --use_bu_loss \
+         --buloss_option B \
+         --alpha 1.0 \
+         --tau 3.0 \
+         --boundary_radius 1 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt Tau2 \
+         --description "Synapse with BULoss - N3x3 - Fixed tau = 3.0"
+
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.5 \
+         --use_ats \
+         --ckpt_dir ckpt/ckpt_BTCV \
+         --ckpt testing \
+         --description "Synapse_testing" \
+         --verbose
+
+
+
+CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
+  --viz_view grid \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --grid_rows 5 \
+  --grid_cols 5 \
+  --num_slices_to_overlay 3 \
+  --viz_out testing \
+  --viz_title "Comparing Models on Synpase Datasets" \
+  --grid_model_names Baseline TopK ATS Gumbel Gumbel-BULoss \
+  --grid_ckpts \
+    "ckpt/ckpt_Synapse/BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth" \
+    "ckpt/ckpt_Synapse/TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth::--topk_attn 0.5" \
+    "ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats" \
+    "ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk" \
+    "ckpt/ckpt_Synapse/Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth::--topk_attn 0.5 --use_gumbel_topk"
+
+
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
+         --description "Synapse Baseline - Quantize" \
+         --quantize
+
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --benchmark_dict benchmark_quantize \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
+         --description "TransUNet Baseline for Synapse - (Quantize)" \
+         --quantize
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual\
+         --benchmark_dict benchmark_quantize \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth \
+         --description "TransUNet with GumbelTopK (r=0.5) and BULoss (N3x3) for Synapse - (Quantize)" \
+         --quantize
