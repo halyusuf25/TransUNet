@@ -9,6 +9,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from src.benchmark import benchmark_segmentation_model, build_benchmark_loader
+from src.quantize import collect_inc_awq_calib_inputs
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
@@ -448,26 +449,81 @@ def main():
 
 
     if args.quantize:
-        from networks.quantizer import AWQViTSegQuantizer
-        if args.dataset in ['Synapse', 'ACDC']:
-            db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
-        elif args.dataset in ['Cataract1k', 'EndoVis2018']:
-            db_calib = args.Dataset(base_dir=args.volume_path, split="test",)
+        from neural_compressor.torch.quantization import AWQConfig, prepare, convert
 
-        calib_loader = DataLoader(db_calib, batch_size=1, shuffle=False, num_workers=1)
- 
-        quantizer = AWQViTSegQuantizer(
-            model = net,
-            calib_loader = calib_loader,
-            w_bit=4,
-            q_group_size=128,
-            n_calib_batches=args.quantize_calibrate_batch_size,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            args=args,
+        if args.dataset in ["Synapse", "ACDC"]:
+            db_calib = args.Dataset(
+                base_dir=args.volume_path,
+                split="test_vol",
+                list_dir=args.list_dir,
+            )
+        elif args.dataset in ["Cataract1k", "EndoVis2018"]:
+            db_calib = args.Dataset(
+                base_dir=args.volume_path,
+                split="test",
+            )
+        else:
+            raise ValueError(f"Unsupported dataset for AWQ calibration: {args.dataset}")
+
+        calib_loader = DataLoader(
+            db_calib,
+            batch_size=1,
+            shuffle=False,
+            num_workers=1,
         )
-        
-        logging.info(f"Calibrating model on {len(calib_loader)} batches from test set.")
-        net = quantizer.quantize()  
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        net.eval().to(device)
+
+        calib_inputs = collect_inc_awq_calib_inputs(
+            args=args,
+            calib_loader=calib_loader,
+            max_forwards=args.quantize_calibrate_batch_size,
+            chunk_size=min(max(1, int(args.batch_size)), 8),
+        )
+
+        if not calib_inputs:
+            raise RuntimeError("No calibration inputs were collected for INC AWQ.")
+
+        quant_config = AWQConfig(
+            dtype="int",
+            bits=4,
+            group_size=128,
+            use_sym=False,
+            use_auto_scale=True,
+            use_auto_clip=True,
+            folding=False,
+        )
+
+        # Minimal/safe first pass:
+        # Quantize only Linear layers inside transformer.encoder.layer.
+        # This avoids accidentally quantizing SE MLPs or other helper Linear layers.
+        for name, module in net.named_modules():
+            if isinstance(module, nn.Linear) and not name.startswith("transformer.encoder.layer."):
+                quant_config.set_local(name, AWQConfig(dtype="fp32"))
+
+        example_inputs = calib_inputs[0].to(device, non_blocking=True)
+
+        logging.info(
+            "Running Intel Neural Compressor AWQ: %d calibration forwards, example input shape=%s",
+            len(calib_inputs),
+            tuple(example_inputs.shape),
+        )
+
+        net = prepare(
+            net,
+            quant_config,
+            example_inputs=example_inputs,
+        )
+
+        with torch.no_grad():
+            for x in calib_inputs:
+                net(x.to(device, non_blocking=True))
+
+        net = convert(net)
+        net.eval().to(device)
+
+        logging.info("Intel Neural Compressor AWQ quantization finished.")
         logging.info(f"Model quantized successfully.")
         
         #drop SE block after quantization
