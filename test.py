@@ -9,7 +9,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from src.benchmark import benchmark_segmentation_model, build_benchmark_loader
-from src.quantize import collect_inc_awq_calib_inputs
+from src.quantize import SEViTSegQuantizer, collect_inc_awq_calib_inputs
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
@@ -449,8 +449,6 @@ def main():
 
 
     if args.quantize:
-        from neural_compressor.torch.quantization import AWQConfig, prepare, convert
-
         if args.dataset in ["Synapse", "ACDC"]:
             db_calib = args.Dataset(
                 base_dir=args.volume_path,
@@ -471,60 +469,87 @@ def main():
             shuffle=False,
             num_workers=1,
         )
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        if torch.cuda.is_available():
+            device = "cuda"
+        else:
+            ValueError("No CUDA device available for quantization. Please ensure that a CUDA-capable GPU is available.")
+            
         net.eval().to(device)
 
-        calib_inputs = collect_inc_awq_calib_inputs(
-            args=args,
-            calib_loader=calib_loader,
-            max_forwards=args.quantize_calibrate_batch_size,
-            chunk_size=min(max(1, int(args.batch_size)), 8),
-        )
+        if args.use_se_block:
+            logging.info(
+                "Running SE-guided activation-aware W4 grouped weight-only quantization: "
+                "n_calib_batches=%d group_size=%d",
+                args.quantize_calibrate_batch_size,
+                128,
+            )
+            quantizer = SEViTSegQuantizer(
+                model=net,
+                calib_loader=calib_loader,
+                w_bit=4,
+                q_group_size=128,
+                n_calib_batches=args.quantize_calibrate_batch_size,
+                device=device,
+                args=args,
+            )
+            net = quantizer.quantize()
+            net.eval().to(device)
+            logging.info("SE-guided W4 grouped weight-only quantization finished.")
+            logging.info("Model quantized successfully.")
+        else:
+            from neural_compressor.torch.quantization import AWQConfig, prepare, convert
 
-        if not calib_inputs:
-            raise RuntimeError("No calibration inputs were collected for INC AWQ.")
+            calib_inputs = collect_inc_awq_calib_inputs(
+                args=args,
+                calib_loader=calib_loader,
+                max_forwards=args.quantize_calibrate_batch_size,
+                chunk_size=min(max(1, int(args.batch_size)), 8),
+            )
 
-        quant_config = AWQConfig(
-            dtype="int",
-            bits=4,
-            group_size=128,
-            use_sym=False,
-            use_auto_scale=True,
-            use_auto_clip=True,
-            folding=False,
-        )
+            if not calib_inputs:
+                raise RuntimeError("No calibration inputs were collected for INC AWQ.")
 
-        # Minimal/safe first pass:
-        # Quantize only Linear layers inside transformer.encoder.layer.
-        # This avoids accidentally quantizing SE MLPs or other helper Linear layers.
-        for name, module in net.named_modules():
-            if isinstance(module, nn.Linear) and not name.startswith("transformer.encoder.layer."):
-                quant_config.set_local(name, AWQConfig(dtype="fp32"))
+            quant_config = AWQConfig(
+                dtype="int",
+                bits=4,
+                group_size=128,
+                use_sym=False,
+                use_auto_scale=True,
+                use_auto_clip=True,
+                folding=False,
+            )
 
-        example_inputs = calib_inputs[0].to(device, non_blocking=True)
+            # Minimal/safe first pass:
+            # Quantize only Linear layers inside transformer.encoder.layer.
+            # This avoids accidentally quantizing SE MLPs or other helper Linear layers.
+            for name, module in net.named_modules():
+                if isinstance(module, nn.Linear) and not name.startswith("transformer.encoder.layer."):
+                    quant_config.set_local(name, AWQConfig(dtype="fp32"))
 
-        logging.info(
-            "Running Intel Neural Compressor AWQ: %d calibration forwards, example input shape=%s",
-            len(calib_inputs),
-            tuple(example_inputs.shape),
-        )
+            example_inputs = calib_inputs[0].to(device, non_blocking=True)
 
-        net = prepare(
-            net,
-            quant_config,
-            example_inputs=example_inputs,
-        )
+            logging.info(
+                "Running Intel Neural Compressor AWQ: %d calibration forwards, example input shape=%s",
+                len(calib_inputs),
+                tuple(example_inputs.shape),
+            )
 
-        with torch.no_grad():
-            for x in calib_inputs:
-                net(x.to(device, non_blocking=True))
+            net = prepare(
+                net,
+                quant_config,
+                example_inputs=example_inputs,
+            )
 
-        net = convert(net)
-        net.eval().to(device)
+            with torch.no_grad():
+                for x in calib_inputs:
+                    net(x.to(device, non_blocking=True))
 
-        logging.info("Intel Neural Compressor AWQ quantization finished.")
-        logging.info(f"Model quantized successfully.")
+            net = convert(net)
+            net.eval().to(device)
+
+            logging.info("Intel Neural Compressor AWQ quantization finished.")
+            logging.info("Model quantized successfully.")
         
         #drop SE block after quantization
         se_layers = getattr(net.transformer.encoder, "SELayer", None)

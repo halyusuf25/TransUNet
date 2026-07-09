@@ -427,14 +427,10 @@ class Encoder(nn.Module):
             attn_weights.append(attn)
             
             if use_se and se_layer is not None:
-                # se_in = hidden_states.transpose(1, 2).unsqueeze(2)  # [B, C, 1, N]
-                # se_out, _ = se_layer(se_in)
-                # hidden_states = se_out.squeeze(2).transpose(1, 2)   # [B, N, C]
-                # se_in = hidden_states.transpose(1, 2).unsqueeze(2)  # [B, C, 1, N]
-                h_se, scale = se_layer(hidden_states)
+                hidden_states, scale = se_layer(hidden_states)
                 if self.args.verbose:
                     print(f"SE Layer scale shape at Encoder layer#{layer_block_id}: {scale.shape}")
-                    print(f"Encoder layer#{layer_block_id} hidden_states shape after SE block: {h_se.shape}")
+                    print(f"Encoder layer#{layer_block_id} hidden_states shape after SE block: {hidden_states.shape}")
                     
                 se_scale.append(scale)
         

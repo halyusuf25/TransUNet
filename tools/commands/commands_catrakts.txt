@@ -19,8 +19,8 @@ CUDA_VISIBLE_DEVICES=2 python train.py \
          --img_size 224 \
          --use_se_block \
          --ckpt_dir ckpt/ckpt_Cataract1k \
-         --ckpt SEBlock \
-         --description "Cataract1k_SEBlock"
+         --ckpt SEBlockIntoEncoder_Fixed \
+         --description "Cataract1k_SEBlockIntoEncoder_Fixed"
 
 
 Gumbel-TopK
@@ -311,8 +311,8 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
          --batch_size 24 \
          --img_size 224 \
          --repeated_runs 10 \
-         --benchmark_dict benchmark_quantize \
-         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --benchmark_dict benchmark_quantize/ \
+         --ckpt_dir ../test/TransUNet/ckpt/ckpt_Cataract1k \
          --ckpt BaselineFinal_Cataract1k__best_val_dice_0.9001339312642812_epoch_115_20260702_081719.pth \
-         --description "TransUNet Baseline for Cataract1k - (Quantize)" \
+         --description "TransUNet Baseline for Cataract1k - (AWQ - Quantize)" \
          --quantize

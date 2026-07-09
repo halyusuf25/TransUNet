@@ -16,7 +16,7 @@ CUDA_VISIBLE_DEVICES=5 python train.py \
 
 Baseline run command:
 
-CUDA_VISIBLE_DEVICES=0 python train.py \
+CUDA_VISIBLE_DEVICES=1 python train.py \
          --dataset Synapse \
          --vit_name R50-ViT-B_16 \
          --max_epoch 260 \
@@ -24,8 +24,8 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
          --img_size 224 \
          --use_se_block \
          --ckpt_dir ckpt/ckpt_Synapse \
-         --ckpt SEBlock \
-         --description "Synapse_SEBlock"
+         --ckpt SEBlockIntoEncoder_Fixed \
+         --description "Synapse_SEBlockIntoEncoder_Fixed"
 
 
 CUDA_VISIBLE_DEVICES=4 python train.py \
@@ -337,10 +337,10 @@ CUDA_VISIBLE_DEVICES=1 python test.py \
          --batch_size 24 \
          --img_size 224 \
          --repeated_runs 10 \
-         --benchmark_dict benchmark_quantize \
-         --ckpt_dir ckpt/ckpt_Synapse \
+         --benchmark_dict benchmark_quantize/ \
+         --ckpt_dir ../test/TransUNet/ckpt/ckpt_Synapse \
          --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
-         --description "TransUNet Baseline for Synapse - (Quantize)" \
+         --description "TransUNet Baseline for Synapse - (AWQ - Quantization)" \
          --quantize
 
 
