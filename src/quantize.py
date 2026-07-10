@@ -519,14 +519,14 @@ def se_quant_sensitivity_aux_loss(
 
 class SEViTSegQuantizer:
     """
-    SE-guided activation-aware W4 grouped weight-only quantizer for ViT segmentation.
+    Activation-aware W4 grouped weight-only quantizer for ViT segmentation.
 
     The quantizer only converts Transformer encoder Linear layers
     (attn.query/key/value/out and ffn.fc1/fc2). LayerNorm, attention matmul,
     softmax, dropout, decoder layers, segmentation heads, SE MLPs, and embedding
-    backbones remain floating point. SE-guided saliency is the calibration-set
-    average of activation magnitude multiplied by the trained SE gate:
-    mean_x(g_l,c(x) * mean_tokens(abs(activation_l,c(x)))).
+    backbones remain floating point. saliency_source='activation' provides an
+    ordinary AWQ-style activation baseline, while saliency_source='se_aux'
+    weights activation saliency by the trained calibration-only SE estimator.
     """
 
     target_linear_paths = (
@@ -547,13 +547,21 @@ class SEViTSegQuantizer:
         n_calib_batches=8,
         device=None,
         args=None,
+        saliency_source: str = "activation",
     ):
+        if saliency_source not in ("activation", "se_aux"):
+            raise ValueError(
+                "saliency_source must be 'activation' or 'se_aux', got {!r}.".format(
+                    saliency_source
+                )
+            )
         self.model = model
         self.calib_loader = calib_loader
         self.w_bit = int(w_bit)
         self.q_group_size = int(q_group_size)
         self.n_calib_batches = int(n_calib_batches)
         self.args = args
+        self.saliency_source = saliency_source
         self.device = torch.device(device) if device is not None else self._model_device()
         self.calib_chunk_size = min(max(1, int(getattr(args, "batch_size", 1))), 8)
         self.max_mse_samples = max(1, min(32, self.n_calib_batches * self.calib_chunk_size))
@@ -569,7 +577,7 @@ class SEViTSegQuantizer:
         self.total_encoder_linears = sum(
             1 for block in self.blocks for module in block.modules() if isinstance(module, nn.Linear)
         )
-        logger.info("SE-guided quantizer found %d encoder blocks.", len(self.blocks))
+        logger.info("Custom W4 quantizer found %d encoder blocks.", len(self.blocks))
         logger.info(
             "Transformer encoder Linear layers found: %d; target layers per block: %s",
             self.total_encoder_linears,
@@ -606,17 +614,23 @@ class SEViTSegQuantizer:
         self.model.eval().to(self.device)
         encoder_args, had_drop_attr, old_drop = self._set_drop_se_block(False)
         try:
-            self._validate_se_gates_available_and_mode_consistent()
+            logger.info("Calibration saliency source: %s", self.saliency_source)
+            if self.saliency_source == "se_aux":
+                self._validate_se_gates_available_and_mode_consistent()
             calib = self._collect_saliency_and_mse_inputs()
             scales_list = self._search_and_apply_scales(calib)
             quantized = self._convert_target_linears_to_w4()
         finally:
             self._restore_drop_se_block(encoder_args, had_drop_attr, old_drop)
-        logger.info("SE-guided scale groups applied: %d", len(scales_list))
+        logger.info("Custom W4 scale groups applied: %d", len(scales_list))
         logger.info(
             "Total Transformer encoder Linear layers: %d; W4 grouped linears quantized: %d.",
             self.total_encoder_linears,
             quantized,
+        )
+        logger.info(
+            "Custom W4 quantization completed with saliency_source=%s.",
+            self.saliency_source,
         )
         return self.model
 
@@ -642,7 +656,7 @@ class SEViTSegQuantizer:
             if x.numel() == 0:
                 continue
             return x[: self.calib_chunk_size].to(self.device, non_blocking=True)
-        raise RuntimeError("No calibration inputs were available for SE-guided quantization.")
+        raise RuntimeError("No calibration inputs were available for custom W4 quantization.")
 
     def _validate_se_gates_available_and_mode_consistent(self):
         se_layers = getattr(self.encoder, "SELayer", None)
@@ -660,6 +674,11 @@ class SEViTSegQuantizer:
             "Post-quantization SE drop expected: %s.",
             bool(se_calib_only),
         )
+        if not se_calib_only:
+            raise RuntimeError(
+                "saliency_source='se_aux' requires calibration-only SE behavior; "
+                "set --se_calib_only."
+            )
         if not se_found:
             raise RuntimeError(
                 "SE-guided quantization requires one SELayer per encoder block, but the "
@@ -696,17 +715,10 @@ class SEViTSegQuantizer:
             max_diff,
             tolerance,
         )
-        if se_calib_only:
-            if active:
-                raise RuntimeError(
-                    "Expected calibration-only SE auxiliary block, but SE changes logits. "
-                    "max logit diff with drop_se_block toggle: {:.8g}".format(max_diff)
-                )
-        elif not active:
+        if active:
             raise RuntimeError(
-                "Expected active SE, but SE does not affect logits; use --se_calib_only "
-                "for SE-auxiliary-block-only quantization. max logit diff with "
-                "drop_se_block toggle: {:.8g}".format(max_diff)
+                "Expected calibration-only SE auxiliary block, but SE changes logits. "
+                "max logit diff with drop_se_block toggle: {:.8g}".format(max_diff)
             )
 
     def _collect_saliency_and_mse_inputs(self):
@@ -746,7 +758,13 @@ class SEViTSegQuantizer:
                         captured.clear()
                         chunk = chunk.to(self.device, non_blocking=True)
                         output = self.model(chunk)
-                        _logits, se_scales = _extract_logits_and_se_scales(output, len(self.blocks))
+                        if self.saliency_source == "se_aux":
+                            _logits, se_scales = _extract_logits_and_se_scales(
+                                output,
+                                len(self.blocks),
+                            )
+                        else:
+                            se_scales = None
                         total_images += int(chunk.shape[0])
 
                         for block_idx, block in enumerate(self.blocks):
@@ -757,34 +775,46 @@ class SEViTSegQuantizer:
                                     f"Calibration hooks did not capture both attn and ffn inputs for block {block_idx}."
                                 )
 
-                            gate = _normalize_se_gate_tensor(
-                                se_scales[block_idx],
-                                expected_channels=block.hidden_size,
-                            ).to(device=attn_in.device)
-
                             attn_act = _activation_channel_mean(attn_in)
                             ffn_act = _activation_channel_mean(ffn_in)
-                            if gate.shape != attn_act.shape:
-                                raise ValueError(
-                                    "Block {} gate shape {} does not match attn activation shape {}.".format(
-                                        block_idx, tuple(gate.shape), tuple(attn_act.shape)
+                            if self.saliency_source == "se_aux":
+                                gate = _normalize_se_gate_tensor(
+                                    se_scales[block_idx],
+                                    expected_channels=block.hidden_size,
+                                ).to(device=attn_in.device)
+                                if gate.shape != attn_act.shape:
+                                    raise ValueError(
+                                        "Block {} gate shape {} does not match attn activation shape {}.".format(
+                                            block_idx, tuple(gate.shape), tuple(attn_act.shape)
+                                        )
                                     )
-                                )
-                            if gate.shape != ffn_act.shape:
-                                raise ValueError(
-                                    "Block {} gate shape {} does not match ffn activation shape {}.".format(
-                                        block_idx, tuple(gate.shape), tuple(ffn_act.shape)
+                                if gate.shape != ffn_act.shape:
+                                    raise ValueError(
+                                        "Block {} gate shape {} does not match ffn activation shape {}.".format(
+                                            block_idx, tuple(gate.shape), tuple(ffn_act.shape)
+                                        )
                                     )
-                                )
-
-                            attn_weighted = attn_act * gate
-                            ffn_weighted = ffn_act * gate
+                                attn_weighted = attn_act * gate
+                                ffn_weighted = ffn_act * gate
+                                sample_count = int(gate.shape[0])
+                            else:
+                                if attn_act.shape[0] != ffn_act.shape[0]:
+                                    raise ValueError(
+                                        "Block {} attention and FFN activation batch sizes differ: {} vs {}.".format(
+                                            block_idx,
+                                            attn_act.shape[0],
+                                            ffn_act.shape[0],
+                                        )
+                                    )
+                                attn_weighted = attn_act
+                                ffn_weighted = ffn_act
+                                sample_count = int(attn_act.shape[0])
 
                             attn_sum = attn_weighted.sum(dim=0).detach().cpu().double()
                             ffn_sum = ffn_weighted.sum(dim=0).detach().cpu().double()
                             attn_sums[block_idx] = attn_sum if attn_sums[block_idx] is None else attn_sums[block_idx] + attn_sum
                             ffn_sums[block_idx] = ffn_sum if ffn_sums[block_idx] is None else ffn_sums[block_idx] + ffn_sum
-                            counts[block_idx] += int(gate.shape[0])
+                            counts[block_idx] += sample_count
 
                             attn_mse_counts[block_idx] = self._cache_mse_input(
                                 attn_mse_inputs[block_idx],
@@ -818,7 +848,7 @@ class SEViTSegQuantizer:
             self._log_saliency_stats(block_idx, "ffn", ffn_sal)
 
         logger.info(
-            "SE-guided calibration images/slices used: %d from %d dataloader batches.",
+            "Calibration images/slices used: %d from %d dataloader batches.",
             total_images,
             processed_batches,
         )

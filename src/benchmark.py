@@ -4,7 +4,7 @@
 # - Uses real samples from your test DataLoader (no dummy tensors)
 # - Throughput (img/s), Latency (mean & p50/p90/p95/p99 in ms)
 # - #Params, FLOPs (GFLOPs)  --- includes custom counting for Attention/SHSA
-# - Optional quantized-model counting for AWQ WQLinear layers
+# - Logical quantized-model counting for AWQ WQLinear and custom W4GroupedLinear layers
 # - Clean, modular, easy to extend
 # ---------------------------------------------------------------------------
 
@@ -22,6 +22,7 @@ import numpy as np
 
 from fvcore.nn import FlopCountAnalysis
 from thop import profile
+from src.quantize import W4GroupedLinear
 
 try:
     from awq.quantize.qmodule import WQLinear
@@ -157,19 +158,17 @@ def _linear_like_macs(x: torch.Tensor, in_features: int, out_features: int) -> i
 
 
 def count_parameters_quantized(model: nn.Module) -> ParameterCounts:
-    """Count logical parameters for quantized models, treating WQLinear as dense."""
+    """Count logical parameters for quantized linear modules as dense weights."""
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
-    if WQLinear is None:
-        return ParameterCounts(trainable=int(trainable_params), total=int(total_params))
 
-    def _logical_wqlinear_params(wq: nn.Module) -> int:
-        in_features = getattr(wq, "in_features", None)
-        out_features = getattr(wq, "out_features", None)
+    def _logical_linear_params(module: nn.Module) -> int:
+        in_features = getattr(module, "in_features", None)
+        out_features = getattr(module, "out_features", None)
         if in_features is None or out_features is None:
-            return sum(p.numel() for p in wq.parameters(recurse=False))
+            return sum(p.numel() for p in module.parameters(recurse=False))
         count = int(in_features) * int(out_features)
-        bias = getattr(wq, "bias", None)
+        bias = getattr(module, "bias", None)
         if bias is not None:
             count += int(bias.numel())
         return count
@@ -178,10 +177,27 @@ def count_parameters_quantized(model: nn.Module) -> ParameterCounts:
     adjusted_total = int(total_params)
     seen: set[int] = set()
     for mod in model.modules():
+        if isinstance(mod, W4GroupedLinear):
+            if id(mod) in seen:
+                continue
+            seen.add(id(mod))
+            direct_params = list(mod.parameters(recurse=False))
+            stored = sum(p.numel() for p in direct_params)
+            stored_trainable = sum(p.numel() for p in direct_params if p.requires_grad)
+            logical = _logical_linear_params(mod)
+            adjusted_total += logical - int(stored)
+            if stored_trainable > 0:
+                adjusted_trainable += logical - int(stored_trainable)
+            continue
+
         wq = None
-        if isinstance(mod, WQLinear):
+        if WQLinear is not None and isinstance(mod, WQLinear):
             wq = mod
-        elif hasattr(mod, "inner") and isinstance(getattr(mod, "inner"), WQLinear):
+        elif (
+            WQLinear is not None
+            and hasattr(mod, "inner")
+            and isinstance(getattr(mod, "inner"), WQLinear)
+        ):
             wq = getattr(mod, "inner")
         if wq is None or id(wq) in seen:
             continue
@@ -189,7 +205,7 @@ def count_parameters_quantized(model: nn.Module) -> ParameterCounts:
         direct_params = list(wq.parameters(recurse=False))
         stored = sum(p.numel() for p in direct_params)
         stored_trainable = sum(p.numel() for p in direct_params if p.requires_grad)
-        logical = _logical_wqlinear_params(wq)
+        logical = _logical_linear_params(wq)
         adjusted_total += logical - int(stored)
         if stored_trainable > 0:
             adjusted_trainable += logical - int(stored_trainable)

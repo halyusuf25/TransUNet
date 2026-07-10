@@ -390,6 +390,18 @@ def main():
         raise ValueError("fold_id must be between 0 and 4")
     if args.se_calib_only and not args.use_se_block:
         raise ValueError("--se_calib_only requires --use_se_block.")
+    if args.quant_backend == "inc_awq" and args.saliency_source != "activation":
+        raise ValueError(
+            "--quant_backend inc_awq requires --saliency_source activation; "
+            "SE-auxiliary saliency is supported only by custom_w4."
+        )
+    if args.saliency_source == "se_aux":
+        if args.quant_backend != "custom_w4":
+            raise ValueError("--saliency_source se_aux requires --quant_backend custom_w4.")
+        if not args.use_se_block:
+            raise ValueError("--saliency_source se_aux requires --use_se_block.")
+        if not args.se_calib_only:
+            raise ValueError("--saliency_source se_aux requires --se_calib_only.")
     
     # name the same snapshot defined in train script!
     args.exp = 'TU_' + dataset_name + str(args.img_size)
@@ -495,12 +507,16 @@ def main():
             
         net.eval().to(device)
 
-        if args.use_se_block:
+        logging.info("Quantization backend: %s", args.quant_backend)
+        logging.info("Saliency source: %s", args.saliency_source)
+
+        if args.quant_backend == "custom_w4":
             logging.info(
-                "Running SE-guided activation-aware W4 grouped weight-only quantization: "
-                "n_calib_batches=%d group_size=%d",
+                "Running custom activation-aware W4 grouped weight-only quantization: "
+                "n_calib_batches=%d group_size=%d saliency_source=%s",
                 args.quantize_calibrate_batch_size,
                 128,
+                args.saliency_source,
             )
             quantizer = SEViTSegQuantizer(
                 model=net,
@@ -510,12 +526,16 @@ def main():
                 n_calib_batches=args.quantize_calibrate_batch_size,
                 device=device,
                 args=args,
+                saliency_source=args.saliency_source,
             )
             net = quantizer.quantize()
             net.eval().to(device)
-            logging.info("SE-guided W4 grouped weight-only quantization finished.")
+            logging.info(
+                "Custom W4 grouped weight-only quantization finished with saliency_source=%s.",
+                args.saliency_source,
+            )
             logging.info("Model quantized successfully.")
-        else:
+        elif args.quant_backend == "inc_awq":
             from neural_compressor.torch.quantization import AWQConfig, prepare, convert
 
             calib_inputs = collect_inc_awq_calib_inputs(
@@ -568,6 +588,8 @@ def main():
 
             logging.info("Intel Neural Compressor AWQ quantization finished.")
             logging.info("Model quantized successfully.")
+        else:
+            raise ValueError(f"Unsupported quantization backend: {args.quant_backend}")
         
         # Drop only calibration-only SE auxiliary blocks after quantization.
         se_layers = getattr(net.transformer.encoder, "SELayer", None)

@@ -75,6 +75,28 @@ def add_quantization_args(parser):
     parser.add_argument('--quantize', action='store_true', help='whether to quantize the model')
     parser.add_argument('--quantize_calibrate_batch_size', type=int, default=8,
                         help='batch size for calibration (default: 8)')
+    parser.add_argument(
+        '--quant_backend',
+        type=str,
+        default='custom_w4',
+        choices=['custom_w4', 'inc_awq'],
+        help=(
+            "Quantization implementation. custom_w4 uses the repository's "
+            'W4GroupedLinear backend; inc_awq uses Intel Neural Compressor AWQ.'
+        ),
+    )
+    parser.add_argument(
+        '--saliency_source',
+        type=str,
+        default='activation',
+        choices=['activation', 'se_aux'],
+        help=(
+            'Channel saliency source for custom_w4 quantization. '
+            'activation uses ordinary activation magnitude; '
+            'se_aux uses activation magnitude weighted by the trained '
+            'calibration-only SE estimator.'
+        ),
+    )
     parser.add_argument('--drop_se_block', action='store_true', help='whether to drop SE block during quantization')
     return parser
 
