@@ -123,6 +123,17 @@ def trainer(args, model, snapshot_path, teacher_model=None):
     writer = SummaryWriter(args.tensorboard_run_dir)
     logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
     logging.info("{} val iterations per validation".format(len(valloader)))
+    se_aux_loss_fn = None
+    if getattr(args, "use_se_aux_loss", False):
+        from src.quantize import se_quant_sensitivity_aux_loss
+
+        se_aux_loss_fn = se_quant_sensitivity_aux_loss
+        logging.info(
+            "SE auxiliary sensitivity loss enabled: weight=%.8g group_size=%d w_bit=%d",
+            float(args.se_aux_weight),
+            int(args.se_aux_group_size),
+            int(args.se_aux_w_bit),
+        )
 
     is_primary_process = _is_primary_process()
     heatmaps_enabled = (
@@ -158,6 +169,7 @@ def trainer(args, model, snapshot_path, teacher_model=None):
     performance = best_performance
     iterator = tqdm(range(max_epoch), ncols=70)
     last_bu_details = None
+    first_se_aux_loss_logged = False
 
     for epoch_num in iterator:
         epoch_index = epoch_num + 1
@@ -167,6 +179,8 @@ def trainer(args, model, snapshot_path, teacher_model=None):
         epoch_total_loss = 0.0
         epoch_ce_loss = 0.0
         epoch_dice_loss = 0.0
+        epoch_se_aux_loss = 0.0
+        epoch_se_aux_count = 0
         epoch_batch_count = 0
 
         for i_batch, sampled_batch in enumerate(trainloader):
@@ -192,11 +206,12 @@ def trainer(args, model, snapshot_path, teacher_model=None):
 
             image_batch, label_batch = sampled_batch["image"], sampled_batch["label"]
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
-            outputs, _, features, _ = model(image_batch)
+            outputs, _, features, se_scales = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
             loss_dice = dice_loss(outputs, label_batch, softmax=True)
             details = None
             kd_loss = None
+            se_aux_loss_value = None
 
             if args.use_kd and teacher_model is not None:
                 with torch.no_grad():
@@ -229,9 +244,23 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             else:
                 loss = (1 - lambda_) * loss_dice + lambda_ * loss_ce
 
+            if se_aux_loss_fn is not None:
+                se_aux_loss_value = se_aux_loss_fn(
+                    model=model,
+                    se_scales=se_scales,
+                    group_size=args.se_aux_group_size,
+                    w_bit=args.se_aux_w_bit,
+                )
+                loss = loss + float(args.se_aux_weight) * se_aux_loss_value
+
             epoch_total_loss += loss.item()
             epoch_ce_loss += loss_ce.item()
             epoch_dice_loss += loss_dice.item()
+            se_aux_loss_scalar = None
+            if se_aux_loss_value is not None:
+                se_aux_loss_scalar = float(se_aux_loss_value.detach().item())
+                epoch_se_aux_loss += se_aux_loss_scalar
+                epoch_se_aux_count += 1
             epoch_batch_count += 1
 
             optimizer.zero_grad()
@@ -268,6 +297,11 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar("info/total_loss", loss, iter_num)
             writer.add_scalar("info/loss_ce", loss_ce, iter_num)
             writer.add_scalar("info/loss_dice", loss_dice, iter_num)
+            if se_aux_loss_value is not None:
+                writer.add_scalar("info/se_aux_loss", se_aux_loss_value, iter_num)
+                if not first_se_aux_loss_logged:
+                    logging.info("First observed se_aux_loss: %.8g", se_aux_loss_scalar)
+                    first_se_aux_loss_logged = True
             
             if args.use_bu_loss:
                 tau_value = float(bu_loss.get_tau().detach().item())
@@ -275,24 +309,47 @@ def trainer(args, model, snapshot_path, teacher_model=None):
 
             if args.use_kd and teacher_model is not None:
                 writer.add_scalar("info/loss_kd", kd_loss, iter_num)
-                logging.info(
-                    "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f, loss_kd: %f",
-                    epoch_index,
-                    iter_num,
-                    loss.item(),
-                    loss_dice.item(),
-                    loss_ce.item(),
-                    kd_loss.item(),
-                )
+                if se_aux_loss_scalar is not None:
+                    logging.info(
+                        "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f, loss_kd: %f, se_aux_loss: %f",
+                        epoch_index,
+                        iter_num,
+                        loss.item(),
+                        loss_dice.item(),
+                        loss_ce.item(),
+                        kd_loss.item(),
+                        se_aux_loss_scalar,
+                    )
+                else:
+                    logging.info(
+                        "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f, loss_kd: %f",
+                        epoch_index,
+                        iter_num,
+                        loss.item(),
+                        loss_dice.item(),
+                        loss_ce.item(),
+                        kd_loss.item(),
+                    )
             else:
-                logging.info(
-                    "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f",
-                    epoch_index,
-                    iter_num,
-                    loss.item(),
-                    loss_dice.item(),
-                    loss_ce.item(),
-                )
+                if se_aux_loss_scalar is not None:
+                    logging.info(
+                        "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f, se_aux_loss: %f",
+                        epoch_index,
+                        iter_num,
+                        loss.item(),
+                        loss_dice.item(),
+                        loss_ce.item(),
+                        se_aux_loss_scalar,
+                    )
+                else:
+                    logging.info(
+                        "epoch %d iteration %d : loss : %f, loss_dice: %f, loss_ce: %f",
+                        epoch_index,
+                        iter_num,
+                        loss.item(),
+                        loss_dice.item(),
+                        loss_ce.item(),
+                    )
 
             # if iter_num % 20 == 0:
             #     _log_train_images(writer, image_batch, label_batch, outputs, iter_num)
@@ -304,6 +361,10 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar("epoch/total_loss", mean_total_loss, epoch_index)
             writer.add_scalar("epoch/loss_ce", mean_ce_loss, epoch_index)
             writer.add_scalar("epoch/loss_dice", mean_dice_loss, epoch_index)
+            mean_se_aux_loss = None
+            if epoch_se_aux_count > 0:
+                mean_se_aux_loss = epoch_se_aux_loss / epoch_se_aux_count
+                writer.add_scalar("epoch/se_aux_loss", mean_se_aux_loss, epoch_index)
             
             if args.use_bu_loss:
                 tau_value = float(bu_loss.get_tau().detach().item())
@@ -312,14 +373,25 @@ def trainer(args, model, snapshot_path, teacher_model=None):
                     _log_bu_epoch_details(writer, last_bu_details, epoch_index)
 
             epoch_end_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            logging.info(
-                "epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, timestamp: %s",
-                epoch_index,
-                mean_total_loss,
-                mean_ce_loss,
-                mean_dice_loss,
-                epoch_end_timestamp,
-            )
+            if mean_se_aux_loss is not None:
+                logging.info(
+                    "epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, se_aux_loss : %f, timestamp: %s",
+                    epoch_index,
+                    mean_total_loss,
+                    mean_ce_loss,
+                    mean_dice_loss,
+                    mean_se_aux_loss,
+                    epoch_end_timestamp,
+                )
+            else:
+                logging.info(
+                    "epoch %d : total_loss : %f, loss_ce : %f, loss_dice : %f, timestamp: %s",
+                    epoch_index,
+                    mean_total_loss,
+                    mean_ce_loss,
+                    mean_dice_loss,
+                    epoch_end_timestamp,
+                )
 
         if should_save_heatmap_this_epoch and pending_heatmap_samples:
             missing_samples = sorted(list(pending_heatmap_samples))

@@ -316,3 +316,52 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
          --ckpt BaselineFinal_Cataract1k__best_val_dice_0.9001339312642812_epoch_115_20260702_081719.pth \
          --description "TransUNet Baseline for Cataract1k - (AWQ - Quantize)" \
          --quantize
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --max_epochs 260 \
+  --ckpt_dir ckpt/ckpt_Cataract1k/ \
+  --ckpt SE_AUX_Calib \
+  --use_se_block \
+  --se_calib_only \
+  --use_se_aux_loss \
+  --se_aux_weight 0.01 \
+  --se_aux_group_size 128 \
+  --se_aux_w_bit 4 \
+  --description "TransUNet Baseline for Cataract1k - (SE-Aux-Calib-Block Quantization)"
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+          --dataset Cataract1k \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ckpt/ckpt_Cataract1k/ \
+          --ckpt SE_AUX_Calib_Cataract1k__best_val_dice_0.9409288987517357_epoch_241_20260709_114040.pth \
+          --use_se_block \
+          --se_calib_only \
+          --quantize \
+          --quantize_calibrate_batch_size 8 \
+          --description "TransUNet Baseline for Cataract1k - (SE-AUX-Block Guided Quantization)" 
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+          --dataset Cataract1k \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ../test/TransUNet/ckpt/ckpt_Cataract1k/ \
+          --ckpt SEBlock_Cataract1k__best_val_dice_0.9266754029939572_epoch_238_20260708_072208.pth \
+          --use_se_block \
+          --se_calib_only \
+          --quantize \
+          --quantize_calibrate_batch_size 8 \
+          --description "TransUNet Baseline for Cataract1k - (SE-AUX-Block Guided Quantization) OLD" 
+

@@ -361,6 +361,162 @@ def _set_submodule(root, path, value):
     setattr(parent, parts[-1], value)
 
 
+def _fake_w4_quantize_weight_for_aux(weight, group_size=128, w_bit=4):
+    if int(w_bit) != 4:
+        raise ValueError(f"Only W4 quantization is supported for SE auxiliary loss, got w_bit={w_bit}.")
+    if not torch.is_tensor(weight):
+        raise TypeError(f"Expected tensor weight, got {type(weight).__name__}.")
+    if weight.dim() != 2:
+        raise ValueError(f"Expected 2D Linear weight, got {tuple(weight.shape)}.")
+
+    group_size = int(group_size)
+    if group_size <= 0:
+        raise ValueError(f"group_size must be positive, got {group_size}.")
+
+    out_features, in_features = weight.shape
+    if in_features % group_size != 0:
+        raise ValueError(
+            "Linear in_features={} is not divisible by group_size={} for SE auxiliary loss.".format(
+                in_features, group_size
+            )
+        )
+
+    qmax = (1 << (int(w_bit) - 1)) - 1
+    weight_fp = weight.detach().float()
+    grouped = weight_fp.reshape(out_features, -1, group_size)
+    scales = grouped.abs().amax(dim=-1, keepdim=True).clamp(min=1e-8) / float(qmax)
+    quant = torch.round(grouped / scales).clamp(-qmax, qmax)
+    return (quant * scales).reshape_as(weight_fp)
+
+
+def _input_channel_quant_error(weight, group_size=128, w_bit=4):
+    fake_quant = _fake_w4_quantize_weight_for_aux(
+        weight,
+        group_size=group_size,
+        w_bit=w_bit,
+    )
+    err = (weight.detach().float() - fake_quant).abs().mean(dim=0)
+    if err.dim() != 1:
+        raise ValueError(f"Expected per-input-channel error to be 1D, got {tuple(err.shape)}.")
+    if not torch.isfinite(err).all():
+        raise ValueError("Per-input-channel quantization error contains NaN or Inf.")
+    return err.detach()
+
+
+def _normalize_sensitivity_target(sensitivity):
+    if not torch.is_tensor(sensitivity):
+        sensitivity = torch.as_tensor(sensitivity)
+    if sensitivity.dim() != 1:
+        raise ValueError(
+            "Expected 1D sensitivity target before normalization, got {}.".format(
+                tuple(sensitivity.shape)
+            )
+        )
+    sensitivity = sensitivity.detach().float()
+    if not torch.isfinite(sensitivity).all():
+        raise ValueError("Sensitivity target contains NaN or Inf before normalization.")
+
+    std = sensitivity.std(unbiased=False).clamp(min=1e-6)
+    target = torch.sigmoid((sensitivity - sensitivity.mean()) / std)
+    if not torch.isfinite(target).all():
+        raise ValueError("Sensitivity target contains NaN or Inf after normalization.")
+    return target.detach()
+
+
+def _linear_weight_for_aux(block, rel_path, block_idx):
+    module = _get_submodule(block, rel_path)
+    if not isinstance(module, nn.Linear):
+        raise TypeError(
+            "Block {} {} must be nn.Linear for SE auxiliary loss, got {}.".format(
+                block_idx, rel_path, type(module).__name__
+            )
+        )
+    return module.weight
+
+
+def se_quant_sensitivity_aux_loss(
+    model,
+    se_scales,
+    group_size=128,
+    w_bit=4,
+):
+    """Train calibration-only SE gates to predict per-channel W4 sensitivity."""
+    if int(w_bit) != 4:
+        raise ValueError(f"se_quant_sensitivity_aux_loss currently supports only w_bit=4, got {w_bit}.")
+    if not isinstance(se_scales, (list, tuple)):
+        raise ValueError(
+            "SE auxiliary loss requires se_scales as a list/tuple with one tensor per encoder block; "
+            f"got {type(se_scales).__name__}."
+        )
+
+    core_model = model.module if hasattr(model, "module") else model
+    transformer = getattr(core_model, "transformer", None)
+    encoder = getattr(transformer, "encoder", None)
+    blocks = getattr(encoder, "layer", None)
+    if encoder is None or blocks is None:
+        raise ValueError("Could not locate encoder blocks at model.transformer.encoder.layer.")
+    blocks = list(blocks)
+    if len(se_scales) != len(blocks):
+        raise ValueError(
+            "SE scales length mismatch for auxiliary loss: expected {} blocks, got {}.".format(
+                len(blocks), len(se_scales)
+            )
+        )
+
+    losses = []
+    for block_idx, (block, gate) in enumerate(zip(blocks, se_scales)):
+        hidden_size = int(getattr(block, "hidden_size", 0))
+        if hidden_size <= 0:
+            raise ValueError(f"Block {block_idx} does not expose a valid hidden_size.")
+
+        gate_l = _normalize_se_gate_tensor(gate, expected_channels=hidden_size)
+
+        with torch.no_grad():
+            q_err = _input_channel_quant_error(
+                _linear_weight_for_aux(block, "attn.query", block_idx),
+                group_size=group_size,
+                w_bit=w_bit,
+            )
+            k_err = _input_channel_quant_error(
+                _linear_weight_for_aux(block, "attn.key", block_idx),
+                group_size=group_size,
+                w_bit=w_bit,
+            )
+            v_err = _input_channel_quant_error(
+                _linear_weight_for_aux(block, "attn.value", block_idx),
+                group_size=group_size,
+                w_bit=w_bit,
+            )
+            fc1_err = _input_channel_quant_error(
+                _linear_weight_for_aux(block, "ffn.fc1", block_idx),
+                group_size=group_size,
+                w_bit=w_bit,
+            )
+            for name, err in (
+                ("attn.query", q_err),
+                ("attn.key", k_err),
+                ("attn.value", v_err),
+                ("ffn.fc1", fc1_err),
+            ):
+                if err.numel() != hidden_size:
+                    raise ValueError(
+                        "Block {} {} input-channel error length {} does not match hidden_size {}.".format(
+                            block_idx, name, err.numel(), hidden_size
+                        )
+                    )
+
+            attn_err = (q_err + k_err + v_err) / 3.0
+            combined_err = 0.5 * attn_err + 0.5 * fc1_err
+            target = _normalize_sensitivity_target(combined_err)
+
+        target = target.to(device=gate_l.device, dtype=gate_l.dtype).unsqueeze(0).expand_as(gate_l)
+        losses.append(F.smooth_l1_loss(gate_l.float(), target.float()))
+
+    if not losses:
+        raise ValueError("No encoder blocks were available for SE auxiliary loss.")
+    return torch.stack(losses).mean()
+
+
 class SEViTSegQuantizer:
     """
     SE-guided activation-aware W4 grouped weight-only quantizer for ViT segmentation.
@@ -450,7 +606,7 @@ class SEViTSegQuantizer:
         self.model.eval().to(self.device)
         encoder_args, had_drop_attr, old_drop = self._set_drop_se_block(False)
         try:
-            self._validate_se_gates_available_and_active()
+            self._validate_se_gates_available_and_mode_consistent()
             calib = self._collect_saliency_and_mse_inputs()
             scales_list = self._search_and_apply_scales(calib)
             quantized = self._convert_target_linears_to_w4()
@@ -488,10 +644,22 @@ class SEViTSegQuantizer:
             return x[: self.calib_chunk_size].to(self.device, non_blocking=True)
         raise RuntimeError("No calibration inputs were available for SE-guided quantization.")
 
-    def _validate_se_gates_available_and_active(self):
+    def _validate_se_gates_available_and_mode_consistent(self):
         se_layers = getattr(self.encoder, "SELayer", None)
         se_found = se_layers is not None and len(se_layers) == len(self.blocks)
-        logger.info("SE gates found: %s.", bool(se_found))
+        se_calib_only = bool(getattr(self.args, "se_calib_only", False))
+        drop_se_block = bool(getattr(getattr(self.encoder, "args", None), "drop_se_block", False))
+        tolerance = float(getattr(self.args, "se_logit_diff_tolerance", 1e-6))
+        logger.info(
+            "SE mode diagnostics: se_calib_only=%s drop_se_block=%s se_gates_found=%s.",
+            se_calib_only,
+            drop_se_block,
+            bool(se_found),
+        )
+        logger.info(
+            "Post-quantization SE drop expected: %s.",
+            bool(se_calib_only),
+        )
         if not se_found:
             raise RuntimeError(
                 "SE-guided quantization requires one SELayer per encoder block, but the "
@@ -516,25 +684,29 @@ class SEViTSegQuantizer:
 
         if logits_with_se.shape != logits_without_se.shape:
             raise RuntimeError(
-                "SE active-path check failed because logits shape changed from {} to {}.".format(
+                "SE mode consistency check failed because logits shape changed from {} to {}.".format(
                     tuple(logits_with_se.shape), tuple(logits_without_se.shape)
                 )
             )
         max_diff = (logits_with_se.detach() - logits_without_se.detach()).abs().max().item()
-        active = max_diff > 1e-6
+        active = max_diff > tolerance
         logger.info(
-            "SE forward path appears active: %s (max logit diff with drop_se_block toggle: %.8g).",
+            "SE forward path appears active: %s (max logit diff with drop_se_block toggle: %.8g; tolerance: %.8g).",
             bool(active),
             max_diff,
+            tolerance,
         )
-        if not active:
+        if se_calib_only:
+            if active:
+                raise RuntimeError(
+                    "Expected calibration-only SE auxiliary block, but SE changes logits. "
+                    "max logit diff with drop_se_block toggle: {:.8g}".format(max_diff)
+                )
+        elif not active:
             raise RuntimeError(
-                "SE gates are returned by the model, but they do not affect segmentation logits. "
-                "In networks/vit_seg_modeling.py Encoder.forward currently computes "
-                "h_se, scale = se_layer(hidden_states) without assigning hidden_states = h_se. "
-                "SE-guided quantization requires trained SE gates on the active segmentation "
-                "forward path; retrain or load a checkpoint from an active-SE model before using "
-                "--use_se_block --quantize."
+                "Expected active SE, but SE does not affect logits; use --se_calib_only "
+                "for SE-auxiliary-block-only quantization. max logit diff with "
+                "drop_se_block toggle: {:.8g}".format(max_diff)
             )
 
     def _collect_saliency_and_mse_inputs(self):

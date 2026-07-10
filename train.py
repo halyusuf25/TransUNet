@@ -72,6 +72,16 @@ parser.add_argument('--gumbel_sampling_mode', type=str, default='dist', choices=
 parser.add_argument('--use_ats', action='store_true', 
                     help='whether to use Adaptive Token Sampling (ATS) for attention')
 parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
+parser.add_argument('--se_calib_only', action='store_true',
+                    help='use SE as a calibration-only auxiliary block that emits gates without modifying hidden states')
+parser.add_argument('--use_se_aux_loss', action='store_true',
+                    help='train calibration-only SE gates with an auxiliary quantization-sensitivity saliency loss')
+parser.add_argument('--se_aux_weight', type=float, default=0.01,
+                    help='weight for the SE auxiliary quantization-sensitivity loss')
+parser.add_argument('--se_aux_group_size', type=int, default=128,
+                    help='group size used when computing the SE auxiliary W4 sensitivity target')
+parser.add_argument('--se_aux_w_bit', type=int, default=4,
+                    help='weight bit-width used when computing the SE auxiliary sensitivity target; currently only 4 is supported')
 parser.add_argument('--tensorboard_logdir', type=str, default='tensorboard_logs', help='root directory for TensorBoard logs',)
 parser.add_argument('--description', type=str, default='No Description', help='additional description for the training run (optional)')
 ###Teacher Model Argument:#####
@@ -257,6 +267,13 @@ if __name__ == "__main__":
 
     if args.use_ats and args.use_gumbel_topk:
         raise ValueError("--use_ats and --use_gumbel_topk are mutually exclusive.")
+
+    if args.se_calib_only and not args.use_se_block:
+        raise ValueError("--se_calib_only requires --use_se_block.")
+    if args.use_se_aux_loss and (not args.use_se_block or not args.se_calib_only):
+        raise ValueError("--use_se_aux_loss requires both --use_se_block and --se_calib_only.")
+    if args.se_aux_w_bit != 4:
+        raise ValueError("--se_aux_w_bit currently supports only 4.")
     
     if args.create_heatmaps:
         buloss_option_upper = str(args.buloss_option).upper()
@@ -284,6 +301,7 @@ if __name__ == "__main__":
     config_vit.use_efficientnet = args.use_efficientnet
     config_vit.use_swin = args.use_swin
     config_vit.use_se_block = args.use_se_block
+    config_vit.se_calib_only = args.se_calib_only
     if args.vit_name.find('R50') != -1:
         config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()

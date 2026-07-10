@@ -12,3 +12,5 @@ pandas
 matplotlib
 timm
 easydict
+fvcore
+thop

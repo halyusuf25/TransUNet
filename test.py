@@ -388,6 +388,8 @@ def main():
 
     if args.fold_id < 0 or args.fold_id >= 5:
         raise ValueError("fold_id must be between 0 and 4")
+    if args.se_calib_only and not args.use_se_block:
+        raise ValueError("--se_calib_only requires --use_se_block.")
     
     # name the same snapshot defined in train script!
     args.exp = 'TU_' + dataset_name + str(args.img_size)
@@ -396,6 +398,7 @@ def main():
     config_vit.n_classes = args.num_classes
     config_vit.n_skip = args.n_skip
     config_vit.use_se_block = args.use_se_block
+    config_vit.se_calib_only = args.se_calib_only
     config_vit.drop_se_block = args.drop_se_block
     config_vit.gumbel_sampling_mode = args.gumbel_sampling_mode
     
@@ -446,6 +449,21 @@ def main():
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
     logging.info(args.ckpt)
+    if args.use_se_block:
+        se_layers = getattr(net.transformer.encoder, "SELayer", None)
+        encoder_layers = getattr(net.transformer.encoder, "layer", [])
+        se_gates_found = se_layers is not None and len(se_layers) == len(encoder_layers)
+        logging.info(
+            "SE diagnostics: se_calib_only=%s drop_se_block=%s se_gates_found=%s.",
+            bool(args.se_calib_only),
+            bool(args.drop_se_block),
+            bool(se_gates_found),
+        )
+        if args.quantize:
+            logging.info(
+                "SE post-quantization drop planned: %s.",
+                bool(args.se_calib_only),
+            )
 
 
     if args.quantize:
@@ -551,12 +569,18 @@ def main():
             logging.info("Intel Neural Compressor AWQ quantization finished.")
             logging.info("Model quantized successfully.")
         
-        #drop SE block after quantization
+        # Drop only calibration-only SE auxiliary blocks after quantization.
         se_layers = getattr(net.transformer.encoder, "SELayer", None)
         if se_layers is not None:
-            del net.transformer.encoder.SELayer
-            net.transformer.encoder.args.drop_se_block = True
-            logging.info("Dropped SE-blocks after quantization.")
+            if getattr(args, "se_calib_only", False):
+                del net.transformer.encoder.SELayer
+                net.transformer.encoder.args.drop_se_block = True
+                logging.info("Dropped calibration-only SE-auxiliary-block after quantization.")
+            else:
+                logging.warning(
+                    "Keeping active SE blocks after quantization because --se_calib_only is not set. "
+                    "Dropping active SE would change the trained segmentation function."
+                )
 
         
     performance = inference(args, net, test_save_path=None)

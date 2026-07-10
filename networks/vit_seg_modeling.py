@@ -383,6 +383,7 @@ class Encoder(nn.Module):
 
         se_layers = getattr(self, "SELayer", None)
         drop_se = getattr(self.args, "drop_se_block", False)
+        se_calib_only = getattr(self.args, "se_calib_only", False)
         use_se = se_layers is not None and not drop_se
         if not use_se:
             se_layers = [None] * len(self.layer)
@@ -427,10 +428,16 @@ class Encoder(nn.Module):
             attn_weights.append(attn)
             
             if use_se and se_layer is not None:
-                hidden_states, scale = se_layer(hidden_states)
+                if se_calib_only:
+                    _, scale = se_layer(hidden_states.detach())
+                else:
+                    hidden_states, scale = se_layer(hidden_states)
                 if self.args.verbose:
                     print(f"SE Layer scale shape at Encoder layer#{layer_block_id}: {scale.shape}")
-                    print(f"Encoder layer#{layer_block_id} hidden_states shape after SE block: {hidden_states.shape}")
+                    if se_calib_only:
+                        print(f"Encoder layer#{layer_block_id} hidden_states shape unchanged by SE auxiliary block: {hidden_states.shape}")
+                    else:
+                        print(f"Encoder layer#{layer_block_id} hidden_states shape after SE block: {hidden_states.shape}")
                     
                 se_scale.append(scale)
         

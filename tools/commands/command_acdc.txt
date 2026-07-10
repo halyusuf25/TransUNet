@@ -299,3 +299,68 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
           --ckpt SEBlockFixed_ACDC__best_val_dice_0.8979883193969727_epoch_199_20260709_010045.pth \
           --description "TransUNet Baseline for ACDC - (SE-Guided Quantization) fixed SEblock" \
           --quantize 
+
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+          --dataset ACDC \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --max_epochs 260 \
+          --ckpt_dir ckpt/ckpt_ACDC/ \
+          --ckpt SE_AUX_Calib \
+          --use_se_block \
+          --se_calib_only \
+          --use_se_aux_loss \
+          --se_aux_weight 0.01 \
+          --se_aux_group_size 128 \
+          --se_aux_w_bit 4 \
+          --description "TransUNet Baseline for ACDC - (SE-Aux-Calib-Block Quantization)"
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+          --dataset ACDC \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ckpt/ckpt_ACDC/ \
+          --ckpt SEBlockFixed_ACDC__best_val_dice_0.8979883193969727_epoch_199_20260709_010045.pth \
+          --use_se_block \
+          --se_calib_only \
+          --quantize \
+          --description "TransUNet Baseline for ACDC - (SE-Guided Quantization) test new code"
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+          --dataset ACDC \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ckpt/ckpt_ACDC/ \
+          --ckpt SE_AUX_Calib_ACDC__best_val_dice_0.899115264415741_epoch_88_20260709_084046.pth \
+          --use_se_block \
+          --se_calib_only \
+          --quantize \
+          --quantize_calibrate_batch_size 8 \
+          --description "TransUNet Baseline for ACDC - (SE-AUX-Block Guided Quantization)" 
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+          --dataset ACDC \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ../test/TransUNet/ckpt/ckpt_ACDC/ \
+          --ckpt SEBlock_ACDC__best_val_dice_0.9004343152046204_epoch_115_20260708_045033.pth \
+          --use_se_block \
+          --se_calib_only \
+          --quantize \
+          --quantize_calibrate_batch_size 8 \
+          --description "TransUNet Baseline for ACDC - (SE-AUX-Block Guided Quantization) OLD" 
+
+
+

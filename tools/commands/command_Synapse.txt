@@ -359,3 +359,40 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
          --ckpt Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth \
          --description "TransUNet with GumbelTopK (r=0.5) and BULoss (N3x3) for Synapse - (Quantize)" \
          --quantize
+
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --max_epochs 260 \
+  --ckpt_dir ckpt/ckpt_Synapse/ \
+  --ckpt SE_AUX_Calib \
+  --use_se_block \
+  --se_calib_only \
+  --use_se_aux_loss \
+  --se_aux_weight 0.01 \
+  --se_aux_group_size 128 \
+  --se_aux_w_bit 4 \
+  --description "TransUNet Baseline for Synapse - (SE-Aux-Calib-Block Quantization)"
+
+
+SE_AUX_Calib_Synapse__best_val_dice_0.7875882387161255_epoch_97_20260709_092104
+
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+          --dataset Synapse \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ckpt/ckpt_Synapse/ \
+          --ckpt SE_AUX_Calib_Synapse__best_val_dice_0.7875882387161255_epoch_97_20260709_092104.pth \
+          --use_se_block \
+          --se_calib_only \
+          --quantize \
+          --quantize_calibrate_batch_size 8 \
+          --description "TransUNet Baseline for Synapse - (SE-AUX-Block Guided Quantization)" 
+

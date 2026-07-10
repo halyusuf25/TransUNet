@@ -148,6 +148,8 @@ def build_test_arg_parser(include_visualization_args=False, include_quantization
     if include_quantization_args:
         add_quantization_args(parser)
     parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
+    parser.add_argument('--se_calib_only', action='store_true',
+                        help='use SE as a calibration-only auxiliary block that emits gates without modifying hidden states')
 
     parser.add_argument('--description', type=str, default='no description for this test run',
                         help='description for the experiment')
