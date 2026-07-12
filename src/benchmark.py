@@ -474,6 +474,33 @@ def _parameter_metrics(parameter_counts: ParameterCounts) -> Dict[str, Any]:
     }
 
 
+def _model_size_metrics(
+    fp32_reference_size_bytes: Optional[int],
+    deployed_model_size_bytes: int,
+) -> Dict[str, Any]:
+    if deployed_model_size_bytes <= 0:
+        raise ValueError("deployed_model_size_bytes must be positive.")
+    if fp32_reference_size_bytes is not None and fp32_reference_size_bytes <= 0:
+        raise ValueError("fp32_reference_size_bytes must be positive when provided.")
+
+    mib = 2 ** 20
+    return {
+        "model_size_bytes": deployed_model_size_bytes,
+        "model_size_mib": deployed_model_size_bytes / mib,
+        "fp32_reference_size_bytes": fp32_reference_size_bytes,
+        "fp32_reference_size_mib": (
+            fp32_reference_size_bytes / mib
+            if fp32_reference_size_bytes is not None
+            else None
+        ),
+        "compression_ratio": (
+            fp32_reference_size_bytes / deployed_model_size_bytes
+            if fp32_reference_size_bytes is not None
+            else None
+        ),
+    }
+
+
 # ========================== Timing (GPU/CPU) ================================
 
 def _timed_forward_gpu(model: nn.Module, images: torch.Tensor, stream_synchronize=True) -> float:
@@ -536,6 +563,8 @@ def benchmark_segmentation_model(
     single_image_warmup_steps: int = 50,
     quantized_model: bool = False,
     args: Any = None,
+    fp32_reference_size_bytes: Optional[int] = None,
+    deployed_model_size_bytes: Optional[int] = None,
 ) -> BenchmarkResults:
     """
     Benchmarks using real samples from `test_loader`.
@@ -547,6 +576,7 @@ def benchmark_segmentation_model(
       - trainable_params / total_params
       - trainable_params_m / total_params_m
       - flops_gflops_per_image
+      - persistent deployed/reference model sizes and compression ratio
 
     Notes include device, warmup, batch shape, etc.
     """
@@ -725,6 +755,15 @@ def benchmark_segmentation_model(
                 f"{metric_key}_std": summary["std"],
             })
 
+    if deployed_model_size_bytes is None:
+        from utils import model_size_mb_benchmark
+
+        deployed_model_size_bytes = model_size_mb_benchmark(model)["total_bytes"]
+    size_metrics = _model_size_metrics(
+        fp32_reference_size_bytes,
+        deployed_model_size_bytes,
+    )
+
     metrics = {
         "throughput_img_s": throughput_img_s,
         "latency_ms_mean": mean_latency_ms_per_image,
@@ -737,6 +776,7 @@ def benchmark_segmentation_model(
         "image_shape_HxW": float(H * W),
         "channels": float(C),
         "batch_size_first": float(B),
+        **size_metrics,
         **repeated_metrics,
     }
     notes = {

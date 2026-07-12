@@ -7,7 +7,7 @@ from scipy.ndimage import zoom
 import torch.nn as nn
 import SimpleITK as sitk
 import time
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, Iterable
 from thop import profile
 from fvcore.nn import FlopCountAnalysis
 
@@ -548,6 +548,7 @@ def model_size_mb_benchmark(
     use_state_dict: bool = True,
     binary_mebibytes: bool = True,   # True: MiB (1024^2). False: MB (10^6).
     deduplicate_shared_tensors: bool = True,
+    exclude_prefixes: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """
     Estimate the *model size / weight footprint* used in benchmarking,
@@ -663,6 +664,9 @@ def model_size_mb_benchmark(
 
        In most research papers, "state_dict" best matches the notion of
        "model size" as what must be stored or shipped.
+
+       exclude_prefixes may be used to omit state_dict entries belonging to
+       calibration-only modules that are not part of the deployed model.
      --------------------------------------------------------------------"""
 
     # Collect tensors
@@ -670,7 +674,13 @@ def model_size_mb_benchmark(
     if use_state_dict:
         # state_dict contains params + buffers needed for inference
         sd = model.state_dict()
-        for _, v in sd.items():
+        if isinstance(exclude_prefixes, str):
+            prefixes = (exclude_prefixes,)
+        else:
+            prefixes = tuple(exclude_prefixes or ())
+        for name, v in sd.items():
+            if prefixes and name.startswith(prefixes):
+                continue
             if torch.is_tensor(v):
                 tensors.append(v)
     else:

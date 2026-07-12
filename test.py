@@ -461,6 +461,13 @@ def main():
     ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
     net.load_state_dict(torch.load(ckpt_path))
 
+    fp32_reference_size = model_size_mb_benchmark(
+        net,
+        exclude_prefixes=("transformer.encoder.SELayer",)
+        if args.se_calib_only
+        else None,
+    )
+
     log_folder = './test_log/test_log_' + args.exp
     os.makedirs(log_folder, exist_ok=True)
     logging.basicConfig(filename=log_folder + '/'+args.ckpt+".txt", level=logging.INFO, format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
@@ -610,7 +617,8 @@ def main():
                     "Dropping active SE would change the trained segmentation function."
                 )
 
-        
+    deployed_model_size = model_size_mb_benchmark(net)
+
     performance = inference(args, net, test_save_path=None)
     
     # ---------------- Benchmark (runs AFTER inference is done) ----------------
@@ -629,13 +637,14 @@ def main():
         autocast=False,                                # set True to benchmark AMP
         quantized_model=args.quantize,
         args=args,
+        fp32_reference_size_bytes=fp32_reference_size["total_bytes"],
+        deployed_model_size_bytes=deployed_model_size["total_bytes"],
     )
 
     pretty = "\n" + results.pretty()
     # print(pretty)
     logging.info(pretty)
     
-    model_size = model_size_mb_benchmark(net)
     model_runtime_memory = runtime_memory_mb_benchmark(
         net,
         test_loader=test_loader_bench,
@@ -650,7 +659,7 @@ def main():
         metrics_for_json = {k: _make_json_safe(v) for k, v in results.metrics.items()}
         notes_for_json = {k: _make_json_safe(v) for k, v in results.notes.items()}
         arguments_for_json = {k: _make_json_safe(v) for k, v in vars(args).items()}  # Include all arguments as a dictionary
-        model_size_for_json = {k: _make_json_safe(v) for k, v in model_size.items()}  # Include model size info
+        model_size_for_json = {k: _make_json_safe(v) for k, v in deployed_model_size.items()}  # Include model size info
         model_runtime_memory_for_json = {k: _make_json_safe(v) for k, v in model_runtime_memory.items()}  # Include runtime memory info
 
         json.dump(
