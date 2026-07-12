@@ -8,6 +8,7 @@ import copy
 import logging
 import os
 import random
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -217,7 +218,28 @@ def _validate_grid_args(args):
         raise ValueError("--grid_rows must be between 1 and 20.")
     if args.grid_cols < 1 or args.grid_cols > 8:
         raise ValueError("--grid_cols must be between 1 and 8.")
+    if args.viz_min_classes is not None:
+        max_foreground_classes = DATASET_CONFIG[args.dataset]['num_classes'] - 1
+        if args.viz_min_classes < 1 or args.viz_min_classes > max_foreground_classes:
+            raise ValueError(
+                "--viz_min_classes for dataset '{}' must be between 1 and {}, got {}.".format(
+                    args.dataset,
+                    max_foreground_classes,
+                    args.viz_min_classes,
+                )
+            )
+        if any(value is not None for value in (
+            args.grid_indices,
+            args.grid_slice_ranges,
+            args.grid_case_slides,
+        )):
+            raise ValueError(
+                "--viz_min_classes is only supported with random grid selection; do not combine it "
+                "with --grid_indices, --grid_slice_ranges, or --grid_case_slides."
+            )
     if args.grid_indices is not None:
+        if args.grid_slice_ranges is not None or args.grid_case_slides is not None:
+            raise ValueError("--grid_indices cannot be used with --grid_slice_ranges or --grid_case_slides.")
         if len(args.grid_indices) != args.grid_rows:
             raise ValueError(
                 "--grid_indices must contain exactly one index per grid row "
@@ -230,6 +252,20 @@ def _validate_grid_args(args):
                     ", ".join(str(index) for index in negative_indices)
                 )
             )
+
+    if args.grid_slice_ranges is not None:
+        if args.grid_case_slides is not None:
+            raise ValueError("--grid_slice_ranges and --grid_case_slides cannot be used together.")
+        if args.dataset not in ('Synapse', 'ACDC'):
+            raise ValueError("--grid_slice_ranges is only supported for volume datasets: Synapse and ACDC.")
+        if len(args.grid_slice_ranges) < 1:
+            raise ValueError("--grid_slice_ranges must contain at least one case:slice-range entry.")
+
+    if args.grid_case_slides is not None:
+        if args.dataset != 'Cataract1k':
+            raise ValueError("--grid_case_slides is only supported for the Cataract1k dataset.")
+        if len(args.grid_case_slides) < 1:
+            raise ValueError("--grid_case_slides must contain at least one case:slide-list entry.")
 
     ckpts = list(args.grid_ckpts or [])
     if len(ckpts) < 1:
@@ -542,6 +578,85 @@ def _build_visualization_dataset(dataset_args, dataset_name):
     raise ValueError("Unsupported dataset for visualization: {}".format(dataset_name))
 
 
+def _case_names_for_dataset(ds_viz):
+    if hasattr(ds_viz, 'sample_list'):
+        return [str(name).strip() for name in ds_viz.sample_list]
+    names = []
+    for index in range(len(ds_viz)):
+        sample = ds_viz[index]
+        names.append(str(sample.get('case_name', index)))
+    return names
+
+
+def _parse_case_slice_name(value):
+    match = re.match(r"^(?P<case>.+)_slice_(?P<slice>\d+)$", str(value))
+    if not match:
+        return None
+    return match.group('case'), int(match.group('slice'))
+
+
+def _parse_grid_slice_range(raw_spec):
+    spec = str(raw_spec).strip()
+    if not spec:
+        raise ValueError("Empty --grid_slice_ranges entry.")
+
+    if ':' in spec:
+        case_name, slice_range = spec.split(':', 1)
+        case_name = case_name.strip()
+        slice_range = slice_range.strip()
+        if not case_name or not slice_range:
+            raise ValueError(
+                "Invalid --grid_slice_ranges entry '{}'. Expected case0008:103-111.".format(raw_spec)
+            )
+        if '-' in slice_range:
+            start_text, end_text = slice_range.split('-', 1)
+        else:
+            start_text = end_text = slice_range
+        try:
+            start_slice = int(start_text)
+            end_slice = int(end_text)
+        except ValueError as exc:
+            raise ValueError(
+                "Invalid slice range '{}' in --grid_slice_ranges entry '{}'. Expected integers.".format(
+                    slice_range,
+                    raw_spec,
+                )
+            ) from exc
+    elif '-' in spec:
+        start_name, end_name = spec.split('-', 1)
+        start_parsed = _parse_case_slice_name(start_name.strip())
+        end_parsed = _parse_case_slice_name(end_name.strip())
+        if start_parsed is None or end_parsed is None:
+            raise ValueError(
+                "Invalid --grid_slice_ranges entry '{}'. Expected case0008:103-111 or "
+                "case0008_slice_103-case0008_slice_111.".format(raw_spec)
+            )
+        case_name, start_slice = start_parsed
+        end_case_name, end_slice = end_parsed
+        if case_name != end_case_name:
+            raise ValueError(
+                "Invalid --grid_slice_ranges entry '{}'. Slice ranges cannot span multiple cases.".format(raw_spec)
+            )
+    else:
+        parsed = _parse_case_slice_name(spec)
+        if parsed is None:
+            raise ValueError(
+                "Invalid --grid_slice_ranges entry '{}'. Expected case0008:103-111 or case0008_slice_103.".format(
+                    raw_spec
+                )
+            )
+        case_name, start_slice = parsed
+        end_slice = start_slice
+
+    if start_slice < 0 or end_slice < 0:
+        raise ValueError("--grid_slice_ranges values must be non-negative, got '{}'.".format(raw_spec))
+    if end_slice < start_slice:
+        raise ValueError(
+            "--grid_slice_ranges entry '{}' has end slice before start slice.".format(raw_spec)
+        )
+    return case_name, start_slice, end_slice
+
+
 def _load_grid_samples(dataset_args, dataset_name, row_count, sample_indices=None):
     ds_viz = _build_visualization_dataset(dataset_args, dataset_name)
 
@@ -572,6 +687,258 @@ def _load_grid_samples(dataset_args, dataset_name, row_count, sample_indices=Non
     return [ds_viz[index] for index in selected_indices]
 
 
+def _foreground_class_count(label):
+    classes = np.unique(_label_array(label))
+    return int(np.count_nonzero(classes != 0))
+
+
+def _load_min_class_grid_rows(dataset_args, dataset_name, row_count, min_classes):
+    ds_viz = _build_visualization_dataset(dataset_args, dataset_name)
+    total = len(ds_viz)
+    if total <= 0:
+        raise ValueError("Dataset '{}' has no samples to visualize.".format(dataset_name))
+
+    candidates = []
+    is_volume_dataset = dataset_name in ('Synapse', 'ACDC')
+    for sample_index in range(total):
+        sample = ds_viz[sample_index]
+        label = np.squeeze(_label_array(sample['label']))
+        if is_volume_dataset and label.ndim == 3:
+            for slice_index in range(label.shape[0]):
+                if _foreground_class_count(label[slice_index]) >= min_classes:
+                    candidates.append((sample_index, slice_index))
+        elif _foreground_class_count(label) >= min_classes:
+            candidates.append((sample_index, None))
+
+    if len(candidates) < row_count:
+        raise ValueError(
+            "Dataset '{}' has only {} image(s) with at least {} foreground class(es), but "
+            "--grid_rows requested {}.".format(
+                dataset_name,
+                len(candidates),
+                min_classes,
+                row_count,
+            )
+        )
+
+    rows = []
+    for sample_index, slice_index in random.sample(candidates, row_count):
+        sample = ds_viz[sample_index]
+        sample_name = sample.get('case_name', '{}_{}'.format(dataset_name, sample_index))
+        if slice_index is not None:
+            row_title = "{}_slice_{:03d}".format(sample_name, slice_index)
+        else:
+            row_title = sample_name
+        rows.append({
+            'sample': sample,
+            'viz_slice': slice_index,
+            'row_title': row_title,
+        })
+    return rows
+
+
+def _load_grid_slice_rows(dataset_args, dataset_name, row_count, slice_range_specs):
+    ds_viz = _build_visualization_dataset(dataset_args, dataset_name)
+    total = len(ds_viz)
+    if total <= 0:
+        raise ValueError("Dataset '{}' has no samples to visualize.".format(dataset_name))
+
+    case_names = _case_names_for_dataset(ds_viz)
+    case_to_index = {case_name: index for index, case_name in enumerate(case_names)}
+    candidates = []
+    cached_samples = {}
+
+    for raw_spec in slice_range_specs:
+        case_name, start_slice, end_slice = _parse_grid_slice_range(raw_spec)
+        if case_name not in case_to_index:
+            raise ValueError(
+                "--grid_slice_ranges references case '{}' but dataset '{}' only has: {}.".format(
+                    case_name,
+                    dataset_name,
+                    ", ".join(case_names),
+                )
+            )
+        if case_name not in cached_samples:
+            cached_samples[case_name] = ds_viz[case_to_index[case_name]]
+        sample = cached_samples[case_name]
+        image = sample['image']
+        if image.ndim != 3:
+            raise ValueError(
+                "--grid_slice_ranges requires 3D volume samples, but case '{}' has image shape {}.".format(
+                    case_name,
+                    getattr(image, 'shape', None),
+                )
+            )
+        depth = image.shape[0]
+        if end_slice >= depth:
+            raise ValueError(
+                "--grid_slice_ranges entry '{}' is outside case '{}' slice range [0, {}].".format(
+                    raw_spec,
+                    case_name,
+                    depth - 1,
+                )
+            )
+        for slice_index in range(start_slice, end_slice + 1):
+            candidates.append((case_name, slice_index))
+
+    unique_candidates = []
+    seen_candidates = set()
+    for candidate in candidates:
+        if candidate not in seen_candidates:
+            unique_candidates.append(candidate)
+            seen_candidates.add(candidate)
+
+    if len(unique_candidates) < row_count:
+        raise ValueError(
+            "--grid_slice_ranges provides {} unique case/slice candidates, but --grid_rows requested {}.".format(
+                len(unique_candidates),
+                row_count,
+            )
+        )
+
+    selected_candidates = random.sample(unique_candidates, row_count)
+    rows = []
+    for case_name, slice_index in selected_candidates:
+        rows.append({
+            'sample': cached_samples[case_name],
+            'viz_slice': slice_index,
+            'row_title': "{}_slice_{:03d}".format(case_name, slice_index),
+        })
+    return rows
+
+
+def _normalize_cataract_case_name(case_name):
+    case_name = str(case_name).strip()
+    if case_name.isdigit():
+        return "case{}".format(case_name)
+    return case_name
+
+
+def _parse_cataract_slide_token(raw_token, raw_spec):
+    token = str(raw_token).strip()
+    if not token:
+        return []
+    if '-' in token:
+        start_text, end_text = token.split('-', 1)
+        start_text = start_text.strip()
+        end_text = end_text.strip()
+        if not start_text.isdigit() or not end_text.isdigit():
+            raise ValueError(
+                "Invalid slide range '{}' in --grid_case_slides entry '{}'. Expected integers.".format(
+                    token,
+                    raw_spec,
+                )
+            )
+        start_slide = int(start_text)
+        end_slide = int(end_text)
+        if end_slide < start_slide:
+            raise ValueError(
+                "--grid_case_slides entry '{}' has end slide before start slide.".format(raw_spec)
+            )
+        width = max(2, len(start_text), len(end_text))
+        return ["{:0{width}d}".format(slide, width=width) for slide in range(start_slide, end_slide + 1)]
+
+    if not token.isdigit():
+        raise ValueError(
+            "Invalid slide '{}' in --grid_case_slides entry '{}'. Expected an integer slide id.".format(
+                token,
+                raw_spec,
+            )
+        )
+    width = max(2, len(token))
+    return ["{:0{width}d}".format(int(token), width=width)]
+
+
+def _parse_grid_case_slide_spec(raw_spec):
+    spec = str(raw_spec).strip()
+    if not spec:
+        raise ValueError("Empty --grid_case_slides entry.")
+    if ':' not in spec:
+        raise ValueError(
+            "Invalid --grid_case_slides entry '{}'. Expected case5057:42,62,69.".format(raw_spec)
+        )
+
+    case_name, slide_spec = spec.split(':', 1)
+    case_name = _normalize_cataract_case_name(case_name)
+    slide_spec = slide_spec.strip()
+    if not case_name or not slide_spec:
+        raise ValueError(
+            "Invalid --grid_case_slides entry '{}'. Expected case5057:42,62,69.".format(raw_spec)
+        )
+
+    slide_ids = []
+    for raw_token in slide_spec.split(','):
+        slide_ids.extend(_parse_cataract_slide_token(raw_token, raw_spec))
+    if not slide_ids:
+        raise ValueError("--grid_case_slides entry '{}' does not define any slides.".format(raw_spec))
+    return case_name, slide_ids
+
+
+def _case_names_for_frame_dataset(ds_viz):
+    if hasattr(ds_viz, 'image_files'):
+        return [Path(path).stem for path in ds_viz.image_files]
+    return _case_names_for_dataset(ds_viz)
+
+
+def _load_grid_case_slide_rows(dataset_args, dataset_name, row_count, case_slide_specs):
+    ds_viz = _build_visualization_dataset(dataset_args, dataset_name)
+    total = len(ds_viz)
+    if total <= 0:
+        raise ValueError("Dataset '{}' has no samples to visualize.".format(dataset_name))
+
+    sample_names = _case_names_for_frame_dataset(ds_viz)
+    sample_to_index = {sample_name: index for index, sample_name in enumerate(sample_names)}
+    candidates = []
+
+    for raw_spec in case_slide_specs:
+        case_name, slide_ids = _parse_grid_case_slide_spec(raw_spec)
+        for slide_id in slide_ids:
+            sample_name = "{}_{}".format(case_name, slide_id)
+            if sample_name not in sample_to_index:
+                available = sorted(
+                    name.rsplit('_', 1)[-1]
+                    for name in sample_names
+                    if name.startswith(case_name + "_")
+                )
+                preview = ", ".join(available[:30])
+                if len(available) > 30:
+                    preview += ", ..."
+                raise ValueError(
+                    "--grid_case_slides references '{}' but it was not found. "
+                    "Available slides for {}: {}.".format(
+                        sample_name,
+                        case_name,
+                        preview or "none",
+                    )
+                )
+            candidates.append(sample_name)
+
+    unique_candidates = []
+    seen_candidates = set()
+    for candidate in candidates:
+        if candidate not in seen_candidates:
+            unique_candidates.append(candidate)
+            seen_candidates.add(candidate)
+
+    if len(unique_candidates) != row_count:
+        raise ValueError(
+            "--grid_case_slides resolves to {} unique samples, but --grid_rows is {}. "
+            "Set --grid_rows to match the requested slides.".format(
+                len(unique_candidates),
+                row_count,
+            )
+        )
+
+    rows = []
+    for sample_name in unique_candidates:
+        rows.append({
+            'sample': ds_viz[sample_to_index[sample_name]],
+            'viz_slice': None,
+            'row_title': sample_name,
+        })
+    return rows
+
+
 def _load_single_grid_sample(dataset_args, dataset_name):
     ds_viz = _build_visualization_dataset(dataset_args, dataset_name)
     total = len(ds_viz)
@@ -588,6 +955,42 @@ def _load_single_grid_sample(dataset_args, dataset_name):
             )
         )
     return ds_viz[sample_index]
+
+
+def _label_array(label):
+    if torch.is_tensor(label):
+        return label.detach().cpu().numpy()
+    return np.asarray(label)
+
+
+def _load_random_foreground_sample(dataset_args, dataset_name):
+    ds_viz = _build_visualization_dataset(dataset_args, dataset_name)
+    total = len(ds_viz)
+    if total <= 0:
+        raise ValueError("Dataset '{}' has no samples to visualize.".format(dataset_name))
+
+    candidate_indices = list(range(total))
+    random.shuffle(candidate_indices)
+
+    for sample_index in candidate_indices:
+        sample = ds_viz[sample_index]
+        label = np.squeeze(_label_array(sample['label']))
+
+        if dataset_name in ('Synapse', 'ACDC') and label.ndim == 3:
+            foreground_slices = np.flatnonzero(np.any(label != 0, axis=(1, 2)))
+            if foreground_slices.size == 0:
+                continue
+            dataset_args.viz_index = sample_index
+            dataset_args.viz_slice = int(random.choice(foreground_slices.tolist()))
+            return sample
+
+        if np.any(label != 0):
+            dataset_args.viz_index = sample_index
+            return sample
+
+    raise ValueError(
+        "Dataset '{}' has no visualization samples with foreground classes.".format(dataset_name)
+    )
 
 
 def _observed_num_classes(num_classes, predictions, gt):
@@ -661,23 +1064,55 @@ def _build_grid_model(base_args, dataset_name, raw_checkpoint_spec, model_name):
 def generate_grid_visualization(args):
     dataset_name, checkpoint_specs, model_names = _validate_grid_args(args)
     dataset_args = _prepare_grid_dataset_args(args, dataset_name)
-    samples = _load_grid_samples(
-        dataset_args,
-        dataset_name,
-        args.grid_rows,
-        sample_indices=args.grid_indices,
-    )
+    if args.viz_min_classes is not None:
+        grid_row_items = _load_min_class_grid_rows(
+            dataset_args,
+            dataset_name,
+            args.grid_rows,
+            args.viz_min_classes,
+        )
+    elif args.grid_slice_ranges is not None:
+        grid_row_items = _load_grid_slice_rows(
+            dataset_args,
+            dataset_name,
+            args.grid_rows,
+            args.grid_slice_ranges,
+        )
+    elif args.grid_case_slides is not None:
+        grid_row_items = _load_grid_case_slide_rows(
+            dataset_args,
+            dataset_name,
+            args.grid_rows,
+            args.grid_case_slides,
+        )
+    else:
+        samples = _load_grid_samples(
+            dataset_args,
+            dataset_name,
+            args.grid_rows,
+            sample_indices=args.grid_indices,
+        )
+        grid_row_items = [
+            {
+                'sample': sample,
+                'viz_slice': None,
+                'row_title': sample.get('case_name', '{}_{}'.format(dataset_name, index)),
+            }
+            for index, sample in enumerate(samples)
+        ]
+
     rows = [
         {
             'dataset_name': dataset_name,
-            'row_title': sample.get('case_name', '{}_{}'.format(dataset_name, index)),
+            'row_title': row_item['row_title'],
             'image': None,
             'gt': None,
             'predictions': [],
             'class_labels': dataset_args.class_names,
             'num_classes': dataset_args.num_classes,
+            'viz_slice': row_item['viz_slice'],
         }
-        for index, sample in enumerate(samples)
+        for row_item in grid_row_items
     ]
 
     for raw_checkpoint_spec, model_name in zip(checkpoint_specs, model_names):
@@ -688,12 +1123,16 @@ def generate_grid_visualization(args):
             model_name=model_name,
         )
         try:
-            for row, sample in zip(rows, samples):
+            for row, row_item in zip(rows, grid_row_items):
+                prediction_args = model_args
+                if row['viz_slice'] is not None:
+                    prediction_args = copy.copy(model_args)
+                    prediction_args.viz_slice = row['viz_slice']
                 try:
                     entry = build_grid_prediction_entry(
                         model=model,
-                        sample=sample,
-                        args=model_args,
+                        sample=row_item['sample'],
+                        args=prediction_args,
                         dataset_name=dataset_name,
                     )
                 except Exception as exc:
@@ -737,13 +1176,19 @@ def generate_multiple_datasets_visualization(args):
     row_payloads = []
     for dataset_name in dataset_names:
         dataset_args = _prepare_grid_dataset_args(args, dataset_name)
-        _apply_dataset_visualization_overrides(
-            dataset_args,
-            dataset_arg_map.get(dataset_name, ""),
-            dataset_name,
-        )
-        sample = _load_single_grid_sample(dataset_args, dataset_name)
+        dataset_override = dataset_arg_map.get(dataset_name, "")
+        if dataset_override:
+            _apply_dataset_visualization_overrides(
+                dataset_args,
+                dataset_override,
+                dataset_name,
+            )
+            sample = _load_single_grid_sample(dataset_args, dataset_name)
+        else:
+            sample = _load_random_foreground_sample(dataset_args, dataset_name)
         sample_name = sample.get('case_name', '{}_{}'.format(dataset_name, dataset_args.viz_index))
+        if dataset_name in ('Synapse', 'ACDC') and dataset_args.viz_slice is not None:
+            sample_name = "{}_slice_{:03d}".format(sample_name, dataset_args.viz_slice)
         row = {
             'dataset_name': dataset_name,
             'row_title': "{}: {}".format(dataset_name, sample_name),

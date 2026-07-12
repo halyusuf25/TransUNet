@@ -81,6 +81,22 @@ def parse_args():
         default=None,
         help="Optional debug limit per split.",
     )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Save bar charts for the class distribution.",
+    )
+    parser.add_argument(
+        "--plot-dir",
+        default="catarakt_distribution_plots",
+        help="Output directory for --plot charts.",
+    )
+    parser.add_argument(
+        "--ignore_background",
+        "--ignore-background",
+        action="store_true",
+        help="Exclude class 0/background from percentages, tables, and plots.",
+    )
     return parser.parse_args()
 
 
@@ -237,12 +253,22 @@ def format_percent(value):
     return "{:6.2f}%".format(float(value))
 
 
-def print_distribution(title, stats):
+def distribution_start_index(ignore_background):
+    return 1 if ignore_background else 0
+
+
+def print_distribution(title, stats, ignore_background=False):
     counts = stats["counts"]
-    total_pixels = int(counts.sum())
+    start_index = distribution_start_index(ignore_background)
+    displayed_counts = counts[start_index:]
+    total_pixels = int(displayed_counts.sum())
+    pixel_label = "foreground pixels" if ignore_background else "pixels"
+
     print(title)
     print("  frames: {}".format(format_int(stats["frames"])))
-    print("  pixels: {}".format(format_int(total_pixels)))
+    print("  {}: {}".format(pixel_label, format_int(total_pixels)))
+    if ignore_background and len(counts) > 0:
+        print("  ignored background pixels: {}".format(format_int(counts[0])))
 
     header = "{:<5} {:<16} {:>14} {:>10}".format(
         "id",
@@ -252,7 +278,8 @@ def print_distribution(title, stats):
     )
     print("  " + header)
     print("  " + "-" * len(header))
-    for class_id, class_name in enumerate(CLASS_NAMES):
+    for class_id in range(start_index, len(CLASS_NAMES)):
+        class_name = CLASS_NAMES[class_id]
         pixels = int(counts[class_id])
         percent = 0.0 if total_pixels == 0 else (pixels / total_pixels) * 100.0
         print(
@@ -266,7 +293,7 @@ def print_distribution(title, stats):
     print()
 
 
-def print_split_report(split, split_stats):
+def print_split_report(split, split_stats, ignore_background=False):
     print("=" * 80)
     print("Split: {}".format(split))
     print("CSV: {}".format(split_stats["csv_path"]))
@@ -293,9 +320,114 @@ def print_split_report(split, split_stats):
         print_distribution(
             "Sequence {}".format(seq_name),
             split_stats["stats"][seq_name],
+            ignore_background=ignore_background,
         )
 
-    print_distribution("Split total", split_stats["total"])
+    print_distribution(
+        "Split total",
+        split_stats["total"],
+        ignore_background=ignore_background,
+    )
+
+
+def _load_matplotlib(plot_dir):
+    if "MPLCONFIGDIR" not in os.environ:
+        mpl_config_dir = os.path.join(plot_dir, ".matplotlib")
+        os.makedirs(mpl_config_dir, exist_ok=True)
+        os.environ["MPLCONFIGDIR"] = mpl_config_dir
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
+def _class_percentages(counts, ignore_background=False):
+    start_index = distribution_start_index(ignore_background)
+    displayed_counts = counts[start_index:]
+    total_pixels = int(displayed_counts.sum())
+    if total_pixels == 0:
+        return np.zeros_like(displayed_counts, dtype=np.float64)
+    return displayed_counts.astype(np.float64) * 100.0 / float(total_pixels)
+
+
+def plot_split_distribution(split, split_stats, plot_dir, ignore_background=False):
+    os.makedirs(plot_dir, exist_ok=True)
+    plt = _load_matplotlib(plot_dir)
+
+    start_index = distribution_start_index(ignore_background)
+    class_ids = list(range(start_index, len(CLASS_NAMES)))
+    class_names = CLASS_NAMES[start_index:]
+    counts = split_stats["total"]["counts"]
+    percentages = _class_percentages(counts, ignore_background=ignore_background)
+    colors = plt.get_cmap("tab20").colors
+    bar_colors = [colors[class_id % len(colors)] for class_id in class_ids]
+    title_suffix = (
+        "foreground class distribution"
+        if ignore_background
+        else "class distribution"
+    )
+
+    fig_width = max(8.0, len(class_names) * 0.9)
+    fig, ax = plt.subplots(figsize=(fig_width, 5.5), constrained_layout=True)
+    ax.bar(class_names, percentages, color=bar_colors)
+    ax.set_title("{} split {}".format(split, title_suffix))
+    ax.set_ylabel("Pixels (%)")
+    ax.set_ylim(0, max(100.0, float(percentages.max()) * 1.15))
+    ax.tick_params(axis="x", labelrotation=45)
+    for tick in ax.get_xticklabels():
+        tick.set_ha("right")
+
+    total_path = os.path.join(plot_dir, "{}_class_distribution.png".format(split))
+    fig.savefig(total_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+    seq_names = sorted(split_stats["stats"], key=sequence_sort_key)
+    seq_values = np.array(
+        [
+            _class_percentages(
+                split_stats["stats"][seq_name]["counts"],
+                ignore_background=ignore_background,
+            )
+            for seq_name in seq_names
+        ],
+        dtype=np.float64,
+    )
+
+    fig_width = max(10.0, len(seq_names) * 0.65)
+    fig, ax = plt.subplots(figsize=(fig_width, 6.0), constrained_layout=True)
+    bottom = np.zeros(len(seq_names), dtype=np.float64)
+    for display_idx, class_name in enumerate(class_names):
+        class_id = class_ids[display_idx]
+        values = seq_values[:, display_idx] if len(seq_names) else []
+        ax.bar(
+            seq_names,
+            values,
+            bottom=bottom,
+            label=class_name,
+            color=colors[class_id % len(colors)],
+        )
+        if len(seq_names):
+            bottom += values
+
+    ax.set_title("{} split per-sequence {}".format(split, title_suffix))
+    ax.set_ylabel("Pixels (%)")
+    ax.set_ylim(0, 100)
+    ax.tick_params(axis="x", labelrotation=45)
+    for tick in ax.get_xticklabels():
+        tick.set_ha("right")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0)
+
+    sequence_path = os.path.join(
+        plot_dir,
+        "{}_per_sequence_distribution.png".format(split),
+    )
+    fig.savefig(sequence_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+    return [total_path, sequence_path]
 
 
 def main():
@@ -311,7 +443,20 @@ def main():
             max_files=args.max_files,
             show_progress=not args.no_progress,
         )
-        print_split_report(split, split_stats)
+        print_split_report(
+            split,
+            split_stats,
+            ignore_background=args.ignore_background,
+        )
+        if args.plot:
+            plot_paths = plot_split_distribution(
+                split,
+                split_stats,
+                args.plot_dir,
+                ignore_background=args.ignore_background,
+            )
+            for plot_path in plot_paths:
+                print("Saved plot: {}".format(plot_path))
 
 
 if __name__ == "__main__":

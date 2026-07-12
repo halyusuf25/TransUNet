@@ -79,6 +79,25 @@ CUDA_VISIBLE_DEVICES=3 python train.py \
          --ckpt GumbelTopK \
          --description "Synapse_GumbelTopK - ratio 0.5"
 
+ATS50 + BULoss
+CUDA_VISIBLE_DEVICES=2 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --best_checkpoint_start_epoch 60 \
+         --topk_attn 0.50 \
+         --use_ats \
+         --use_bu_loss \
+         --buloss_option B \
+         --learn_tau \
+         --alpha 1.0 \
+         --tau_init 1.0 \
+         --boundary_radius 1 \
+         --ckpt_dir ckpt/ckpt_BTCV \
+         --ckpt ATS50_BULoss1 \
+         --description "Synapse_GumbelTopK and BULoss (r=0.5) - N3x3"
 
 Gumbel-TopK + BU Loss
 
@@ -303,20 +322,38 @@ CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
   --dataset Synapse \
   --vit_name R50-ViT-B_16 \
   --img_size 224 \
-  --grid_rows 5 \
-  --grid_cols 5 \
-  --num_slices_to_overlay 3 \
-  --viz_out testing \
+  --grid_rows 10 \
+  --grid_cols 4 \
+  --num_slices_to_overlay 1 \
+  --viz_out Synapse/Synapse_1 \
   --viz_title "Comparing Models on Synpase Datasets" \
-  --grid_model_names Baseline TopK ATS Gumbel Gumbel-BULoss \
+  --grid_model_names Baseline TopK ATS Gumbel \
   --grid_ckpts \
     "ckpt/ckpt_Synapse/BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth" \
     "ckpt/ckpt_Synapse/TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth::--topk_attn 0.5" \
     "ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats" \
-    "ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk" \
-    "ckpt/ckpt_Synapse/Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth::--topk_attn 0.5 --use_gumbel_topk"
+    "ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk"
 
+CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
+  --viz_view grid \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --grid_rows 10 \
+  --grid_cols 4 \
+  --num_slices_to_overlay 1 \
+  --grid_slice_ranges case0038:061-069 case0036:122-130 \
+  --viz_out Synapse/Synapse_2 \
+  --viz_title "Comparing Models on Synpase Datasets" \
+  --grid_model_names Baseline TopK ATS Gumbel \
+  --grid_ckpts \
+    "ckpt/ckpt_Synapse/BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth" \
+    "ckpt/ckpt_Synapse/TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth::--topk_attn 0.5" \
+    "ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats" \
+    "ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk"
 
+group_0015_case0038_slice_061_to_case0038_slice_069.png
+group_0023_case0036_slice_122_to_case0036_slice_130.png
 
 CUDA_VISIBLE_DEVICES=4 python test.py \
          --dataset Synapse \
@@ -343,6 +380,20 @@ CUDA_VISIBLE_DEVICES=1 python test.py \
          --description "TransUNet Baseline for Synapse - (Quantize)" \
          --quantize
 
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --use_se_block \
+         --benchmark_dict benchmark_quantize/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt SEBlock_Synapse__best_val_dice_0.7832387685775757_epoch_100_20260708_053719.pth \
+         --description "TransUNet Baseline for Synapse - (SE-Guided Quantization) best val dice = 0.783" \
+         --quantize
+
 
 CUDA_VISIBLE_DEVICES=2 python test.py \
          --dataset Synapse \
@@ -359,3 +410,92 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
          --ckpt Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth \
          --description "TransUNet with GumbelTopK (r=0.5) and BULoss (N3x3) for Synapse - (Quantize)" \
          --quantize
+
+
+
+
+CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
+  --viz_view grid \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --grid_rows 10 \
+  --grid_cols 5 \
+  --num_slices_to_overlay 1 \
+  --grid_slice_ranges \
+    case0022_slice_058 case0022_slice_061 \
+    case0038_slice_068 case0038_slice_069 \
+    case0032_slice_103 case0032_slice_104 \
+    case0029_slice_049 case0029_slice_051 \
+    case0001_slice_089 case0001_slice_090 \
+  --viz_out Synapse/Synapse12 \
+  --viz_title "Comparing Models on Synapse Dataset" \
+  --grid_model_names MHSA TopK ATS GumbelTopK GumbelTopK+BULoss \
+  --grid_ckpts \
+    "ckpt/ckpt_Synapse/BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth" \
+    "ckpt/ckpt_Synapse/TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth::--topk_attn 0.5" \
+    "ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats" \
+    "ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk" \
+    "ckpt/ckpt_Synapse/Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth::--topk_attn 0.5 --use_gumbel_topk"
+
+CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
+  --viz_view grid \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --grid_rows 11 \
+  --grid_cols 5 \
+  --num_slices_to_overlay 1 \
+  --grid_slice_ranges case0003:125-135 \
+  --viz_out Synapse/Synapse_case003 \
+  --viz_title "Comparing Models on Synapse Case 003" \
+  --grid_model_names MHSA TopK ATS GumbelTopK GumbelTopK+BULoss \
+  --grid_ckpts \
+    "ckpt/ckpt_Synapse/BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth" \
+    "ckpt/ckpt_Synapse/TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth::--topk_attn 0.5" \
+    "ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats" \
+    "ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk" \
+    "ckpt/ckpt_Synapse/Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth::--topk_attn 0.5 --use_gumbel_topk"
+
+
+CUDA_VISIBLE_DEVICES=1 python tools/visualize.py \
+  --viz_view grid \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --grid_rows 10 \
+  --grid_cols 5 \
+  --num_slices_to_overlay 1 \
+  --viz_min_classes 6 \
+  --seed 691 \
+  --viz_out Synapse/Synapse691 \
+  --viz_title "Comparing Models on Synapse Dataset 691" \
+  --grid_model_names MHSA TopK ATS GumbelTopK GumbelTopK+BULoss \
+  --grid_ckpts \
+    "ckpt/ckpt_Synapse/BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth" \
+    "ckpt/ckpt_Synapse/TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth::--topk_attn 0.5" \
+    "ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats" \
+    "ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk" \
+    "ckpt/ckpt_Synapse/Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth::--topk_attn 0.5 --use_gumbel_topk"
+
+
+
+
+CUDA_VISIBLE_DEVICES=1 python tools/visualize.py \
+  --viz_view multiple_datasets \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --grid_rows 3 \
+  --grid_cols 5 \
+  --seed 11 \
+  --viz_legend_mode per_row \
+  --viz_out multiple_datasets/model_comparison_11 \
+  --viz_title "Comparing Models Across Datasets" \
+  --multi_datasets Synapse ACDC Cataract1k \
+  --multi_model_names MHSA TopK ATS GumbelTopK GumbelTopK+BULoss \
+  --multi_ckpts \
+    "Synapse=ckpt/ckpt_Synapse/BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth;ACDC=ckpt/ckpt_ACDC/BaselineFinal_ACDC__best_val_dice_0.8894063830375671_epoch_41_20260627_154006.pth;Cataract1k=ckpt/ckpt_Cataract1k/BaselineFinal_Cataract1k__best_val_dice_0.9609755867057377_epoch_176_20260628_031804.pth" \
+    "Synapse=ckpt/ckpt_Synapse/TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth::--topk_attn 0.5;ACDC=ckpt/ckpt_ACDC/TopK50_ACDC__best_val_dice_0.8887656331062317_epoch_43_20260629_154454.pth::--topk_attn 0.5;Cataract1k=ckpt/ckpt_Cataract1k/TopK50_Cataract1k__best_val_dice_0.94067888657252_epoch_259_20260701_194219.pth::--topk_attn 0.5" \
+    "Synapse=ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats;ACDC=ckpt/ckpt_ACDC/ATS50_ACDC__best_val_dice_0.9024859070777893_epoch_157_20260629_161313.pth::--topk_attn 0.5 --use_ats;Cataract1k=ckpt/ckpt_Cataract1k/ATS50_Cataract1k__best_val_dice_0.9448827053109804_epoch_247_20260701_193301.pth::--topk_attn 0.5 --use_ats" \
+    "Synapse=ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk;ACDC=ckpt/ckpt_ACDC/GumbelTopK_ACDC__best_val_dice_0.8999333381652832_epoch_224_20260627_165854.pth::--topk_attn 0.5 --use_gumbel_topk;Cataract1k=ckpt/ckpt_Cataract1k/GumbelTopK_Cataract1k__best_val_dice_0.9378672218571107_epoch_253_20260703_175551.pth::--topk_attn 0.5 --use_gumbel_topk" \
+    "Synapse=ckpt/ckpt_Synapse/Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth::--topk_attn 0.5 --use_gumbel_topk;ACDC=ckpt/ckpt_ACDC/GumbelTopK_BULoss_ACDC__best_val_dice_0.8964883685112_epoch_125_20260627_163047.pth::--topk_attn 0.5 --use_gumbel_topk;Cataract1k=ckpt/ckpt_Cataract1k/GumbelTopK50_BuLoss_Cataract1k__best_val_dice_0.9555858261055415_epoch_259_20260628_052737.pth::--topk_attn 0.5 --use_gumbel_topk"

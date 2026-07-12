@@ -316,3 +316,72 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
          --ckpt BaselineFinal_Cataract1k__best_val_dice_0.9001339312642812_epoch_115_20260702_081719.pth \
          --description "TransUNet Baseline for Cataract1k - (Quantize)" \
          --quantize
+
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --use_se_block \
+         --benchmark_dict benchmark_quantize/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt SEBlock_Cataract1k__best_val_dice_0.9266754029939572_epoch_238_20260708_072208.pth \
+         --description "TransUNet Baseline for Cataract1k - (SE-Guided Quantization)" \
+         --quantize
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 270 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --use_se_block \
+         --benchmark_dict benchmark_quantize/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt SEBlock_Cataract1k__best_val_dice_0.9266754029939572_epoch_238_20260708_072208.pth \
+         --description "TransUNet Baseline for Cataract1k - (SE-Guided Quantization)" \
+         --quantize
+
+
+CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
+    --viz_view grid \
+    --dataset Cataract1k \
+    --vit_name R50-ViT-B_16 \
+    --img_size 224 \
+    --grid_rows 10 \
+    --grid_cols 5 \
+    --grid_case_slides case5013:06,09,17,25,34 case5334:07,08,09,10,62 \
+    --viz_out Cataract1k/Cataract_selected_case5057_case5334.png \
+    --viz_title "Comparing Models on Cataract1k Selected Slides" \
+    --grid_model_names MHSA TopK ATS GumbelTopK GumbelTopK+BULoss \
+    --grid_ckpts \
+      "ckpt/ckpt_Cataract1k/BaselineFinal_Cataract1k__best_val_dice_0.9609755867057377_epoch_176_20260628_031804.pth" \
+      "ckpt/ckpt_Cataract1k/TopK50_Cataract1k__best_val_dice_0.94067888657252_epoch_259_20260701_194219.pth::--topk_attn 0.5" \
+      "ckpt/ckpt_Cataract1k/ATS50_Cataract1k__best_val_dice_0.9448827053109804_epoch_247_20260701_193301.pth::--topk_attn 0.5 --use_ats" \
+      "ckpt/ckpt_Cataract1k/GumbelTopK_Cataract1k__best_val_dice_0.9378672218571107_epoch_253_20260703_175551.pth::--topk_attn 0.5 --use_gumbel_topk" \
+      "ckpt/ckpt_Cataract1k/GumbelTopK50_BuLoss_Cataract1k__best_val_dice_0.9555858261055415_epoch_259_20260628_052737.pth::--topk_attn 0.5 --use_gumbel_topk"
+
+    
+CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
+    --viz_view grid \
+    --dataset Cataract1k \
+    --vit_name R50-ViT-B_16 \
+    --img_size 224 \
+    --grid_rows 10 \
+    --grid_cols 5 \
+    --viz_out Cataract1k/Cataract_random1.png \
+    --viz_title "Comparing Models on Cataract1k Selected Slides" \
+    --grid_model_names MHSA TopK ATS GumbelTopK GumbelTopK+BULoss \
+    --grid_ckpts \
+      "ckpt/ckpt_Cataract1k/BaselineFinal_Cataract1k__best_val_dice_0.9609755867057377_epoch_176_20260628_031804.pth" \
+      "ckpt/ckpt_Cataract1k/TopK50_Cataract1k__best_val_dice_0.94067888657252_epoch_259_20260701_194219.pth::--topk_attn 0.5" \
+      "ckpt/ckpt_Cataract1k/ATS50_Cataract1k__best_val_dice_0.9448827053109804_epoch_247_20260701_193301.pth::--topk_attn 0.5 --use_ats" \
+      "ckpt/ckpt_Cataract1k/GumbelTopK_Cataract1k__best_val_dice_0.9378672218571107_epoch_253_20260703_175551.pth::--topk_attn 0.5 --use_gumbel_topk" \
+      "ckpt/ckpt_Cataract1k/GumbelTopK50_BuLoss_Cataract1k__best_val_dice_0.9555858261055415_epoch_259_20260628_052737.pth::--topk_attn 0.5 --use_gumbel_topk"
+
+    

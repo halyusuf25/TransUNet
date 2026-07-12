@@ -7,9 +7,9 @@ example of command-line usage:
     CUDA_VISIBLE_DEVICES=0 python tools/save_test_mask_overlays.py \
         --dataset ACDC \
         --volume_path /data/halyusuf/data/ACDC \
-        --output_dir /data/halyusuf/data/ACDC/test_overlays \
-        --alpha 0.5 \
-        --dpi 120 \
+        --frame_per_file \
+        --alpha 0.6 \
+        --dpi 180 \
         --legend 
         
         
@@ -318,6 +318,11 @@ def _parse_args() -> argparse.Namespace:
         help="Number of overlaid images/slices to place in each saved PNG.",
     )
     parser.add_argument(
+        "--frame_per_file",
+        action="store_true",
+        help="For ACDC only, save each patient frame volume as one PNG containing its slices.",
+    )
+    parser.add_argument(
         "--sample_limit",
         type=int,
         default=None,
@@ -350,6 +355,8 @@ def _parse_args() -> argparse.Namespace:
 
     if not 0.0 <= args.alpha <= 1.0:
         parser.error("--alpha must be between 0 and 1.")
+    if args.frame_per_file and args.dataset != "ACDC":
+        parser.error("--frame_per_file can only be used with --dataset ACDC.")
     if args.dpi <= 0:
         parser.error("--dpi must be positive.")
     if args.images_per_file < 1:
@@ -863,6 +870,30 @@ def main() -> None:
         case_name = _sample_case_name(sample, sample_idx)
 
         if _is_volume_sample(image, label):
+            if args.dataset == "ACDC" and args.frame_per_file:
+                frame_items = []
+                for slice_counter, (slice_idx, image_slice, label_slice) in enumerate(
+                    _iter_sample_slices(image, label)
+                ):
+                    if args.slice_limit is not None and slice_counter >= args.slice_limit:
+                        break
+                    slide_name = "{}_slice_{:03d}".format(case_name, slice_idx)
+                    frame_items.append((image_slice, label_slice, slide_name))
+
+                if frame_items:
+                    _save_overlay_group(
+                        frame_items,
+                        output_dir / "{}.png".format(case_name),
+                        configured_classes,
+                        configured_labels,
+                        args.alpha,
+                        args.dpi,
+                        args.legend,
+                    )
+                    saved_count += len(frame_items)
+                    file_count += 1
+                continue
+
             for slice_counter, (slice_idx, image_slice, label_slice) in enumerate(
                 _iter_sample_slices(image, label)
             ):

@@ -15,6 +15,9 @@ GRID_ONLY_ARG_NAMES = (
     'viz_legend_mode',
     'grid_rows',
     'grid_indices',
+    'viz_min_classes',
+    'grid_slice_ranges',
+    'grid_case_slides',
     'grid_cols',
     'grid_ckpts',
     'grid_model_names',
@@ -44,11 +47,17 @@ def add_visualization_args(parser):
     parser.add_argument('--viz_hide_input', action='store_true',
                         help='hide input column in visualization (show only prediction and ground truth)')
     parser.add_argument('--num_slices_to_overlay', type=int, default=None,
-                        help='number of slices to overlay for visualization (clamped to [2,20])')
+                        help='number of slices to overlay for visualization; values <=1 show a single selected slice, values >=2 are clamped to [2,20]')
     parser.add_argument('--grid_rows', type=int, default=3,
                         help='number of image/sample rows in grid visualization; must match --multi_datasets in multiple_datasets mode')
     parser.add_argument('--grid_indices', type=int, nargs='*', default=None,
                         help='optional dataset indices for each grid row; omitted means random samples')
+    parser.add_argument('--viz_min_classes', type=int, default=None,
+                        help='minimum number of foreground ground-truth classes required for randomly selected grid images (default: no minimum)')
+    parser.add_argument('--grid_slice_ranges', nargs='*', default=None,
+                        help='optional volume slice ranges for grid rows, e.g. case0008:103-111 case0022:54-62')
+    parser.add_argument('--grid_case_slides', nargs='*', default=None,
+                        help='optional Cataract case slide specs for grid rows, e.g. case5057:42,62,69 case5334:04,08')
     parser.add_argument('--grid_cols', type=int, default=3,
                         help='number of model-output columns in grid visualization; must match --multi_ckpts in multiple_datasets mode')
     parser.add_argument('--grid_ckpts', nargs='*', default=None,
@@ -58,7 +67,7 @@ def add_visualization_args(parser):
     parser.add_argument('--multi_datasets', nargs='*', default=None,
                         help='dataset names to render as rows in multiple_datasets visualization')
     parser.add_argument('--multi_dataset_args', nargs='*', default=None,
-                        help='optional per-dataset visualization args, e.g. Dataset::--viz_index 0 --viz_slice 60 --num_slices_to_overlay 5')
+                        help='optional per-dataset visualization args, e.g. Dataset::--viz_index 0 --viz_slice 60 --num_slices_to_overlay 5; omitted datasets use a random sample/slice with foreground labels')
     parser.add_argument('--multi_model_names', nargs='*', default=None,
                         help='optional display names for multiple_datasets model-output columns')
     parser.add_argument('--multi_ckpts', nargs='*', default=None,
@@ -442,6 +451,8 @@ def _clamp_overlay_slices(num_slices_to_overlay: Optional[int]) -> Optional[int]
     try:
         value = int(num_slices_to_overlay)
     except (TypeError, ValueError):
+        return None
+    if value <= 1:
         return None
     return max(2, min(20, value))
 

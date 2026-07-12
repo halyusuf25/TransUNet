@@ -101,7 +101,7 @@ CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
   --vit_name R50-ViT-B_16 \
   --grid_rows 10 \
   --grid_cols 4 \
-  --viz_out testing \
+  --viz_out testinf_Endovis/Endovis2018_2 \
   --viz_title "Comparing Models on EndoVis2018 Dataset" \
   --grid_model_names Baseline TopK ATS Gumbel \
   --grid_ckpts \
