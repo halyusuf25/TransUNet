@@ -109,9 +109,10 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
          --batch_size 24 \
          --img_size 224 \
          --repeated_runs 10 \
+         --benchmark_dict benchmark_quantize/ \
          --ckpt_dir ckpt/ckpt_ACDC \
          --ckpt BaselineFinal_ACDC__best_val_dice_0.8894063830375671_epoch_41_20260627_154006.pth \
-         --description "TransUNet Baseline for ACDC"
+         --description "TransUNet Baseline for ACDC - new"
 
 CUDA_VISIBLE_DEVICES=4 python test.py \
          --dataset ACDC \
@@ -347,14 +348,14 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
           --quantize_calibrate_batch_size 8 \
           --description "TransUNet Baseline for ACDC - (SE-AUX-Block Guided Quantization)" 
 
-CUDA_VISIBLE_DEVICES=1 python test.py \
+CUDA_VISIBLE_DEVICES=4 python test.py \
           --dataset ACDC \
           --vit_name R50-ViT-B_16 \
           --img_size 224 \
           --batch_size 24 \
           --repeated_runs 10 \
           --benchmark_dict benchmark_quantize/ \
-          --ckpt_dir ../test/TransUNet/ckpt/ckpt_ACDC/ \
+          --ckpt_dir ckpt/ckpt_ACDC/ \
           --ckpt SEBlock_ACDC__best_val_dice_0.9004343152046204_epoch_115_20260708_045033.pth \
           --use_se_block \
           --se_calib_only \
@@ -362,18 +363,19 @@ CUDA_VISIBLE_DEVICES=1 python test.py \
           --quant_backend custom_w4 \
           --saliency_source se_aux \
           --quantize_calibrate_batch_size 8 \
-          --description "TransUNet Baseline for ACDC - (new SE-AUX-Quantization 2) OLD ckpt" 
+          --description "TransUNet Baseline for ACDC - (new SE-AUX-Quantization 2) OLD ckpt" \
+          2>&1 | tee test_seaux_benchmarking_script.log
 
 
 
-CUDA_VISIBLE_DEVICES=2 python test.py \
+CUDA_VISIBLE_DEVICES=5 python test.py \
           --dataset ACDC \
           --vit_name R50-ViT-B_16 \
           --img_size 224 \
           --batch_size 24 \
           --repeated_runs 10 \
           --benchmark_dict benchmark_quantize/ \
-          --ckpt_dir ../test/TransUNet/ckpt/ckpt_ACDC/ \
+          --ckpt_dir ckpt/ckpt_ACDC/ \
           --ckpt SEBlock_ACDC__best_val_dice_0.9004343152046204_epoch_115_20260708_045033.pth \
           --use_se_block \
           --se_calib_only \
@@ -381,5 +383,22 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
           --quant_backend custom_w4 \
           --saliency_source activation \
           --quantize_calibrate_batch_size 8 \
-          --description "TransUNet Baseline for ACDC - (new AWQ Quantization 2) OLD ckpt" 
+          --description "TransUNet Baseline for ACDC - (new AWQ Quantization 2) OLD ckpt" \
+          2>&1 | tee test_awq_benchmarking_script.log
 
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+          --dataset ACDC \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ckpt/ckpt_ACDC/ \
+          --ckpt BaselineFinal_ACDC__best_val_dice_0.8894063830375671_epoch_41_20260627_154006.pth \
+          --quantize \
+          --quant_backend custom_w4 \
+          --saliency_source activation \
+          --quantize_calibrate_batch_size 8 \
+          --description "Vanilla TransUNet for ACDC - (new AWQ Quantization 2)" 
+        

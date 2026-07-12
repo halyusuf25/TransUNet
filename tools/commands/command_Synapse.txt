@@ -396,5 +396,72 @@ CUDA_VISIBLE_DEVICES=1 python test.py \
           --quant_backend custom_w4 \
           --saliency_source se_aux \
           --quantize_calibrate_batch_size 8 \
-          --description "TransUNet Baseline for Synapse - (our new SE-AUX Quantization)" 
+          --description "TransUNet Baseline for Synapse - (our new SE-AUX Quantization)" \
+
+
+
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --benchmark_dict benchmark_quantize/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
+         --description "TransUNet Baseline Final for Synapse"
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+          --dataset Synapse \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ckpt/ckpt_Synapse/ \
+          --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
+          --quantize \
+          --quant_backend custom_w4 \
+          --saliency_source activation \
+          --quantize_calibrate_batch_size 8 \
+          --description "Vanilla TransUNet for Synapse - (new AWQ Quantization 2)" 
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+          --dataset Synapse \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ckpt/ckpt_Synapse/ \
+          --ckpt SEBlock_Synapse__best_val_dice_0.7832387685775757_epoch_100_20260708_053719.pth \
+          --use_se_block \
+          --se_calib_only \
+          --quantize \
+          --quant_backend custom_w4 \
+          --saliency_source se_aux \
+          --quantize_calibrate_batch_size 8 \
+          --description "TransUNet+SE for Synapse - (new SE-AUX-Quantization 2)" 
+
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+          --dataset Synapse \
+          --vit_name R50-ViT-B_16 \
+          --img_size 224 \
+          --batch_size 24 \
+          --repeated_runs 10 \
+          --benchmark_dict benchmark_quantize/ \
+          --ckpt_dir ckpt/ckpt_Synapse/ \
+          --ckpt SEBlock_Synapse__best_val_dice_0.7832387685775757_epoch_100_20260708_053719.pth \
+          --use_se_block \
+          --se_calib_only \
+          --quantize \
+          --quant_backend custom_w4 \
+          --saliency_source activation \
+          --quantize_calibrate_batch_size 8 \
+          --description "TransUNet+SE for Synapse - (new AWQ Quantization 2)" 
+
 
