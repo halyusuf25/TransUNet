@@ -4,7 +4,7 @@
 # - Uses real samples from your test DataLoader (no dummy tensors)
 # - Throughput (img/s), Latency (mean & p50/p90/p95/p99 in ms)
 # - #Params, FLOPs (GFLOPs)  --- includes custom counting for Attention/SHSA
-# - Logical quantized-model counting for AWQ WQLinear and custom W4GroupedLinear layers
+# - Logical quantized-model counting for official AWQ WQLinear and reference W4 layers
 # - Clean, modular, easy to extend
 # ---------------------------------------------------------------------------
 
@@ -749,4 +749,38 @@ def benchmark_segmentation_model(
         "amp_autocast": bool(autocast),
         "quantized_model": bool(quantized_model),
     }
+    core_model = model.module if hasattr(model, "module") else model
+    encoder = getattr(getattr(core_model, "transformer", None), "encoder", None)
+    runtime_dtype = getattr(encoder, "awq_runtime_dtype", None)
+    wqlinear_count = sum(
+        1
+        for module in core_model.modules()
+        if module.__class__.__name__ == "WQLinear"
+        and module.__class__.__module__ == "awq.quantize.qmodule"
+    )
+    notes.update(
+        {
+            "quant_backend": getattr(args, "quant_backend", None),
+            "saliency_source": getattr(args, "saliency_source", None),
+            "quantized_module_class": getattr(
+                encoder, "awq_quantized_module_class", None
+            ),
+            "runtime_activation_dtype": (
+                str(runtime_dtype) if runtime_dtype is not None else None
+            ),
+            "awq_package_module_path": getattr(
+                encoder, "awq_package_module_path", None
+            ),
+            "awq_inference_engine_path": getattr(
+                encoder, "awq_inference_engine_path", None
+            ),
+            "awq_inference_engine_active": bool(
+                getattr(encoder, "awq_inference_engine_active", False)
+            ),
+            "wqlinear_module_count": int(wqlinear_count),
+            "zero_point": getattr(encoder, "awq_zero_point", None),
+            "group_size": getattr(encoder, "awq_group_size", None),
+            "auto_clip": getattr(encoder, "awq_auto_clip", None),
+        }
+    )
     return BenchmarkResults(metrics=metrics, notes=notes)

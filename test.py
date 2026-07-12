@@ -9,7 +9,11 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from src.benchmark import benchmark_segmentation_model, build_benchmark_loader
-from src.quantize import SEViTSegQuantizer, collect_inc_awq_calib_inputs
+from src.quantize import (
+    SEViTSegQuantizer,
+    collect_inc_awq_calib_inputs,
+    require_official_awq_runtime,
+)
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
@@ -402,6 +406,8 @@ def main():
             raise ValueError("--saliency_source se_aux requires --use_se_block.")
         if not args.se_calib_only:
             raise ValueError("--saliency_source se_aux requires --se_calib_only.")
+    if args.quantize and args.quant_backend == "custom_w4":
+        require_official_awq_runtime()
     
     # name the same snapshot defined in train script!
     args.exp = 'TU_' + dataset_name + str(args.img_size)
@@ -512,7 +518,7 @@ def main():
 
         if args.quant_backend == "custom_w4":
             logging.info(
-                "Running custom activation-aware W4 grouped weight-only quantization: "
+                "Running official AWQ WQLinear W4A16 quantization: "
                 "n_calib_batches=%d group_size=%d saliency_source=%s",
                 args.quantize_calibrate_batch_size,
                 128,
@@ -531,7 +537,7 @@ def main():
             net = quantizer.quantize()
             net.eval().to(device)
             logging.info(
-                "Custom W4 grouped weight-only quantization finished with saliency_source=%s.",
+                "Official AWQ WQLinear W4A16 quantization finished with saliency_source=%s.",
                 args.saliency_source,
             )
             logging.info("Model quantized successfully.")

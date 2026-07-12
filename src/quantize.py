@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib
+import inspect
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -9,6 +11,70 @@ import torch.nn.functional as F
 
 
 logger = logging.getLogger(__name__)
+
+
+_OFFICIAL_AWQ_RUNTIME: Optional[Dict[str, Any]] = None
+_OFFICIAL_AWQ_ERROR = (
+    "The custom_w4 backend now requires the MIT-HAN-Lab AWQ W4A16 CUDA "
+    "extension. Install llm-awq and build awq/kernels before running this "
+    "backend. The reference eager-dequantization path is not used for "
+    "deployment benchmarks."
+)
+
+
+def require_official_awq_runtime() -> Dict[str, Any]:
+    """Load and validate the official MIT-HAN-Lab AWQ CUDA runtime."""
+    global _OFFICIAL_AWQ_RUNTIME
+    if _OFFICIAL_AWQ_RUNTIME is not None:
+        return _OFFICIAL_AWQ_RUNTIME
+
+    problems = []
+    if not torch.cuda.is_available():
+        problems.append("CUDA is not available")
+
+    try:
+        awq_module = importlib.import_module("awq")
+    except Exception as exc:  # pragma: no cover - depends on deployment environment
+        awq_module = None
+        problems.append(f"could not import awq ({exc})")
+
+    try:
+        inference_engine = importlib.import_module("awq_inference_engine")
+    except Exception as exc:  # pragma: no cover - depends on deployment environment
+        inference_engine = None
+        problems.append(f"could not import awq_inference_engine ({exc})")
+
+    pseudo_quantize_tensor = None
+    wqlinear = None
+    auto_clip_layer = None
+    qmodule = None
+    if awq_module is not None and inference_engine is not None:
+        try:
+            quantizer_module = importlib.import_module("awq.quantize.quantizer")
+            qmodule = importlib.import_module("awq.quantize.qmodule")
+            auto_clip_module = importlib.import_module("awq.quantize.auto_clip")
+            pseudo_quantize_tensor = quantizer_module.pseudo_quantize_tensor
+            wqlinear = qmodule.WQLinear
+            auto_clip_layer = auto_clip_module.auto_clip_layer
+        except Exception as exc:  # pragma: no cover - depends on deployment environment
+            problems.append(f"could not import official AWQ quantization modules ({exc})")
+
+    for kernel_name in ("gemm_forward_cuda_new", "gemv_forward_cuda_new"):
+        if inference_engine is not None and not hasattr(inference_engine, kernel_name):
+            problems.append(f"awq_inference_engine is missing {kernel_name}")
+
+    if problems:
+        raise RuntimeError(f"{_OFFICIAL_AWQ_ERROR} Details: {'; '.join(problems)}.")
+
+    _OFFICIAL_AWQ_RUNTIME = {
+        "pseudo_quantize_tensor": pseudo_quantize_tensor,
+        "WQLinear": wqlinear,
+        "auto_clip_layer": auto_clip_layer,
+        "awq_module_path": inspect.getfile(qmodule),
+        "awq_inference_engine_path": getattr(inference_engine, "__file__", None),
+        "awq_inference_engine": inference_engine,
+    }
+    return _OFFICIAL_AWQ_RUNTIME
 
 
 def image_to_nchw_for_quant_calib(image, args):
@@ -168,7 +234,7 @@ def _normalize_se_gate_tensor(gate, expected_channels=None):
 
 
 class W4GroupedLinear(nn.Module):
-    """Packed W4 grouped weight-only Linear with floating point activations."""
+    """Reference/debug W4 Linear; not used by custom_w4 deployment benchmarks."""
 
     pack_factor = 8
 
@@ -519,19 +585,26 @@ def se_quant_sensitivity_aux_loss(
 
 class SEViTSegQuantizer:
     """
-    Activation-aware W4 grouped weight-only quantizer for ViT segmentation.
+    Official-AWQ-compatible W4A16 quantizer for ViT segmentation.
 
     The quantizer only converts Transformer encoder Linear layers
     (attn.query/key/value/out and ffn.fc1/fc2). LayerNorm, attention matmul,
     softmax, dropout, decoder layers, segmentation heads, SE MLPs, and embedding
-    backbones remain floating point. saliency_source='activation' provides an
-    ordinary AWQ-style activation baseline, while saliency_source='se_aux'
-    weights activation saliency by the trained calibration-only SE estimator.
+    backbones remain unquantized. saliency_source='activation' provides vanilla
+    mean-absolute activation saliency, while saliency_source='se_aux' weights
+    that saliency by the trained calibration-only SE estimator. Both modes then
+    share scale search, clipping, official WQLinear packing, and CUDA kernels.
     """
 
     target_linear_paths = (
         "attn.query",
         "attn.key",
+        "attn.value",
+        "attn.out",
+        "ffn.fc1",
+        "ffn.fc2",
+    )
+    clip_target_paths = (
         "attn.value",
         "attn.out",
         "ffn.fc1",
@@ -555,16 +628,37 @@ class SEViTSegQuantizer:
                     saliency_source
                 )
             )
+        if int(w_bit) != 4:
+            raise ValueError(f"The official custom_w4 backend requires w_bit=4, got {w_bit}.")
+        if int(q_group_size) != 128:
+            raise ValueError(
+                "The official custom_w4 backend requires q_group_size=128, "
+                f"got {q_group_size}."
+            )
+
+        official_awq = require_official_awq_runtime()
         self.model = model
         self.calib_loader = calib_loader
         self.w_bit = int(w_bit)
         self.q_group_size = int(q_group_size)
+        self.q_config = {
+            "zero_point": True,
+            "q_group_size": self.q_group_size,
+        }
         self.n_calib_batches = int(n_calib_batches)
         self.args = args
         self.saliency_source = saliency_source
         self.device = torch.device(device) if device is not None else self._model_device()
+        if self.device.type != "cuda":
+            raise RuntimeError(f"{_OFFICIAL_AWQ_ERROR} Details: selected device is {self.device}.")
+        self._official_pseudo_quantize_tensor = official_awq["pseudo_quantize_tensor"]
+        self._official_wqlinear = official_awq["WQLinear"]
+        self._official_auto_clip_layer = official_awq["auto_clip_layer"]
+        self._awq_module_path = official_awq["awq_module_path"]
+        self._awq_inference_engine_path = official_awq["awq_inference_engine_path"]
         self.calib_chunk_size = min(max(1, int(getattr(args, "batch_size", 1))), 8)
         self.max_mse_samples = max(1, min(32, self.n_calib_batches * self.calib_chunk_size))
+        self.max_clip_tokens = 512
 
         self.encoder = getattr(getattr(model, "transformer", None), "encoder", None)
         if self.encoder is None or not hasattr(self.encoder, "layer"):
@@ -577,7 +671,7 @@ class SEViTSegQuantizer:
         self.total_encoder_linears = sum(
             1 for block in self.blocks for module in block.modules() if isinstance(module, nn.Linear)
         )
-        logger.info("Custom W4 quantizer found %d encoder blocks.", len(self.blocks))
+        logger.info("Official AWQ custom_w4 quantizer found %d encoder blocks.", len(self.blocks))
         logger.info(
             "Transformer encoder Linear layers found: %d; target layers per block: %s",
             self.total_encoder_linears,
@@ -604,11 +698,18 @@ class SEViTSegQuantizer:
                     raise TypeError(
                         f"Block {block_idx} {rel_path} must be nn.Linear, got {type(module).__name__}."
                     )
-                _validate_w4_grouped_linear(
-                    module,
-                    group_size=self.q_group_size,
-                    w_bit=self.w_bit,
-                )
+                in_features = int(module.in_features)
+                out_features = int(module.out_features)
+                if in_features % self.q_group_size != 0:
+                    raise ValueError(
+                        f"Block {block_idx} {rel_path} in_features={in_features} is not "
+                        f"divisible by AWQ group_size={self.q_group_size}."
+                    )
+                if out_features % 8 != 0 or out_features % 4 != 0:
+                    raise ValueError(
+                        f"Block {block_idx} {rel_path} out_features={out_features} must "
+                        "be divisible by both 8 and 4 for official AWQ WQLinear."
+                    )
 
     def quantize(self):
         self.model.eval().to(self.device)
@@ -619,17 +720,20 @@ class SEViTSegQuantizer:
                 self._validate_se_gates_available_and_mode_consistent()
             calib = self._collect_saliency_and_mse_inputs()
             scales_list = self._search_and_apply_scales(calib)
-            quantized = self._convert_target_linears_to_w4()
+            clipped = self._search_and_apply_clipping(calib["input_feat"])
+            quantized = self._convert_target_linears_to_wqlinear()
+            self._enable_official_w4a16_runtime(quantized)
         finally:
             self._restore_drop_se_block(encoder_args, had_drop_attr, old_drop)
-        logger.info("Custom W4 scale groups applied: %d", len(scales_list))
+        logger.info("Official AWQ scale groups applied: %d", len(scales_list))
+        logger.info("Official AWQ clipping targets applied: %d", clipped)
         logger.info(
-            "Total Transformer encoder Linear layers: %d; W4 grouped linears quantized: %d.",
+            "Total Transformer encoder Linear layers: %d; official AWQ WQLinear modules: %d.",
             self.total_encoder_linears,
             quantized,
         )
         logger.info(
-            "Custom W4 quantization completed with saliency_source=%s.",
+            "Official custom_w4 W4A16 quantization completed with saliency_source=%s.",
             self.saliency_source,
         )
         return self.model
@@ -656,7 +760,7 @@ class SEViTSegQuantizer:
             if x.numel() == 0:
                 continue
             return x[: self.calib_chunk_size].to(self.device, non_blocking=True)
-        raise RuntimeError("No calibration inputs were available for custom W4 quantization.")
+        raise RuntimeError("No calibration inputs were available for official AWQ quantization.")
 
     def _validate_se_gates_available_and_mode_consistent(self):
         se_layers = getattr(self.encoder, "SELayer", None)
@@ -725,25 +829,38 @@ class SEViTSegQuantizer:
         captured: Dict[Tuple[int, str], torch.Tensor] = {}
         hooks = []
 
-        def make_hook(block_idx, kind):
+        def make_hook(block_idx, module_path):
             def hook(_module, inputs):
                 if not inputs:
-                    raise RuntimeError(f"Missing input for block {block_idx} {kind} hook.")
-                captured[(block_idx, kind)] = inputs[0].detach()
+                    raise RuntimeError(
+                        f"Missing input for block {block_idx} {module_path} hook."
+                    )
+                captured[(block_idx, module_path)] = inputs[0].detach()
 
             return hook
 
         for block_idx, block in enumerate(self.blocks):
-            hooks.append(block.attn.query.register_forward_pre_hook(make_hook(block_idx, "attn")))
-            hooks.append(block.ffn.fc1.register_forward_pre_hook(make_hook(block_idx, "ffn")))
+            for module_path in self.target_linear_paths:
+                module = _get_submodule(block, module_path)
+                hooks.append(
+                    module.register_forward_pre_hook(make_hook(block_idx, module_path))
+                )
 
         attn_sums: List[Optional[torch.Tensor]] = [None] * len(self.blocks)
         ffn_sums: List[Optional[torch.Tensor]] = [None] * len(self.blocks)
-        counts = [0] * len(self.blocks)
+        attn_counts = [0] * len(self.blocks)
+        ffn_counts = [0] * len(self.blocks)
         attn_mse_inputs: List[List[torch.Tensor]] = [[] for _ in self.blocks]
         ffn_mse_inputs: List[List[torch.Tensor]] = [[] for _ in self.blocks]
         attn_mse_counts = [0] * len(self.blocks)
         ffn_mse_counts = [0] * len(self.blocks)
+        feature_cache_names = ("attn.qkv", "attn.out", "ffn.fc1", "ffn.fc2")
+        feature_caches = [
+            {name: [] for name in feature_cache_names} for _ in self.blocks
+        ]
+        feature_counts = [
+            {name: 0 for name in feature_cache_names} for _ in self.blocks
+        ]
         total_images = 0
         processed_batches = 0
 
@@ -768,53 +885,65 @@ class SEViTSegQuantizer:
                         total_images += int(chunk.shape[0])
 
                         for block_idx, block in enumerate(self.blocks):
-                            attn_in = captured.get((block_idx, "attn"))
-                            ffn_in = captured.get((block_idx, "ffn"))
-                            if attn_in is None or ffn_in is None:
-                                raise RuntimeError(
-                                    f"Calibration hooks did not capture both attn and ffn inputs for block {block_idx}."
-                                )
+                            block_inputs = {}
+                            for module_path in self.target_linear_paths:
+                                module_input = captured.get((block_idx, module_path))
+                                if module_input is None:
+                                    raise RuntimeError(
+                                        "Calibration hook did not capture block {} {} input.".format(
+                                            block_idx, module_path
+                                        )
+                                    )
+                                expected_channels = _get_submodule(
+                                    block, module_path
+                                ).in_features
+                                if module_input.shape[-1] != expected_channels:
+                                    raise ValueError(
+                                        "Block {} {} input has {} channels; expected {}.".format(
+                                            block_idx,
+                                            module_path,
+                                            module_input.shape[-1],
+                                            expected_channels,
+                                        )
+                                    )
+                                block_inputs[module_path] = module_input
 
-                            attn_act = _activation_channel_mean(attn_in)
-                            ffn_act = _activation_channel_mean(ffn_in)
+                            attn_in = block_inputs["attn.query"]
+                            ffn_in = block_inputs["ffn.fc1"]
+                            for shared_path in ("attn.key", "attn.value"):
+                                if block_inputs[shared_path].shape != attn_in.shape:
+                                    raise ValueError(
+                                        "Block {} {} input shape {} does not match shared q/k/v shape {}.".format(
+                                            block_idx,
+                                            shared_path,
+                                            tuple(block_inputs[shared_path].shape),
+                                            tuple(attn_in.shape),
+                                        )
+                                    )
+
+                            gate = None
                             if self.saliency_source == "se_aux":
                                 gate = _normalize_se_gate_tensor(
                                     se_scales[block_idx],
                                     expected_channels=block.hidden_size,
                                 ).to(device=attn_in.device)
-                                if gate.shape != attn_act.shape:
-                                    raise ValueError(
-                                        "Block {} gate shape {} does not match attn activation shape {}.".format(
-                                            block_idx, tuple(gate.shape), tuple(attn_act.shape)
-                                        )
-                                    )
-                                if gate.shape != ffn_act.shape:
-                                    raise ValueError(
-                                        "Block {} gate shape {} does not match ffn activation shape {}.".format(
-                                            block_idx, tuple(gate.shape), tuple(ffn_act.shape)
-                                        )
-                                    )
-                                attn_weighted = attn_act * gate
-                                ffn_weighted = ffn_act * gate
-                                sample_count = int(gate.shape[0])
-                            else:
-                                if attn_act.shape[0] != ffn_act.shape[0]:
-                                    raise ValueError(
-                                        "Block {} attention and FFN activation batch sizes differ: {} vs {}.".format(
-                                            block_idx,
-                                            attn_act.shape[0],
-                                            ffn_act.shape[0],
-                                        )
-                                    )
-                                attn_weighted = attn_act
-                                ffn_weighted = ffn_act
-                                sample_count = int(attn_act.shape[0])
 
-                            attn_sum = attn_weighted.sum(dim=0).detach().cpu().double()
-                            ffn_sum = ffn_weighted.sum(dim=0).detach().cpu().double()
+                            attn_sum, attn_count = self._saliency_sum_and_count(
+                                attn_in,
+                                gate,
+                                block_idx,
+                                "attention",
+                            )
+                            ffn_sum, ffn_count = self._saliency_sum_and_count(
+                                ffn_in,
+                                gate,
+                                block_idx,
+                                "ffn",
+                            )
                             attn_sums[block_idx] = attn_sum if attn_sums[block_idx] is None else attn_sums[block_idx] + attn_sum
                             ffn_sums[block_idx] = ffn_sum if ffn_sums[block_idx] is None else ffn_sums[block_idx] + ffn_sum
-                            counts[block_idx] += sample_count
+                            attn_counts[block_idx] += attn_count
+                            ffn_counts[block_idx] += ffn_count
 
                             attn_mse_counts[block_idx] = self._cache_mse_input(
                                 attn_mse_inputs[block_idx],
@@ -826,6 +955,19 @@ class SEViTSegQuantizer:
                                 ffn_in,
                                 ffn_mse_counts[block_idx],
                             )
+
+                            feature_sources = {
+                                "attn.qkv": attn_in,
+                                "attn.out": block_inputs["attn.out"],
+                                "ffn.fc1": ffn_in,
+                                "ffn.fc2": block_inputs["ffn.fc2"],
+                            }
+                            for cache_name, feature in feature_sources.items():
+                                feature_counts[block_idx][cache_name] = self._cache_clip_tokens(
+                                    feature_caches[block_idx][cache_name],
+                                    feature,
+                                    feature_counts[block_idx][cache_name],
+                                )
         finally:
             for hook in hooks:
                 hook.remove()
@@ -835,17 +977,43 @@ class SEViTSegQuantizer:
 
         saliency_attn = []
         saliency_ffn = []
+        input_feat = []
         for block_idx, block in enumerate(self.blocks):
-            if counts[block_idx] <= 0 or attn_sums[block_idx] is None or ffn_sums[block_idx] is None:
+            if (
+                attn_counts[block_idx] <= 0
+                or ffn_counts[block_idx] <= 0
+                or attn_sums[block_idx] is None
+                or ffn_sums[block_idx] is None
+            ):
                 raise RuntimeError(f"No calibration saliency accumulated for encoder block {block_idx}.")
-            attn_sal = (attn_sums[block_idx] / float(counts[block_idx])).float()
-            ffn_sal = (ffn_sums[block_idx] / float(counts[block_idx])).float()
+            attn_sal = (attn_sums[block_idx] / float(attn_counts[block_idx])).float()
+            ffn_sal = (ffn_sums[block_idx] / float(ffn_counts[block_idx])).float()
             self._validate_saliency(attn_sal, block.hidden_size, block_idx, "attention")
             self._validate_saliency(ffn_sal, block.hidden_size, block_idx, "ffn")
             saliency_attn.append(attn_sal)
             saliency_ffn.append(ffn_sal)
             self._log_saliency_stats(block_idx, "attention", attn_sal)
             self._log_saliency_stats(block_idx, "ffn", ffn_sal)
+
+            cached = {}
+            for cache_name in feature_cache_names:
+                tensors = feature_caches[block_idx][cache_name]
+                if not tensors:
+                    raise RuntimeError(
+                        f"No clipping inputs cached for block {block_idx} {cache_name}."
+                    )
+                cached[cache_name] = torch.cat(tensors, dim=0).contiguous()
+            qkv_input = cached["attn.qkv"]
+            input_feat.append(
+                {
+                    "attn.query": qkv_input,
+                    "attn.key": qkv_input,
+                    "attn.value": qkv_input,
+                    "attn.out": cached["attn.out"],
+                    "ffn.fc1": cached["ffn.fc1"],
+                    "ffn.fc2": cached["ffn.fc2"],
+                }
+            )
 
         logger.info(
             "Calibration images/slices used: %d from %d dataloader batches.",
@@ -858,16 +1026,44 @@ class SEViTSegQuantizer:
             "saliency_ffn": saliency_ffn,
             "attn_mse_inputs": attn_mse_inputs,
             "ffn_mse_inputs": ffn_mse_inputs,
+            "input_feat": input_feat,
             "total_images": total_images,
             "processed_batches": processed_batches,
         }
+
+    def _saliency_sum_and_count(self, activation, gate, block_idx, kind):
+        if gate is None:
+            flattened = activation.detach().float().reshape(-1, activation.shape[-1])
+            return flattened.abs().sum(dim=0).cpu().double(), int(flattened.shape[0])
+
+        per_sample = _activation_channel_mean(activation)
+        if gate.shape != per_sample.shape:
+            raise ValueError(
+                "Block {} gate shape {} does not match {} activation shape {}.".format(
+                    block_idx,
+                    tuple(gate.shape),
+                    kind,
+                    tuple(per_sample.shape),
+                )
+            )
+        weighted = per_sample * gate
+        return weighted.sum(dim=0).detach().cpu().double(), int(gate.shape[0])
 
     def _cache_mse_input(self, cache, tensor, cached_count):
         remaining = self.max_mse_samples - int(cached_count)
         if remaining <= 0:
             return int(cached_count)
         take = min(remaining, int(tensor.shape[0]))
-        cache.append(tensor[:take].detach().cpu().float())
+        cache.append(tensor[:take].detach().cpu().float().contiguous())
+        return int(cached_count) + take
+
+    def _cache_clip_tokens(self, cache, tensor, cached_count):
+        remaining = self.max_clip_tokens - int(cached_count)
+        if remaining <= 0:
+            return int(cached_count)
+        flattened = tensor.detach().reshape(-1, tensor.shape[-1])
+        take = min(remaining, int(flattened.shape[0]))
+        cache.append(flattened[:take].cpu().float().contiguous())
         return int(cached_count) + take
 
     def _validate_saliency(self, saliency, hidden_size, block_idx, kind):
@@ -903,14 +1099,12 @@ class SEViTSegQuantizer:
                 linears2scale=[block.attn.query, block.attn.key, block.attn.value],
                 x_for_mse=attn_x,
                 saliency=calib["saliency_attn"][block_idx],
-                w_quantize_func=self._pseudo_quantize_weight,
             )
             ffn_scales, ffn_ratio, ffn_mse = self._search_best_scales_from_saliency(
                 module2inspect=block.ffn,
                 linears2scale=[block.ffn.fc1],
                 x_for_mse=ffn_x,
                 saliency=calib["saliency_ffn"][block_idx],
-                w_quantize_func=self._pseudo_quantize_weight,
             )
 
             logger.info(
@@ -927,12 +1121,14 @@ class SEViTSegQuantizer:
                 "attention_norm",
                 ("attn.query", "attn.key", "attn.value"),
                 attn_scales,
+                calib["input_feat"][block_idx],
             )
             self._apply_scale_to_norm_and_linears(
                 block,
                 "ffn_norm",
                 ("ffn.fc1",),
                 ffn_scales,
+                calib["input_feat"][block_idx],
             )
             scales_list.extend(
                 [
@@ -953,13 +1149,10 @@ class SEViTSegQuantizer:
         linears2scale,
         x_for_mse,
         saliency,
-        w_quantize_func,
-        kwargs=None,
         n_grid=20,
     ):
-        kwargs = kwargs or {}
+        """TransUNet adapter of llm-awq auto_scale._search_module_scale."""
         saliency = saliency.detach().to(device=self.device, dtype=torch.float32)
-        base = saliency.clamp(min=1e-4)
 
         with torch.no_grad():
             fp_output = _module_first_tensor(module2inspect(x_for_mse))
@@ -972,9 +1165,9 @@ class SEViTSegQuantizer:
 
         try:
             for grid_idx in range(int(n_grid)):
-                ratio = 0.0 if n_grid <= 1 else float(grid_idx) / float(n_grid - 1)
-                scales = base.pow(ratio)
-                scales = scales / torch.sqrt(scales.max() * scales.min()).clamp(min=1e-8)
+                ratio = float(grid_idx) / float(n_grid)
+                scales = saliency.pow(ratio).clamp(min=1e-4).view(-1)
+                scales = scales / torch.sqrt(scales.max() * scales.min())
                 scales = scales.to(dtype=linears2scale[0].weight.dtype)
 
                 with torch.no_grad():
@@ -985,12 +1178,16 @@ class SEViTSegQuantizer:
                                     scales.numel(), linear.in_features
                                 )
                             )
-                        scaled_weight = original.to(device=linear.weight.device) * scales.view(1, -1).to(linear.weight.device)
-                        quantized = w_quantize_func(scaled_weight, **kwargs)
-                        linear.weight.copy_(quantized / scales.view(1, -1).to(linear.weight.device))
+                        linear_scales = scales.view(1, -1).to(linear.weight.device)
+                        scaled_weight = original.to(linear.weight.device) * linear_scales
+                        quantized = self._pseudo_quantize_weight(scaled_weight)
+                        linear.weight.copy_(quantized / linear_scales)
 
                     q_output = _module_first_tensor(module2inspect(x_for_mse)).detach().float()
                     mse = F.mse_loss(q_output, fp_output).item()
+
+                    for linear, original in zip(linears2scale, original_weights):
+                        linear.weight.copy_(original.to(linear.weight.device))
 
                 if best_mse is None or mse < best_mse:
                     best_mse = float(mse)
@@ -1007,36 +1204,101 @@ class SEViTSegQuantizer:
             raise RuntimeError("Selected AWQ scales contain NaN or Inf.")
         return best_scales, best_ratio, best_mse
 
-    def _pseudo_quantize_weight(self, weight, group_size=None):
-        group_size = self.q_group_size if group_size is None else int(group_size)
+    def _pseudo_quantize_weight(self, weight):
         if weight.dim() != 2:
             raise ValueError(f"Expected 2D Linear weight, got {tuple(weight.shape)}.")
-        out_features, in_features = weight.shape
-        if in_features % group_size != 0:
+        if weight.shape[-1] % self.q_group_size != 0:
             raise ValueError(
                 "Linear in_features={} is not divisible by group_size={}.".format(
-                    in_features, group_size
+                    weight.shape[-1], self.q_group_size
                 )
             )
-        qmax = (1 << (self.w_bit - 1)) - 1
-        grouped = weight.float().reshape(out_features, -1, group_size)
-        scales = grouped.abs().amax(dim=-1, keepdim=True).clamp(min=1e-8) / float(qmax)
-        quant = torch.round(grouped / scales).clamp(-qmax, qmax)
-        return (quant * scales).reshape_as(weight).to(dtype=weight.dtype)
+        return self._official_pseudo_quantize_tensor(
+            weight,
+            n_bit=self.w_bit,
+            **self.q_config,
+        )
 
-    def _apply_scale_to_norm_and_linears(self, block, norm_name, linear_names, scales):
+    def _apply_scale_to_norm_and_linears(
+        self,
+        block,
+        norm_name,
+        linear_names,
+        scales,
+        input_feat,
+    ):
         norm = _get_submodule(block, norm_name)
-        scales = scales.detach().to(device=norm.weight.device, dtype=norm.weight.dtype)
+        norm_scales = scales.detach().to(device=norm.weight.device, dtype=norm.weight.dtype)
         with torch.no_grad():
-            norm.weight.div_(scales)
+            norm.weight.div_(norm_scales)
             if norm.bias is not None:
-                norm.bias.div_(scales)
+                norm.bias.div_(norm_scales)
             for linear_name in linear_names:
                 linear = _get_submodule(block, linear_name)
                 linear_scales = scales.to(device=linear.weight.device, dtype=linear.weight.dtype)
                 linear.weight.mul_(linear_scales.view(1, -1))
 
-    def _convert_target_linears_to_w4(self):
+            seen_features = set()
+            for linear_name in linear_names:
+                feature = input_feat[linear_name]
+                if id(feature) in seen_features:
+                    continue
+                seen_features.add(id(feature))
+                feature.div_(scales.view(1, -1).to(feature.device, feature.dtype))
+
+    def _search_and_apply_clipping(self, input_feat):
+        clipped = 0
+        for block_idx, block in enumerate(self.blocks):
+            block_input_feat = input_feat[block_idx]
+            for rel_path in self.clip_target_paths:
+                linear = _get_submodule(block, rel_path)
+                if not isinstance(linear, nn.Linear):
+                    raise TypeError(
+                        f"Block {block_idx} clipping target {rel_path} must be nn.Linear, "
+                        f"got {type(linear).__name__}."
+                    )
+                if linear.out_features % 256 != 0 and linear.out_features % 64 != 0:
+                    raise ValueError(
+                        f"Block {block_idx} {rel_path} out_features={linear.out_features} "
+                        "is incompatible with official auto_clip_layer output-channel batching."
+                    )
+                feature = block_input_feat[rel_path]
+                if feature.numel() == 0:
+                    raise RuntimeError(
+                        f"No clipping input features for block {block_idx} {rel_path}."
+                    )
+                n_sample_token = min(self.max_clip_tokens, int(feature.shape[0]))
+                max_val = self._official_auto_clip_layer(
+                    linear.weight,
+                    feature,
+                    n_bit=self.w_bit,
+                    q_config=self.q_config,
+                    n_grid=20,
+                    max_shrink=0.5,
+                    n_sample_token=n_sample_token,
+                )
+                max_val = max_val.to(linear.weight.device, linear.weight.dtype)
+                logger.info(
+                    "Block %d clipping target %s selected max-value stats: "
+                    "mean=%.8g min=%.8g max=%.8g",
+                    block_idx,
+                    rel_path,
+                    max_val.float().mean().item(),
+                    max_val.float().min().item(),
+                    max_val.float().max().item(),
+                )
+                with torch.no_grad():
+                    original_shape = linear.weight.shape
+                    grouped_weight = linear.weight.data.reshape(*max_val.shape[:2], -1)
+                    linear.weight.data = torch.clamp(
+                        grouped_weight,
+                        -max_val,
+                        max_val,
+                    ).reshape(original_shape)
+                clipped += 1
+        return clipped
+
+    def _convert_target_linears_to_wqlinear(self):
         quantized = 0
         for block_idx, block in enumerate(self.blocks):
             for rel_path in self.target_linear_paths:
@@ -1046,12 +1308,64 @@ class SEViTSegQuantizer:
                         f"Expected block {block_idx} {rel_path} to be nn.Linear before quantization, "
                         f"got {type(module).__name__}."
                     )
-                qmodule = W4GroupedLinear.from_linear(
+                module.weight.data = module.weight.data.to(torch.float16)
+                if module.bias is not None:
+                    module.bias.data = module.bias.data.to(torch.float16)
+                module.weight.data, scales, zeros = self._official_pseudo_quantize_tensor(
+                    module.weight.data,
+                    n_bit=self.w_bit,
+                    get_scale_zp=True,
+                    **self.q_config,
+                )
+                qmodule = self._official_wqlinear.from_linear(
                     module,
-                    group_size=self.q_group_size,
                     w_bit=self.w_bit,
+                    group_size=self.q_group_size,
+                    init_only=False,
+                    scales=scales,
+                    zeros=zeros,
                 ).to(device=module.weight.device)
                 _set_submodule(block, rel_path, qmodule)
                 quantized += 1
-                logger.info("Quantized encoder block %d %s to W4 grouped weight-only.", block_idx, rel_path)
+                logger.info(
+                    "Quantized encoder block %d %s to official AWQ WQLinear.",
+                    block_idx,
+                    rel_path,
+                )
+
+        expected = len(self.blocks) * len(self.target_linear_paths)
+        if quantized != expected:
+            raise RuntimeError(
+                f"Expected {expected} official AWQ WQLinear modules, converted {quantized}."
+            )
         return quantized
+
+    def _enable_official_w4a16_runtime(self, quantized):
+        self.encoder.half()
+        self.encoder.awq_runtime_dtype = torch.float16
+        self.encoder.awq_quant_backend = "custom_w4"
+        self.encoder.awq_saliency_source = self.saliency_source
+        self.encoder.awq_quantized_module_class = "awq.quantize.qmodule.WQLinear"
+        self.encoder.awq_package_module_path = self._awq_module_path
+        self.encoder.awq_inference_engine_path = self._awq_inference_engine_path
+        self.encoder.awq_inference_engine_active = True
+        self.encoder.awq_wqlinear_module_count = int(quantized)
+        self.encoder.awq_zero_point = True
+        self.encoder.awq_group_size = self.q_group_size
+        self.encoder.awq_auto_clip = True
+
+        actual = sum(
+            1 for module in self.encoder.modules() if isinstance(module, self._official_wqlinear)
+        )
+        legacy = sum(
+            1 for module in self.encoder.modules() if isinstance(module, W4GroupedLinear)
+        )
+        if actual != int(quantized):
+            raise RuntimeError(
+                f"Expected {quantized} official AWQ WQLinear modules after conversion, found {actual}."
+            )
+        if legacy:
+            raise RuntimeError(
+                "Official custom_w4 deployment unexpectedly contains W4GroupedLinear; "
+                "the eager-dequantization fallback is forbidden."
+            )

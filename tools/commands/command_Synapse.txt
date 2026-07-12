@@ -393,6 +393,8 @@ CUDA_VISIBLE_DEVICES=1 python test.py \
           --use_se_block \
           --se_calib_only \
           --quantize \
+          --quant_backend custom_w4 \
+          --saliency_source se_aux \
           --quantize_calibrate_batch_size 8 \
-          --description "TransUNet Baseline for Synapse - (SE-AUX-Block Guided Quantization)" 
+          --description "TransUNet Baseline for Synapse - (our new SE-AUX Quantization)" 
 

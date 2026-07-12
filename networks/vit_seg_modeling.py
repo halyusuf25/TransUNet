@@ -465,8 +465,16 @@ class Transformer(nn.Module):
         orig_n_patches = embedding_output.size(1)
         if self.config.verbose:
             print(f"Embedding output and Input to encoder transformer layer(0) shape: {embedding_output.shape}")
-            
-        encoded, attn_weights, kept_indices, se_scale = self.encoder(embedding_output)  # (B, n_patch, hidden)
+
+        embedding_dtype = embedding_output.dtype
+        runtime_dtype = getattr(self.encoder, "awq_runtime_dtype", None)
+        encoder_input = embedding_output
+        if runtime_dtype is not None:
+            encoder_input = encoder_input.to(dtype=runtime_dtype).contiguous()
+
+        encoded, attn_weights, kept_indices, se_scale = self.encoder(encoder_input)  # (B, n_patch, hidden)
+        if runtime_dtype is not None:
+            encoded = encoded.to(dtype=embedding_dtype)
         # output ={ # to be used instead of the current return statement
         #     "encoded": encoded,
         #     "attn_weights": attn_weights,

@@ -81,8 +81,8 @@ def add_quantization_args(parser):
         default='custom_w4',
         choices=['custom_w4', 'inc_awq'],
         help=(
-            "Quantization implementation. custom_w4 uses the repository's "
-            'W4GroupedLinear backend; inc_awq uses Intel Neural Compressor AWQ.'
+            'Quantization implementation. custom_w4 uses the official MIT-HAN-Lab '
+            'AWQ WQLinear W4A16 CUDA backend; inc_awq uses Intel Neural Compressor AWQ.'
         ),
     )
     parser.add_argument(
