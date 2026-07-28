@@ -13,6 +13,21 @@ GRID_ONLY_ARG_NAMES = (
     'viz_view',
     'viz_title',
     'viz_legend_mode',
+    'viz_publication_style',
+    'viz_prediction_alpha',
+    'viz_gt_boundary_on_ground_truth',
+    'viz_boundary_linewidth',
+    'viz_dataset_label_fontsize',
+    'viz_dataset_label_bold',
+    'viz_dataset_label_orientation',
+    'viz_header_fontsize',
+    'viz_header_bold',
+    'viz_legend_fontsize',
+    'viz_row_spacing',
+    'viz_legend_position',
+    'viz_zoom_bboxes',
+    'viz_zoom_inset',
+    'viz_dpi',
     'grid_rows',
     'grid_indices',
     'viz_min_classes',
@@ -36,6 +51,38 @@ def add_visualization_args(parser):
                         help='optional title for grid or multiple_datasets visualization')
     parser.add_argument('--viz_legend_mode', type=str, default='global', choices=['global', 'per_row'],
                         help='legend placement for grid visualization; multiple_datasets requires per_row')
+    parser.add_argument('--viz_legend_position', type=str, default='right', choices=['left', 'right', 'bottom'],
+                        help='publication-style categorical legend position (default: right)')
+    parser.add_argument('--viz_publication_style', action='store_true',
+                        help='use the compact IEEE publication layout for grid or multiple_datasets views')
+    parser.add_argument('--viz_prediction_alpha', type=float, default=0.55,
+                        help='prediction-mask opacity in publication style (default: 0.55)')
+    parser.add_argument('--viz_gt_boundary_on_ground_truth', action='store_true',
+                        help='draw the yellow dashed ground-truth boundary on the ground-truth panel in publication style')
+    parser.add_argument('--viz_boundary_linewidth', type=float, default=0.25,
+                        help='line width for yellow dashed ground-truth boundaries (default: 0.25)')
+    parser.add_argument('--viz_dataset_label_fontsize', type=float, default=9.0,
+                        help='publication-style dataset label size in points; reasonable values are 7-12 (default: 9)')
+    parser.add_argument('--viz_dataset_label_bold', action='store_true',
+                        help='use bold dataset labels in publication style')
+    parser.add_argument('--viz_dataset_label_orientation', type=str, default='horizontal',
+                        choices=['horizontal', 'vertical'],
+                        help='publication-style dataset label orientation (default: horizontal)')
+    parser.add_argument('--viz_header_fontsize', type=float, default=9.0,
+                        help='publication-style column header size in points; reasonable values are 7-11 (default: 9)')
+    parser.add_argument('--viz_header_bold', action='store_true',
+                        help='use bold column headers in publication style')
+    parser.add_argument('--viz_legend_fontsize', type=float, default=9.0,
+                        help='publication-style categorical legend size in points; reasonable values are 6-10 (default: 9)')
+    parser.add_argument('--viz_row_spacing', type=float, default=0.0,
+                        help='additional publication-style gap between dataset rows in inches; 0 uses the minimum non-overlapping gap (default: 0.0)')
+    parser.add_argument('--viz_zoom_bboxes', nargs='*', default=None, metavar='BBOX',
+                        help='optional pixel ROI per multiple_datasets row, in --multi_datasets order, '
+                             'as "[center_x,center_y,height,width]"; auto uses the centered 25%% region')
+    parser.add_argument('--viz_zoom_inset', action='store_true',
+                        help='show --viz_zoom_bboxes crops as upper-right panel insets instead of separate rows')
+    parser.add_argument('--viz_dpi', type=int, default=600,
+                        help='PNG resolution in publication style (default: 600 dpi)')
     parser.add_argument('--viz_index', type=int, default=0, help='dataset index to visualize')
     parser.add_argument('--viz_slice', type=int, default=None, help='slice index for Synapse volumes (default: middle slice)')
     parser.add_argument('--viz_save', type=str, default='viz/', help='path to save figure (file or directory)')
@@ -65,9 +112,9 @@ def add_visualization_args(parser):
     parser.add_argument('--grid_model_names', nargs='*', default=None,
                         help='optional display names for grid model-output columns')
     parser.add_argument('--multi_datasets', nargs='*', default=None,
-                        help='dataset names to render as rows in multiple_datasets visualization')
+                        help='dataset name per row in multiple_datasets visualization; names may repeat')
     parser.add_argument('--multi_dataset_args', nargs='*', default=None,
-                        help='optional per-dataset visualization args, e.g. Dataset::--viz_index 0 --viz_slice 60 --num_slices_to_overlay 5; omitted datasets use a random sample/slice with foreground labels')
+                        help='optional per-row visualization args, matched to repeated dataset occurrences in order, e.g. Dataset::--viz_index 0 --viz_slice 60; omitted rows use a random sample/slice with foreground labels')
     parser.add_argument('--multi_model_names', nargs='*', default=None,
                         help='optional display names for multiple_datasets model-output columns')
     parser.add_argument('--multi_ckpts', nargs='*', default=None,
@@ -132,9 +179,11 @@ def _draw_gt_boundaries(
     ax,
     gt: np.ndarray,
     color: str = "yellow",
-    linewidth: float = 1.0,
+    linewidth: float = 0.25,
     linestyle: str = "--",
 ) -> None:
+    if linewidth < 0:
+        raise ValueError("boundary linewidth must be non-negative, got {}".format(linewidth))
     gt_arr = np.asarray(gt)
     if gt_arr.ndim != 2:
         gt_arr = np.squeeze(gt_arr)
@@ -527,6 +576,7 @@ def _plot_triplet(
     figsize: Tuple[float, float] = (12, 4),
     save_path: Optional[str] = None,
     include_input: bool = True,
+    boundary_linewidth: float = 0.25,
 ):
     """
     Plot a side-by-side triplet: Input | Prediction | Ground Truth
@@ -560,7 +610,7 @@ def _plot_triplet(
     _imshow_input(pred_ax, image)
     pred_mask = np.ma.masked_where(pred == 0, pred)
     im1 = pred_ax.imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-    _draw_gt_boundaries(pred_ax, gt)
+    _draw_gt_boundaries(pred_ax, gt, linewidth=boundary_linewidth)
     pred_ax.set_title('Prediction', fontsize=12)
     pred_ax.set_xlabel('X (px)')
     if include_input:
@@ -570,7 +620,7 @@ def _plot_triplet(
     _imshow_input(gt_ax, image)
     gt_mask = np.ma.masked_where(gt == 0, gt)
     im2 = gt_ax.imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-    _draw_gt_boundaries(gt_ax, gt)
+    _draw_gt_boundaries(gt_ax, gt, linewidth=boundary_linewidth)
     gt_ax.set_title('Ground Truth', fontsize=12)
     gt_ax.set_xlabel('X (px)')
     gt_ax.set_yticklabels([])
@@ -607,6 +657,7 @@ def _plot_triplet_grid(
     figsize: Optional[Tuple[float, float]] = None,
     save_path: Optional[str] = None,
     include_input: bool = True,
+    boundary_linewidth: float = 0.25,
 ):
     """
     Plot a grid with rows of (Input | Prediction | Ground Truth).
@@ -645,12 +696,12 @@ def _plot_triplet_grid(
         _imshow_input(pred_ax, image)
         pred_mask = np.ma.masked_where(pred == 0, pred)
         im_pred = pred_ax.imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-        _draw_gt_boundaries(pred_ax, gt)
+        _draw_gt_boundaries(pred_ax, gt, linewidth=boundary_linewidth)
 
         _imshow_input(gt_ax, image)
         gt_mask = np.ma.masked_where(gt == 0, gt)
         im_gt = gt_ax.imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-        _draw_gt_boundaries(gt_ax, gt)
+        _draw_gt_boundaries(gt_ax, gt, linewidth=boundary_linewidth)
 
         # Titles on top row only
         if r == 0:
@@ -711,6 +762,7 @@ def visualize_synapse_sample(
     num_slices_to_overlay: Optional[int] = None,
     include_input: bool = True,
     device: Optional[str] = None,
+    boundary_linewidth: float = 0.25,
 ):
     """
     Visualize a Synapse sample: Input slice, Predicted mask, Ground truth mask.
@@ -785,6 +837,7 @@ def visualize_synapse_sample(
         figsize=figsize,
         save_path=save_path,
         include_input=include_input,
+        boundary_linewidth=boundary_linewidth,
     )
 
 
@@ -800,6 +853,7 @@ def visualize_cataract_sample(
     num_slices_to_overlay: Optional[int] = None,
     include_input: bool = True,
     device: Optional[str] = None,
+    boundary_linewidth: float = 0.25,
 ):
     """
     Visualize a Cataract-101K sample: Input image, Predicted mask, Ground truth mask.
@@ -859,6 +913,7 @@ def visualize_cataract_sample(
         figsize=figsize,
         save_path=save_path,
         include_input=include_input,
+        boundary_linewidth=boundary_linewidth,
     )
 
 
@@ -876,6 +931,7 @@ def visualize_synapse_batch(
     num_slices_to_overlay: Optional[int] = None,
     include_input: bool = True,
     device: Optional[str] = None,
+    boundary_linewidth: float = 0.25,
 ):
     """
     Visualize multiple Synapse samples as a single grid figure.
@@ -945,6 +1001,7 @@ def visualize_synapse_batch(
         figsize=figsize,
         save_path=save_path,
         include_input=include_input,
+        boundary_linewidth=boundary_linewidth,
     )
 
 
@@ -961,6 +1018,7 @@ def visualize_cataract_batch(
     num_slices_to_overlay: Optional[int] = None,
     include_input: bool = True,
     device: Optional[str] = None,
+    boundary_linewidth: float = 0.25,
 ):
     """
     Visualize multiple Cataract-101K samples as a single grid figure.
@@ -1010,6 +1068,7 @@ def visualize_cataract_batch(
         figsize=figsize,
         save_path=save_path,
         include_input=include_input,
+        boundary_linewidth=boundary_linewidth,
     )
 
 
@@ -1135,6 +1194,835 @@ def build_grid_prediction_entry(
     }
 
 
+def _publication_dataset_label(dataset_name: str) -> str:
+    labels = {
+        'Synapse': 'Synapse',
+        'ACDC': 'ACDC',
+        'Cataract1k': 'Cataract-1K',
+        'EndoVis2018': 'EndoVis2018',
+    }
+    return labels.get(dataset_name, str(dataset_name))
+
+
+def _publication_column_header(label: str) -> str:
+    label = str(label)
+    if len(label) <= 9:
+        return label
+    if '+' in label:
+        left, right = label.split('+', 1)
+        if 'TopK' in left and not left.startswith('TopK'):
+            left = left.replace('TopK', '\nTopK', 1)
+        return "{}+\n{}".format(left, right)
+    if 'TopK' in label and not label.startswith('TopK'):
+        return label.replace('TopK', '\nTopK', 1)
+    midpoint = len(label) // 2
+    return label[:midpoint] + '\n' + label[midpoint:]
+
+
+def _save_publication_grid(fig, save_path: str, dpi: int, save_pdf_and_png: bool) -> None:
+    root, extension = os.path.splitext(save_path)
+    if save_pdf_and_png:
+        output_root = root if extension else save_path
+        output_paths = [output_root + '.pdf', output_root + '.png']
+    else:
+        output_paths = [save_path]
+
+    for output_path in output_paths:
+        dirpath = os.path.dirname(output_path)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
+        output_extension = os.path.splitext(output_path)[1].lower()
+        save_kwargs = {
+            'facecolor': 'white',
+            'edgecolor': 'white',
+        }
+        if output_extension != '.pdf':
+            save_kwargs['dpi'] = dpi
+        fig.savefig(output_path, **save_kwargs)
+        print(f"Saved publication visualization grid to: {output_path}")
+
+
+def _publication_image_aspect(image: np.ndarray) -> float:
+    image_array = np.squeeze(np.asarray(image))
+    if image_array.ndim == 2:
+        height, width = image_array.shape
+    elif image_array.ndim == 3 and image_array.shape[-1] in (1, 3):
+        height, width = image_array.shape[:2]
+    elif image_array.ndim == 3 and image_array.shape[0] in (1, 3):
+        height, width = image_array.shape[1:]
+    else:
+        return 1.0
+    if height <= 0 or width <= 0:
+        return 1.0
+    return float(height) / float(width)
+
+
+def _publication_legend_geometry(
+    labels: List[str],
+    legend_fontsize: float,
+    position: str,
+) -> Tuple[int, float]:
+    foreground_labels = labels[1:]
+    if not foreground_labels:
+        return 1, 0.0
+
+    line_height = legend_fontsize / 72.0 * 1.25
+    if position in ('left', 'right'):
+        return 1, len(foreground_labels) * line_height + 0.04
+
+    return len(foreground_labels), line_height + 0.04
+
+
+def _resolve_publication_zoom_bbox(spec, image: np.ndarray, row_index: int, dataset_name: str):
+    image_array = np.squeeze(np.asarray(image))
+    if image_array.ndim == 2:
+        image_height, image_width = image_array.shape
+    elif image_array.ndim == 3 and image_array.shape[-1] in (1, 3):
+        image_height, image_width = image_array.shape[:2]
+    else:
+        raise ValueError(
+            "Cannot resolve zoom ROI for row {} ({}) from image shape {}.".format(
+                row_index + 1,
+                dataset_name,
+                image_array.shape,
+            )
+        )
+
+    if spec == 'auto':
+        center_x = image_width / 2.0
+        center_y = image_height / 2.0
+        height = image_height * 0.25
+        width = image_width * 0.25
+    else:
+        center_x, center_y, height, width = spec
+
+    crop_height = min(image_height, max(1, int(np.ceil(height))))
+    crop_width = min(image_width, max(1, int(np.ceil(width))))
+    x0 = int(np.floor(center_x - width / 2.0))
+    y0 = int(np.floor(center_y - height / 2.0))
+    x0 = max(0, min(x0, image_width - crop_width))
+    y0 = max(0, min(y0, image_height - crop_height))
+    x1 = x0 + crop_width
+    y1 = y0 + crop_height
+
+    final_center_x = (x0 + x1) / 2.0
+    final_center_y = (y0 + y1) / 2.0
+    print(
+        "Resolved zoom ROI row {} ({}): "
+        "[center_x,center_y,height,width]=[{:.1f},{:.1f},{},{}], "
+        "bounds=[x0={},y0={},x1={},y1={}]".format(
+            row_index + 1,
+            dataset_name,
+            final_center_x,
+            final_center_y,
+            crop_height,
+            crop_width,
+            x0,
+            y0,
+            x1,
+            y1,
+        )
+    )
+    return x0, y0, x1, y1
+
+
+def _crop_publication_array(array: np.ndarray, bounds) -> np.ndarray:
+    x0, y0, x1, y1 = bounds
+    array = np.asarray(array)
+    if array.ndim == 2:
+        return array[y0:y1, x0:x1]
+    if array.ndim == 3:
+        return array[y0:y1, x0:x1, ...]
+    raise ValueError("Zoom ROI arrays must be 2D or HWC, got shape {}.".format(array.shape))
+
+
+def _draw_publication_roi_rectangle(ax, bounds, linewidth: float) -> None:
+    from matplotlib.patches import Rectangle
+
+    x0, y0, x1, y1 = bounds
+    ax.add_patch(
+        Rectangle(
+            (x0, y0),
+            x1 - x0,
+            y1 - y0,
+            fill=False,
+            edgecolor='red',
+            linestyle='--',
+            linewidth=linewidth,
+        )
+    )
+
+
+def _draw_publication_panel_row(
+    axes,
+    image: np.ndarray,
+    gt: np.ndarray,
+    predictions: List[np.ndarray],
+    cmap,
+    norm,
+    prediction_alpha: float,
+    draw_gt_boundary_on_ground_truth: bool,
+    boundary_linewidth: float,
+    roi_bounds=None,
+) -> None:
+    column_index = 0
+    if len(axes) == len(predictions) + 2:
+        _imshow_input(axes[column_index], image)
+        column_index += 1
+
+    gt_ax = axes[column_index]
+    _imshow_input(gt_ax, image)
+    gt_mask = np.ma.masked_where(gt == 0, gt)
+    gt_ax.imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
+    if draw_gt_boundary_on_ground_truth:
+        _draw_gt_boundaries(gt_ax, gt, linewidth=boundary_linewidth)
+    column_index += 1
+
+    for prediction in predictions:
+        pred_ax = axes[column_index]
+        _imshow_input(pred_ax, image)
+        pred_mask = np.ma.masked_where(prediction == 0, prediction)
+        pred_ax.imshow(
+            pred_mask.astype(int),
+            cmap=cmap,
+            norm=norm,
+            interpolation='nearest',
+            alpha=prediction_alpha,
+        )
+        _draw_gt_boundaries(pred_ax, gt, linewidth=boundary_linewidth)
+        column_index += 1
+
+    for image_ax in axes:
+        if roi_bounds is not None:
+            _draw_publication_roi_rectangle(image_ax, roi_bounds, boundary_linewidth)
+        image_ax.set_xticks([])
+        image_ax.set_yticks([])
+        for spine in image_ax.spines.values():
+            spine.set_visible(False)
+
+
+def _draw_publication_zoom_insets(
+    parent_axes,
+    image: np.ndarray,
+    gt: np.ndarray,
+    predictions: List[np.ndarray],
+    bounds,
+    cmap,
+    norm,
+    prediction_alpha: float,
+    draw_gt_boundary_on_ground_truth: bool,
+    boundary_linewidth: float,
+) -> None:
+    x0, y0, x1, y1 = bounds
+    crop_aspect = (y1 - y0) / float(x1 - x0)
+    image_aspect = _publication_image_aspect(image)
+    inset_extent = 0.42
+    inset_padding = 0.02
+    inset_width = inset_extent
+    inset_height = inset_width * crop_aspect / image_aspect
+    if inset_height > inset_extent:
+        inset_width *= inset_extent / inset_height
+        inset_height = inset_extent
+
+    inset_axes = [
+        parent_ax.inset_axes(
+            [
+                1.0 - inset_padding - inset_width,
+                1.0 - inset_padding - inset_height,
+                inset_width,
+                inset_height,
+            ],
+            zorder=5,
+        )
+        for parent_ax in parent_axes
+    ]
+    zoom_image = _crop_publication_array(image, bounds)
+    zoom_gt = _crop_publication_array(gt, bounds)
+    zoom_predictions = [
+        _crop_publication_array(prediction, bounds)
+        for prediction in predictions
+    ]
+    _draw_publication_panel_row(
+        inset_axes,
+        zoom_image,
+        zoom_gt,
+        zoom_predictions,
+        cmap,
+        norm,
+        prediction_alpha,
+        draw_gt_boundary_on_ground_truth,
+        boundary_linewidth,
+    )
+    for inset_ax in inset_axes:
+        for spine in inset_ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color('red')
+            spine.set_linestyle('-')
+            spine.set_linewidth(boundary_linewidth)
+
+
+def _plot_publication_grid_with_zoom(
+    rows: List[Dict],
+    model_names: List[str],
+    include_input: bool,
+    save_path: Optional[str],
+    prediction_alpha: float,
+    draw_gt_boundary_on_ground_truth: bool,
+    boundary_linewidth: float,
+    dataset_label_fontsize: float,
+    header_fontsize: float,
+    legend_fontsize: float,
+    row_spacing: float,
+    legend_position: str,
+    dpi: int,
+    save_pdf_and_png: bool,
+    zoom_bboxes,
+    dataset_label_bold: bool = False,
+    header_bold: bool = False,
+    dataset_label_orientation: str = 'horizontal',
+) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    num_rows = len(rows)
+    image_column_count = len(model_names) + 1 + int(include_input)
+    figure_width = 7.16
+    longest_row_label = max(
+        len("({}) {}".format(chr(ord('a') + index), _publication_dataset_label(row['dataset_name'])))
+        for index, row in enumerate(rows)
+    )
+    if dataset_label_orientation == 'vertical':
+        left_margin = max(0.32, 0.12 + dataset_label_fontsize / 72.0 * 1.2)
+    else:
+        left_margin = max(
+            1.04,
+            0.12 + longest_row_label * dataset_label_fontsize / 72.0 * 0.5,
+        )
+    right_margin = 0.04
+    available_width = figure_width - left_margin - right_margin
+    side_legend_ratio = 1.65
+    if legend_position in ('left', 'right'):
+        panel_width = available_width / (image_column_count + side_legend_ratio)
+        width_ratios = (
+            [side_legend_ratio] + [1.0] * image_column_count
+            if legend_position == 'left'
+            else [1.0] * image_column_count + [side_legend_ratio]
+        )
+    else:
+        panel_width = available_width / image_column_count
+        width_ratios = [1.0] * image_column_count
+
+    headers = ([] if not include_input else ['Input']) + ['Ground Truth'] + list(model_names)
+    formatted_headers = [_publication_column_header(header) for header in headers]
+    header_line_count = max(header.count('\n') + 1 for header in formatted_headers)
+    header_height = header_line_count * header_fontsize / 72.0 * 1.2 + 0.05
+    bottom_margin = 0.04
+    panel_gap = 0.02
+    group_gap = 0.02 + row_spacing
+
+    resolved_bounds = []
+    row_styles = []
+    zoom_heights = []
+    full_heights = []
+    legend_heights = []
+    legend_columns = []
+    for row_index, (row, bbox_spec) in enumerate(zip(rows, zoom_bboxes)):
+        bounds = _resolve_publication_zoom_bbox(
+            bbox_spec,
+            row['image'],
+            row_index,
+            row['dataset_name'],
+        )
+        resolved_bounds.append(bounds)
+        cmap, norm, labels = _discrete_cmap(
+            int(row['num_classes']),
+            row.get('class_labels'),
+        )
+        legend_ncol, legend_height = _publication_legend_geometry(
+            labels,
+            legend_fontsize,
+            legend_position,
+        )
+        x0, y0, x1, y1 = bounds
+        zoom_height = panel_width * (y1 - y0) / float(x1 - x0)
+        full_height = panel_width * _publication_image_aspect(row['image'])
+        if legend_position in ('left', 'right'):
+            extra_height = max(0.0, legend_height - (zoom_height + panel_gap + full_height))
+            zoom_height += extra_height / 2.0
+            full_height += extra_height / 2.0
+        zoom_heights.append(zoom_height)
+        full_heights.append(full_height)
+        legend_heights.append(legend_height)
+        legend_columns.append(legend_ncol)
+        row_styles.append((cmap, norm, labels))
+
+    height_ratios = []
+    zoom_slots = []
+    full_slots = []
+    legend_slots = []
+    for row_index in range(num_rows):
+        zoom_slots.append(len(height_ratios))
+        height_ratios.append(zoom_heights[row_index])
+        height_ratios.append(panel_gap)
+        full_slots.append(len(height_ratios))
+        height_ratios.append(full_heights[row_index])
+        if legend_position == 'bottom':
+            legend_slots.append(len(height_ratios))
+            height_ratios.append(legend_heights[row_index])
+        else:
+            legend_slots.append(None)
+        if row_index < num_rows - 1:
+            height_ratios.append(group_gap)
+
+    content_height = sum(height_ratios)
+    figure_height = max(1.0, header_height + content_height + bottom_margin)
+    fig = plt.figure(figsize=(figure_width, figure_height))
+    fig.patch.set_facecolor('white')
+    grid = fig.add_gridspec(
+        len(height_ratios),
+        len(width_ratios),
+        height_ratios=height_ratios,
+        width_ratios=width_ratios,
+        left=left_margin / figure_width,
+        right=1.0 - right_margin / figure_width,
+        bottom=bottom_margin / figure_height,
+        top=1.0 - header_height / figure_height,
+        wspace=0.04,
+        hspace=0.0,
+    )
+
+    image_column_start = 1 if legend_position == 'left' else 0
+    zoom_axes = []
+    full_axes = []
+    legend_axes = []
+    for row_index in range(num_rows):
+        zoom_axes.append([
+            fig.add_subplot(grid[zoom_slots[row_index], image_column_start + column_index])
+            for column_index in range(image_column_count)
+        ])
+        full_axes.append([
+            fig.add_subplot(grid[full_slots[row_index], image_column_start + column_index])
+            for column_index in range(image_column_count)
+        ])
+        if legend_position == 'bottom':
+            legend_axes.append(fig.add_subplot(grid[legend_slots[row_index], :]))
+        else:
+            legend_column = 0 if legend_position == 'left' else image_column_count
+            legend_axes.append(
+                fig.add_subplot(grid[zoom_slots[row_index]:full_slots[row_index] + 1, legend_column])
+            )
+
+    for column_index, header in enumerate(formatted_headers):
+        zoom_axes[0][column_index].set_title(
+            header,
+            pad=2.0,
+            fontsize=header_fontsize,
+            fontweight='bold' if header_bold else 'normal',
+        )
+
+    for row_index, row in enumerate(rows):
+        bounds = resolved_bounds[row_index]
+        cmap, norm, labels = row_styles[row_index]
+        zoom_image = _crop_publication_array(row['image'], bounds)
+        zoom_gt = _crop_publication_array(row['gt'], bounds)
+        zoom_predictions = [
+            _crop_publication_array(prediction, bounds)
+            for prediction in row['predictions']
+        ]
+        _draw_publication_panel_row(
+            zoom_axes[row_index],
+            zoom_image,
+            zoom_gt,
+            zoom_predictions,
+            cmap,
+            norm,
+            prediction_alpha,
+            draw_gt_boundary_on_ground_truth,
+            boundary_linewidth,
+        )
+        _draw_publication_panel_row(
+            full_axes[row_index],
+            row['image'],
+            row['gt'],
+            row['predictions'],
+            cmap,
+            norm,
+            prediction_alpha,
+            draw_gt_boundary_on_ground_truth,
+            boundary_linewidth,
+            roi_bounds=bounds,
+        )
+
+        group_bounds = grid[
+            zoom_slots[row_index]:full_slots[row_index] + 1,
+            image_column_start,
+        ].get_position(fig)
+        row_letter = chr(ord('a') + row_index)
+        fig.text(
+            (left_margin - 0.07) / figure_width,
+            (group_bounds.y0 + group_bounds.y1) / 2.0,
+            "({}) {}".format(row_letter, _publication_dataset_label(row['dataset_name'])),
+            ha='center' if dataset_label_orientation == 'vertical' else 'right',
+            va='center',
+            fontsize=dataset_label_fontsize,
+            fontweight='bold' if dataset_label_bold else 'normal',
+            rotation=90 if dataset_label_orientation == 'vertical' else 0,
+        )
+
+        legend_ax = legend_axes[row_index]
+        legend_ax.axis('off')
+        handles = [
+            Patch(facecolor=cmap(class_index), edgecolor='none', label=labels[class_index])
+            for class_index in range(1, int(row['num_classes']))
+        ]
+        if handles:
+            legend_ax.legend(
+                handles=handles,
+                loc='center' if legend_position == 'bottom' else 'center left',
+                frameon=False,
+                ncol=legend_columns[row_index],
+                borderaxespad=0.0,
+                handlelength=0.9,
+                handleheight=0.8,
+                handletextpad=0.35,
+                columnspacing=0.65,
+                labelspacing=0.25,
+                fontsize=legend_fontsize,
+            )
+
+    if save_path is not None:
+        _save_publication_grid(fig, save_path, dpi, save_pdf_and_png)
+    plt.show()
+
+
+def _plot_publication_grid(
+    rows: List[Dict],
+    model_names: List[str],
+    include_input: bool,
+    save_path: Optional[str],
+    prediction_alpha: float,
+    draw_gt_boundary_on_ground_truth: bool,
+    boundary_linewidth: float,
+    dataset_label_fontsize: float,
+    header_fontsize: float,
+    legend_fontsize: float,
+    row_spacing: float,
+    legend_position: str,
+    zoom_bboxes,
+    dpi: int,
+    save_pdf_and_png: bool,
+    dataset_label_bold: bool = False,
+    header_bold: bool = False,
+    dataset_label_orientation: str = 'horizontal',
+    zoom_inset: bool = False,
+) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    if not 0.0 <= prediction_alpha <= 1.0:
+        raise ValueError(
+            "prediction_alpha must be between 0.0 and 1.0, got {}".format(prediction_alpha)
+        )
+    if dpi < 1:
+        raise ValueError("dpi must be a positive integer, got {}".format(dpi))
+    if row_spacing < 0.0:
+        raise ValueError("row_spacing must be non-negative, got {}".format(row_spacing))
+    if legend_position not in ('left', 'right', 'bottom'):
+        raise ValueError(
+            "legend_position must be one of left, right, or bottom, got '{}'".format(legend_position)
+        )
+    if dataset_label_orientation not in ('horizontal', 'vertical'):
+        raise ValueError(
+            "dataset_label_orientation must be horizontal or vertical, got '{}'".format(
+                dataset_label_orientation
+            )
+        )
+    font_sizes = {
+        'dataset_label_fontsize': dataset_label_fontsize,
+        'header_fontsize': header_fontsize,
+        'legend_fontsize': legend_fontsize,
+    }
+    invalid_font_sizes = [name for name, value in font_sizes.items() if value <= 0]
+    if invalid_font_sizes:
+        raise ValueError("{} must be positive".format(", ".join(invalid_font_sizes)))
+
+    num_rows = len(rows)
+    if zoom_bboxes is not None and len(zoom_bboxes) != num_rows:
+        raise ValueError(
+            "zoom_bboxes must contain exactly one entry per row ({} entries for {} rows).".format(
+                len(zoom_bboxes),
+                num_rows,
+            )
+        )
+    if zoom_inset and zoom_bboxes is None:
+        raise ValueError("zoom_inset requires zoom_bboxes.")
+    image_column_count = len(model_names) + 1 + int(include_input)
+    font_settings = {
+        'font.family': 'sans-serif',
+        'font.sans-serif': ['Arial', 'Helvetica', 'Nimbus Sans', 'Liberation Sans', 'DejaVu Sans'],
+        'font.size': 9,
+        'axes.titlesize': header_fontsize,
+        'axes.labelsize': 9,
+        'legend.fontsize': legend_fontsize,
+        'pdf.fonttype': 42,
+        'ps.fonttype': 42,
+    }
+
+    with plt.rc_context(font_settings):
+        if zoom_bboxes is not None and not zoom_inset:
+            _plot_publication_grid_with_zoom(
+                rows=rows,
+                model_names=model_names,
+                include_input=include_input,
+                save_path=save_path,
+                prediction_alpha=prediction_alpha,
+                draw_gt_boundary_on_ground_truth=draw_gt_boundary_on_ground_truth,
+                boundary_linewidth=boundary_linewidth,
+                dataset_label_fontsize=dataset_label_fontsize,
+                header_fontsize=header_fontsize,
+                legend_fontsize=legend_fontsize,
+                row_spacing=row_spacing,
+                legend_position=legend_position,
+                dpi=dpi,
+                save_pdf_and_png=save_pdf_and_png,
+                zoom_bboxes=zoom_bboxes,
+                dataset_label_bold=dataset_label_bold,
+                header_bold=header_bold,
+                dataset_label_orientation=dataset_label_orientation,
+            )
+            return
+
+        inset_bounds = None
+        if zoom_inset:
+            inset_bounds = [
+                _resolve_publication_zoom_bbox(
+                    bbox_spec,
+                    row['image'],
+                    row_index,
+                    row['dataset_name'],
+                )
+                for row_index, (row, bbox_spec) in enumerate(zip(rows, zoom_bboxes))
+            ]
+
+        figure_width = 7.16
+        longest_row_label = max(
+            len("({}) {}".format(chr(ord('a') + index), _publication_dataset_label(row['dataset_name'])))
+            for index, row in enumerate(rows)
+        )
+        if dataset_label_orientation == 'vertical':
+            left_margin = max(0.32, 0.12 + dataset_label_fontsize / 72.0 * 1.2)
+        else:
+            estimated_row_label_width = (
+                0.12 + longest_row_label * dataset_label_fontsize / 72.0 * 0.5
+            )
+            left_margin = max(1.04, estimated_row_label_width)
+        right_margin = 0.04
+        available_width = figure_width - left_margin - right_margin
+        side_legend_ratio = 1.65
+        if legend_position in ('left', 'right'):
+            panel_width = available_width / (image_column_count + side_legend_ratio)
+            width_ratios = (
+                [side_legend_ratio] + [1.0] * image_column_count
+                if legend_position == 'left'
+                else [1.0] * image_column_count + [side_legend_ratio]
+            )
+        else:
+            panel_width = available_width / image_column_count
+            width_ratios = [1.0] * image_column_count
+
+        headers = ([] if not include_input else ['Input']) + ['Ground Truth'] + list(model_names)
+        formatted_headers = [_publication_column_header(header) for header in headers]
+        header_line_count = max(header.count('\n') + 1 for header in formatted_headers)
+        header_height = header_line_count * header_fontsize / 72.0 * 1.2 + 0.05
+        bottom_margin = 0.04
+        minimum_row_gap = 0.02
+        effective_row_gap = minimum_row_gap + row_spacing
+
+        row_styles = []
+        row_heights = []
+        legend_heights = []
+        legend_columns = []
+        for row in rows:
+            cmap, norm, labels = _discrete_cmap(
+                int(row['num_classes']),
+                row.get('class_labels'),
+            )
+            legend_ncol, legend_height = _publication_legend_geometry(
+                labels,
+                legend_fontsize,
+                legend_position,
+            )
+            image_height = panel_width * _publication_image_aspect(row['image'])
+            if legend_position in ('left', 'right'):
+                row_heights.append(max(image_height, legend_height))
+                legend_heights.append(0.0)
+            else:
+                row_heights.append(image_height)
+                legend_heights.append(legend_height)
+            legend_columns.append(legend_ncol)
+            row_styles.append((cmap, norm, labels))
+
+        height_ratios = []
+        image_slots = []
+        legend_slots = []
+        for row_index in range(num_rows):
+            image_slots.append(len(height_ratios))
+            height_ratios.append(row_heights[row_index])
+            if legend_position == 'bottom':
+                legend_slots.append(len(height_ratios))
+                height_ratios.append(legend_heights[row_index])
+            else:
+                legend_slots.append(None)
+            if row_index < num_rows - 1:
+                height_ratios.append(effective_row_gap)
+
+        content_height = sum(height_ratios)
+        figure_height = max(1.0, header_height + content_height + bottom_margin)
+        fig = plt.figure(figsize=(figure_width, figure_height))
+        fig.patch.set_facecolor('white')
+        grid = fig.add_gridspec(
+            len(height_ratios),
+            len(width_ratios),
+            height_ratios=height_ratios,
+            width_ratios=width_ratios,
+            left=left_margin / figure_width,
+            right=1.0 - right_margin / figure_width,
+            bottom=bottom_margin / figure_height,
+            top=1.0 - header_height / figure_height,
+            wspace=0.04,
+            hspace=0.0,
+        )
+
+        image_column_start = 1 if legend_position == 'left' else 0
+        image_axes = []
+        legend_axes = []
+        for row_index in range(num_rows):
+            row_image_axes = [
+                fig.add_subplot(grid[image_slots[row_index], image_column_start + column_index])
+                for column_index in range(image_column_count)
+            ]
+            image_axes.append(row_image_axes)
+            if legend_position == 'bottom':
+                legend_axes.append(fig.add_subplot(grid[legend_slots[row_index], :]))
+            else:
+                legend_column = 0 if legend_position == 'left' else image_column_count
+                legend_axes.append(fig.add_subplot(grid[image_slots[row_index], legend_column]))
+
+        for column_index, header in enumerate(formatted_headers):
+            image_axes[0][column_index].set_title(
+                header,
+                pad=2.0,
+                fontsize=header_fontsize,
+                fontweight='bold' if header_bold else 'normal',
+            )
+
+        for row_index, row in enumerate(rows):
+            image = row['image']
+            gt = row['gt']
+            predictions = row['predictions']
+            cmap, norm, labels = row_styles[row_index]
+
+            column_index = 0
+            if include_input:
+                _imshow_input(image_axes[row_index][column_index], image)
+                column_index += 1
+
+            gt_ax = image_axes[row_index][column_index]
+            _imshow_input(gt_ax, image)
+            gt_mask = np.ma.masked_where(gt == 0, gt)
+            gt_ax.imshow(
+                gt_mask.astype(int),
+                cmap=cmap,
+                norm=norm,
+                interpolation='nearest',
+            )
+            if draw_gt_boundary_on_ground_truth:
+                _draw_gt_boundaries(gt_ax, gt, linewidth=boundary_linewidth)
+            column_index += 1
+
+            for prediction in predictions:
+                pred_ax = image_axes[row_index][column_index]
+                _imshow_input(pred_ax, image)
+                pred_mask = np.ma.masked_where(prediction == 0, prediction)
+                pred_ax.imshow(
+                    pred_mask.astype(int),
+                    cmap=cmap,
+                    norm=norm,
+                    interpolation='nearest',
+                    alpha=prediction_alpha,
+                )
+                _draw_gt_boundaries(pred_ax, gt, linewidth=boundary_linewidth)
+                column_index += 1
+
+            for image_ax in image_axes[row_index]:
+                image_ax.set_xticks([])
+                image_ax.set_yticks([])
+                for spine in image_ax.spines.values():
+                    spine.set_visible(False)
+
+            if inset_bounds is not None:
+                bounds = inset_bounds[row_index]
+                for image_ax in image_axes[row_index]:
+                    _draw_publication_roi_rectangle(
+                        image_ax,
+                        bounds,
+                        boundary_linewidth,
+                    )
+                _draw_publication_zoom_insets(
+                    image_axes[row_index],
+                    image,
+                    gt,
+                    predictions,
+                    bounds,
+                    cmap,
+                    norm,
+                    prediction_alpha,
+                    draw_gt_boundary_on_ground_truth,
+                    boundary_linewidth,
+                )
+
+            row_bounds = grid[image_slots[row_index], image_column_start].get_position(fig)
+            row_center = (row_bounds.y0 + row_bounds.y1) / 2.0
+            row_letter = chr(ord('a') + row_index)
+            fig.text(
+                (left_margin - 0.07) / figure_width,
+                row_center,
+                "({}) {}".format(row_letter, _publication_dataset_label(row['dataset_name'])),
+                ha='center' if dataset_label_orientation == 'vertical' else 'right',
+                va='center',
+                fontsize=dataset_label_fontsize,
+                fontweight='bold' if dataset_label_bold else 'normal',
+                rotation=90 if dataset_label_orientation == 'vertical' else 0,
+            )
+
+            legend_ax = legend_axes[row_index]
+            legend_ax.axis('off')
+            handles = [
+                Patch(facecolor=cmap(class_index), edgecolor='none', label=labels[class_index])
+                for class_index in range(1, int(row['num_classes']))
+            ]
+            if handles:
+                legend_location = 'center' if legend_position == 'bottom' else 'center left'
+                legend_ax.legend(
+                    handles=handles,
+                    loc=legend_location,
+                    frameon=False,
+                    ncol=legend_columns[row_index],
+                    borderaxespad=0.0,
+                    handlelength=0.9,
+                    handleheight=0.8,
+                    handletextpad=0.35,
+                    columnspacing=0.65,
+                    labelspacing=0.25,
+                    fontsize=legend_fontsize,
+                )
+
+        if save_path is not None:
+            _save_publication_grid(fig, save_path, dpi, save_pdf_and_png)
+
+        plt.show()
+
+
 def plot_grid_qualitative_visualization(
     rows: List[Dict],
     model_names: List[str],
@@ -1143,6 +2031,22 @@ def plot_grid_qualitative_visualization(
     save_path: Optional[str] = None,
     figsize: Optional[Tuple[float, float]] = None,
     legend_mode: str = 'global',
+    publication_style: bool = False,
+    prediction_alpha: float = 0.55,
+    draw_gt_boundary_on_ground_truth: bool = False,
+    boundary_linewidth: float = 0.25,
+    dataset_label_fontsize: float = 9.0,
+    header_fontsize: float = 9.0,
+    legend_fontsize: float = 9.0,
+    row_spacing: float = 0.0,
+    legend_position: str = 'right',
+    zoom_bboxes=None,
+    publication_dpi: int = 600,
+    save_pdf_and_png: bool = False,
+    dataset_label_bold: bool = False,
+    header_bold: bool = False,
+    dataset_label_orientation: str = 'horizontal',
+    zoom_inset: bool = False,
 ):
     if not _ensure_matplotlib():
         raise RuntimeError("Matplotlib is not available. Please install it to use this function.")
@@ -1153,6 +2057,29 @@ def plot_grid_qualitative_visualization(
         raise ValueError("No rows were provided for grid visualization.")
     if legend_mode not in ('global', 'per_row'):
         raise ValueError("legend_mode must be 'global' or 'per_row', got {}".format(legend_mode))
+    if publication_style:
+        _plot_publication_grid(
+            rows=rows,
+            model_names=model_names,
+            include_input=include_input,
+            save_path=save_path,
+            prediction_alpha=prediction_alpha,
+            draw_gt_boundary_on_ground_truth=draw_gt_boundary_on_ground_truth,
+            boundary_linewidth=boundary_linewidth,
+            dataset_label_fontsize=dataset_label_fontsize,
+            header_fontsize=header_fontsize,
+            legend_fontsize=legend_fontsize,
+            row_spacing=row_spacing,
+            legend_position=legend_position,
+            zoom_bboxes=zoom_bboxes,
+            dpi=publication_dpi,
+            save_pdf_and_png=save_pdf_and_png,
+            dataset_label_bold=dataset_label_bold,
+            header_bold=header_bold,
+            dataset_label_orientation=dataset_label_orientation,
+            zoom_inset=zoom_inset,
+        )
+        return
 
     num_rows = len(rows)
     num_models = len(model_names)
@@ -1198,7 +2125,7 @@ def plot_grid_qualitative_visualization(
             _imshow_input(pred_ax, image)
             pred_mask = np.ma.masked_where(pred == 0, pred)
             last_im = pred_ax.imshow(pred_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-            _draw_gt_boundaries(pred_ax, gt)
+            _draw_gt_boundaries(pred_ax, gt, linewidth=boundary_linewidth)
             if row_index == num_rows - 1:
                 pred_ax.set_xlabel(model_names[model_index], fontsize=12)
             pred_ax.set_xticks([])
@@ -1209,7 +2136,7 @@ def plot_grid_qualitative_visualization(
         _imshow_input(gt_ax, image)
         gt_mask = np.ma.masked_where(gt == 0, gt)
         last_im = gt_ax.imshow(gt_mask.astype(int), cmap=cmap, norm=norm, interpolation='nearest')
-        _draw_gt_boundaries(gt_ax, gt)
+        _draw_gt_boundaries(gt_ax, gt, linewidth=boundary_linewidth)
         if row_index == num_rows - 1:
             gt_ax.set_xlabel('Ground Truth', fontsize=12)
         gt_ax.set_xticks([])
@@ -1280,6 +2207,7 @@ def generate_qualitative_visualization(args, model, dataset_name):
                     include_input=not args.viz_hide_input,
                     num_slices_to_overlay=args.num_slices_to_overlay,
                     save_path=save_path,
+                    boundary_linewidth=args.viz_boundary_linewidth,
                 )
             else:
                 sample = ds_viz[start]
@@ -1296,6 +2224,7 @@ def generate_qualitative_visualization(args, model, dataset_name):
                     include_input=not args.viz_hide_input,
                     num_slices_to_overlay=args.num_slices_to_overlay,
                     save_path=save_path,
+                    boundary_linewidth=args.viz_boundary_linewidth,
                 )
         elif dataset_name in ['Cataract1k', 'EndoVis2018']:
             viz_split = "val" if dataset_name == 'Cataract1k' else "test"
@@ -1327,6 +2256,7 @@ def generate_qualitative_visualization(args, model, dataset_name):
                     include_input=not args.viz_hide_input,
                     num_slices_to_overlay=args.num_slices_to_overlay,
                     save_path=save_path,
+                    boundary_linewidth=args.viz_boundary_linewidth,
                 )
             else:
                 sample = ds_viz[start]
@@ -1343,6 +2273,7 @@ def generate_qualitative_visualization(args, model, dataset_name):
                     include_input=not args.viz_hide_input,
                     num_slices_to_overlay=args.num_slices_to_overlay,
                     save_path=save_path,
+                    boundary_linewidth=args.viz_boundary_linewidth,
                 )
     except Exception as e:
         raise RuntimeError(f"Visualization failed due to: {e}")

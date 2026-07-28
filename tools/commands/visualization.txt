@@ -1,0 +1,57 @@
+CUDA_VISIBLE_DEVICES=2 python tools/visualize.py \
+  --viz_view multiple_datasets \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --grid_rows 3 \
+  --grid_cols 5 \
+  --seed 11 \
+  --viz_legend_mode per_row \
+  --viz_publication_style \
+  --viz_row_spacing 0.02 \
+  --viz_legend_position bottom \
+  --viz_zoom_bboxes "[300,353,97,68]" "[80,142,58,39]" "[582,364,432,273]" \
+  --viz_zoom_inset \
+  --viz_prediction_alpha 0.8 \
+  --viz_dpi 1800 \
+  --viz_boundary_linewidth 0.2 \
+  --viz_dataset_label_fontsize 11 \
+  --viz_dataset_label_orientation vertical \
+  --viz_header_fontsize 8 \
+  --viz_legend_fontsize 7 \
+  --viz_out multiple_datasets/model_comparison_inset \
+  --viz_title "Comparing Models Across Datasets" \
+  --multi_datasets Synapse ACDC Cataract1k \
+  --multi_model_names MHSA TopK ATS GumbelTopK GumbelTopK+BULoss \
+  --multi_dataset_args \
+      "Synapse::--viz_index 8 --viz_slice 115 --num_slices_to_overlay 1" \
+      "ACDC::--viz_index 0 --num_slices_to_overlay 1" \
+      "Cataract1k::--viz_index 490 --num_slices_to_overlay 1" \
+  --multi_ckpts \
+    "Synapse=ckpt/ckpt_Synapse/BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth;ACDC=ckpt/ckpt_ACDC/BaselineFinal_ACDC__best_val_dice_0.8894063830375671_epoch_41_20260627_154006.pth;Cataract1k=ckpt/ckpt_Cataract1k/BaselineFinal_Cataract1k__best_val_dice_0.9609755867057377_epoch_176_20260628_031804.pth" \
+    "Synapse=ckpt/ckpt_Synapse/TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth::--topk_attn 0.5;ACDC=ckpt/ckpt_ACDC/TopK50_ACDC__best_val_dice_0.8887656331062317_epoch_43_20260629_154454.pth::--topk_attn 0.5;Cataract1k=ckpt/ckpt_Cataract1k/TopK50_Cataract1k__best_val_dice_0.94067888657252_epoch_259_20260701_194219.pth::--topk_attn 0.5" \
+    "Synapse=ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats;ACDC=ckpt/ckpt_ACDC/ATS50_ACDC__best_val_dice_0.9024859070777893_epoch_157_20260629_161313.pth::--topk_attn 0.5 --use_ats;Cataract1k=ckpt/ckpt_Cataract1k/ATS50_Cataract1k__best_val_dice_0.9448827053109804_epoch_247_20260701_193301.pth::--topk_attn 0.5 --use_ats" \
+    "Synapse=ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk;ACDC=ckpt/ckpt_ACDC/GumbelTopK_ACDC__best_val_dice_0.8999333381652832_epoch_224_20260627_165854.pth::--topk_attn 0.5 --use_gumbel_topk;Cataract1k=ckpt/ckpt_Cataract1k/GumbelTopK_Cataract1k__best_val_dice_0.9378672218571107_epoch_253_20260703_175551.pth::--topk_attn 0.5 --use_gumbel_topk" \
+    "Synapse=ckpt/ckpt_Synapse/Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth::--topk_attn 0.5 --use_gumbel_topk;ACDC=ckpt/ckpt_ACDC/GumbelTopK_BULoss_ACDC__best_val_dice_0.8964883685112_epoch_125_20260627_163047.pth::--topk_attn 0.5 --use_gumbel_topk;Cataract1k=ckpt/ckpt_Cataract1k/GumbelTopK50_BuLoss_Cataract1k__best_val_dice_0.9555858261055415_epoch_259_20260628_052737.pth::--topk_attn 0.5 --use_gumbel_topk"
+
+
+
+CUDA_VISIBLE_DEVICES=0 python tools/save_input_image.py \
+  --dataset Synapse \
+  --image-index 8 \
+  --slice-index 115 \
+  --include-ground-truth
+
+
+CUDA_VISIBLE_DEVICES=0 python tools/save_input_image.py \
+  --dataset ACDC \
+  --image-index 0 \
+  --include-ground-truth
+
+CUDA_VISIBLE_DEVICES=0 python tools/save_input_image.py \
+  --dataset Cataract1k \
+  --image-index 490 \
+  --include-ground-truth
+
+
+exactly in the center:
+  --viz_zoom_bboxes "[256,256,128,128]" "[112,112,80,80]" "[960,540,300,420]" \

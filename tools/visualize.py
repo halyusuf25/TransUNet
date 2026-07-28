@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import logging
 import os
@@ -202,11 +203,45 @@ def _configure_logging(args):
 
 def _strip_grid_only_args(args):
     for name in GRID_ONLY_ARG_NAMES:
+        if name == 'viz_boundary_linewidth':
+            continue
         if hasattr(args, name):
             delattr(args, name)
 
 
+def _validate_publication_options(args):
+    if args.viz_boundary_linewidth < 0:
+        raise ValueError("--viz_boundary_linewidth must be non-negative.")
+    if not args.viz_publication_style:
+        return
+    if args.viz_prediction_alpha < 0.0 or args.viz_prediction_alpha > 1.0:
+        raise ValueError("--viz_prediction_alpha must be between 0.0 and 1.0.")
+    if args.viz_row_spacing < 0.0:
+        raise ValueError("--viz_row_spacing must be non-negative.")
+    if args.viz_legend_position not in ('left', 'right', 'bottom'):
+        raise ValueError("--viz_legend_position must be one of: left, right, bottom.")
+    if args.viz_dataset_label_orientation not in ('horizontal', 'vertical'):
+        raise ValueError(
+            "--viz_dataset_label_orientation must be one of: horizontal, vertical."
+        )
+    font_sizes = {
+        '--viz_dataset_label_fontsize': args.viz_dataset_label_fontsize,
+        '--viz_header_fontsize': args.viz_header_fontsize,
+        '--viz_legend_fontsize': args.viz_legend_fontsize,
+    }
+    invalid_font_sizes = [name for name, value in font_sizes.items() if value <= 0]
+    if invalid_font_sizes:
+        raise ValueError("{} must be positive.".format(", ".join(invalid_font_sizes)))
+    if args.viz_dpi < 1:
+        raise ValueError("--viz_dpi must be a positive integer.")
+
+
 def _validate_grid_args(args):
+    _validate_publication_options(args)
+    if args.viz_zoom_inset:
+        raise ValueError("--viz_zoom_inset is only supported with --viz_view multiple_datasets.")
+    if args.viz_zoom_bboxes is not None:
+        raise ValueError("--viz_zoom_bboxes is only supported with --viz_view multiple_datasets.")
     if args.dataset not in VALID_GRID_DATASETS:
         raise ValueError(
             "Invalid --dataset '{}' for grid visualization. Valid choices are: {}.".format(
@@ -294,6 +329,7 @@ def _validate_grid_args(args):
 
 
 def _validate_multiple_datasets_args(args):
+    _validate_publication_options(args)
     if args.viz_legend_mode != 'per_row':
         raise ValueError("--viz_view multiple_datasets requires --viz_legend_mode per_row.")
     if args.viz_hide_input:
@@ -302,8 +338,8 @@ def _validate_multiple_datasets_args(args):
     datasets = list(args.multi_datasets or [])
     if len(datasets) < 1:
         raise ValueError("--multi_datasets is required when --viz_view multiple_datasets is used.")
-    if len(datasets) > 4:
-        raise ValueError("--multi_datasets must contain at most 4 datasets.")
+    if len(datasets) > 20:
+        raise ValueError("--multi_datasets must contain at most 20 dataset rows.")
 
     invalid_datasets = [dataset for dataset in datasets if dataset not in VALID_GRID_DATASETS]
     if invalid_datasets:
@@ -314,14 +350,6 @@ def _validate_multiple_datasets_args(args):
             )
         )
 
-    duplicate_datasets = sorted({dataset for dataset in datasets if datasets.count(dataset) > 1})
-    if duplicate_datasets:
-        raise ValueError(
-            "--multi_datasets must not contain duplicates, got: {}.".format(
-                ", ".join(duplicate_datasets)
-            )
-        )
-
     if args.grid_rows != len(datasets):
         raise ValueError(
             "--grid_rows ({}) must match the number of --multi_datasets entries ({}).".format(
@@ -329,6 +357,12 @@ def _validate_multiple_datasets_args(args):
                 len(datasets),
             )
         )
+
+    zoom_bboxes = _parse_viz_zoom_bboxes(args.viz_zoom_bboxes, datasets)
+    if args.viz_zoom_inset and zoom_bboxes is None:
+        raise ValueError("--viz_zoom_inset requires --viz_zoom_bboxes.")
+    if zoom_bboxes is not None and not args.viz_publication_style:
+        raise ValueError("--viz_zoom_bboxes requires --viz_publication_style.")
 
     ckpts = list(args.multi_ckpts or [])
     if len(ckpts) < 1:
@@ -353,12 +387,12 @@ def _validate_multiple_datasets_args(args):
                 "({} names for {} checkpoint columns).".format(len(model_names), len(ckpts))
             )
 
-    dataset_arg_map = _parse_multi_dataset_args(args.multi_dataset_args, datasets)
+    dataset_arg_rows = _parse_multi_dataset_args(args.multi_dataset_args, datasets)
     checkpoint_maps = [
         _parse_multi_checkpoint_entry(raw_spec, datasets, model_name)
         for raw_spec, model_name in zip(ckpts, model_names)
     ]
-    return datasets, checkpoint_maps, model_names, dataset_arg_map
+    return datasets, checkpoint_maps, model_names, dataset_arg_rows, zoom_bboxes
 
 
 def _split_checkpoint_spec(raw_spec):
@@ -473,7 +507,7 @@ def _parse_multi_dataset_arg_entry(raw_spec):
 
 
 def _parse_multi_dataset_args(raw_specs, requested_datasets):
-    dataset_args = {}
+    dataset_arg_queues = {dataset_name: [] for dataset_name in set(requested_datasets)}
     for raw_spec in raw_specs or []:
         dataset_name, override_text = _parse_multi_dataset_arg_entry(raw_spec)
         if dataset_name not in requested_datasets:
@@ -482,10 +516,84 @@ def _parse_multi_dataset_args(raw_specs, requested_datasets):
                     dataset_name
                 )
             )
-        if dataset_name in dataset_args:
-            raise ValueError("--multi_dataset_args defines dataset '{}' more than once.".format(dataset_name))
-        dataset_args[dataset_name] = override_text
-    return dataset_args
+        dataset_arg_queues[dataset_name].append(override_text)
+
+    for dataset_name, overrides in dataset_arg_queues.items():
+        row_count = requested_datasets.count(dataset_name)
+        if len(overrides) > row_count:
+            raise ValueError(
+                "--multi_dataset_args defines {} '{}' row(s), but --multi_datasets contains {}.".format(
+                    len(overrides),
+                    dataset_name,
+                    row_count,
+                )
+            )
+
+    dataset_arg_rows = []
+    consumed = {dataset_name: 0 for dataset_name in dataset_arg_queues}
+    for dataset_name in requested_datasets:
+        position = consumed[dataset_name]
+        overrides = dataset_arg_queues[dataset_name]
+        dataset_arg_rows.append(overrides[position] if position < len(overrides) else "")
+        consumed[dataset_name] += 1
+    return dataset_arg_rows
+
+
+def _parse_viz_zoom_bbox(raw_spec, row_index):
+    value = str(raw_spec).strip()
+    if value.lower() == 'auto':
+        return 'auto'
+    try:
+        parsed = ast.literal_eval(value)
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError(
+            "Invalid --viz_zoom_bboxes entry {} ('{}'). Expected "
+            "[center_x,center_y,height,width] or auto.".format(row_index + 1, raw_spec)
+        ) from exc
+    if not isinstance(parsed, (list, tuple)) or len(parsed) != 4:
+        raise ValueError(
+            "Invalid --viz_zoom_bboxes entry {} ('{}'). Expected exactly four values: "
+            "[center_x,center_y,height,width].".format(row_index + 1, raw_spec)
+        )
+    try:
+        center_x, center_y, height, width = (float(item) for item in parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Invalid --viz_zoom_bboxes entry {} ('{}'). All four values must be numeric.".format(
+                row_index + 1,
+                raw_spec,
+            )
+        ) from exc
+    values = np.asarray([center_x, center_y, height, width], dtype=np.float64)
+    if not np.all(np.isfinite(values)):
+        raise ValueError(
+            "Invalid --viz_zoom_bboxes entry {} ('{}'). Values must be finite.".format(
+                row_index + 1,
+                raw_spec,
+            )
+        )
+    if height <= 0.0 or width <= 0.0:
+        raise ValueError(
+            "Invalid --viz_zoom_bboxes entry {} ('{}'). Height and width must be positive.".format(
+                row_index + 1,
+                raw_spec,
+            )
+        )
+    return center_x, center_y, height, width
+
+
+def _parse_viz_zoom_bboxes(raw_specs, requested_datasets):
+    if raw_specs is None:
+        return None
+    if len(raw_specs) != len(requested_datasets):
+        raise ValueError(
+            "--viz_zoom_bboxes must contain exactly one entry per --multi_datasets row "
+            "({} entries for {} rows).".format(len(raw_specs), len(requested_datasets))
+        )
+    return [
+        _parse_viz_zoom_bbox(raw_spec, row_index)
+        for row_index, raw_spec in enumerate(raw_specs)
+    ]
 
 
 def _apply_dataset_visualization_overrides(dataset_args, override_text, dataset_name):
@@ -1166,17 +1274,38 @@ def generate_grid_visualization(args):
         figure_title=args.viz_title or "{} qualitative comparison".format(dataset_name),
         save_path=save_path,
         legend_mode=args.viz_legend_mode,
+        publication_style=args.viz_publication_style,
+        prediction_alpha=args.viz_prediction_alpha,
+        draw_gt_boundary_on_ground_truth=args.viz_gt_boundary_on_ground_truth,
+        boundary_linewidth=args.viz_boundary_linewidth,
+        dataset_label_fontsize=args.viz_dataset_label_fontsize,
+        dataset_label_bold=args.viz_dataset_label_bold,
+        dataset_label_orientation=args.viz_dataset_label_orientation,
+        header_fontsize=args.viz_header_fontsize,
+        header_bold=args.viz_header_bold,
+        legend_fontsize=args.viz_legend_fontsize,
+        row_spacing=args.viz_row_spacing,
+        legend_position=args.viz_legend_position,
+        zoom_bboxes=args.viz_zoom_bboxes,
+        zoom_inset=args.viz_zoom_inset,
+        publication_dpi=args.viz_dpi,
+        save_pdf_and_png=(
+            args.viz_publication_style
+            and args.viz_out is not None
+            and not Path(args.viz_out).suffix
+        ),
     )
 
 
 def generate_multiple_datasets_visualization(args):
-    dataset_names, checkpoint_maps, model_names, dataset_arg_map = _validate_multiple_datasets_args(args)
+    dataset_names, checkpoint_maps, model_names, dataset_arg_rows, zoom_bboxes = (
+        _validate_multiple_datasets_args(args)
+    )
 
     rows = []
     row_payloads = []
-    for dataset_name in dataset_names:
+    for dataset_name, dataset_override in zip(dataset_names, dataset_arg_rows):
         dataset_args = _prepare_grid_dataset_args(args, dataset_name)
-        dataset_override = dataset_arg_map.get(dataset_name, "")
         if dataset_override:
             _apply_dataset_visualization_overrides(
                 dataset_args,
@@ -1252,6 +1381,26 @@ def generate_multiple_datasets_visualization(args):
         figure_title=args.viz_title or "Multiple dataset qualitative comparison",
         save_path=save_path,
         legend_mode=args.viz_legend_mode,
+        publication_style=args.viz_publication_style,
+        prediction_alpha=args.viz_prediction_alpha,
+        draw_gt_boundary_on_ground_truth=args.viz_gt_boundary_on_ground_truth,
+        boundary_linewidth=args.viz_boundary_linewidth,
+        dataset_label_fontsize=args.viz_dataset_label_fontsize,
+        dataset_label_bold=args.viz_dataset_label_bold,
+        dataset_label_orientation=args.viz_dataset_label_orientation,
+        header_fontsize=args.viz_header_fontsize,
+        header_bold=args.viz_header_bold,
+        legend_fontsize=args.viz_legend_fontsize,
+        row_spacing=args.viz_row_spacing,
+        legend_position=args.viz_legend_position,
+        zoom_bboxes=zoom_bboxes,
+        zoom_inset=args.viz_zoom_inset,
+        publication_dpi=args.viz_dpi,
+        save_pdf_and_png=(
+            args.viz_publication_style
+            and args.viz_out is not None
+            and not Path(args.viz_out).suffix
+        ),
     )
 
 
