@@ -3,7 +3,7 @@
 # Segmentation benchmarking utility (PyTorch) with custom FLOPs for your ViT:
 # - Uses real samples from your test DataLoader (no dummy tensors)
 # - Throughput (img/s), Latency (mean & p50/p90/p95/p99 in ms)
-# - #Params, FLOPs (GFLOPs)  --- includes custom counting for Attention/SHSA
+# - #Params, FLOPs (GFLOPs)  --- includes custom counting for ViT attention
 # - Optional quantized-model counting for AWQ WQLinear layers
 # - Clean, modular, easy to extend
 # ---------------------------------------------------------------------------
@@ -334,6 +334,8 @@ def _fallback_hook_macs_vit(
       - WQLinear when quantized_model=True
       - Attention (full MHA): counts QK^T + A*V
       - SHSAttention: counts QK^T (qk_dim) + A*V (pdim)
+      - TopkAttention / ATSAttention: counts QK^T + reduced A*V
+    Token selection and data movement (topk, unique, gather, scatter) are excluded.
     Pool/Norm/Act/Upsample are typically omitted in FLOPs tables.
     """
     macs_total = 0
@@ -387,6 +389,15 @@ def _fallback_hook_macs_vit(
         pdim   = int(getattr(m, "pdim"))
         macs_total += B * S * S * (qk_dim + pdim)
 
+    def token_reduction_attention_hook(m, inp, out):
+        nonlocal macs_total
+        # Projections are counted by their Linear hooks; count only attention matmuls.
+        B, N, D = inp[0].shape
+        attention_output = out[0] if isinstance(out, (tuple, list)) else out
+        K = attention_output.shape[1]
+        macs_total += B * N * N * D       # QK^T
+        macs_total += B * K * N * D       # reduced A*V
+
     # Register hooks on a copy to avoid mutating the original model. Quantized
     # WQLinear kernels are CUDA-only, so keep that path on the example device.
     target_device = example.device if quantized_model else torch.device("cpu")
@@ -405,6 +416,8 @@ def _fallback_hook_macs_vit(
             handles.append(mod.register_forward_hook(mha_hook))
         elif cname == "SHSAttention":
             handles.append(mod.register_forward_hook(shsa_hook))
+        elif cname in ("TopkAttention", "ATSAttention"):
+            handles.append(mod.register_forward_hook(token_reduction_attention_hook))
 
     with torch.no_grad():
         _ = model_copy(example.to(target_device))
@@ -424,7 +437,7 @@ def count_flops_gflops(
     Counting order:
       1) THOP with custom ops (preferred)
       2) fvcore (good general fallback)
-      3) Custom forward-hook counter (covers Attention/SHSA, Conv/Linear/ConvT)
+      3) Custom forward-hook counter (covers ViT attention, Conv/Linear/ConvT)
 
     Convention: FLOPs ≈ 2 × MACs (multiply + add per MAC), which matches many CV papers.
     """
@@ -671,8 +684,8 @@ def benchmark_segmentation_model(
     #---------------- Single-image latency path ----------------
                     
     percentile_runs: List[Dict[str, float]] = []
+    single_lat_ms: List[float] = []
     for _ in range(n_repeated):
-        single_lat_ms: List[float] = []
         if single_image_latency_samples > 0:
             it = iter(test_loader)
             collected = 0
@@ -695,6 +708,7 @@ def benchmark_segmentation_model(
 
     percentiles = percentile_runs[0]
     if repeated_runs > 1:
+        mean_latency_single_image_summary = _run_summary(single_lat_ms)
         for q in (50, 90, 95, 99):
             percentile_key = f"p{q}"
             metric_key = f"latency_ms_p{q}"
@@ -710,8 +724,10 @@ def benchmark_segmentation_model(
             })
 
     metrics = {
-        "throughput_img_s": throughput_img_s,
-        "latency_ms_mean": mean_latency_ms_per_image,
+        "throughput_img_s_batch36": throughput_img_s,
+        "latency_ms_mean_batch36": mean_latency_ms_per_image,
+        "latency_ms_mean_single": mean_latency_single_image_summary["mean"] if repeated_runs > 1 else mean_latency_ms_per_image,
+        "latency_ms_std_single": mean_latency_single_image_summary["std"] if repeated_runs > 1 else float("nan"),
         "latency_ms_p50": percentiles.get("p50", float("nan")),
         "latency_ms_p90": percentiles.get("p90", float("nan")),
         "latency_ms_p95": percentiles.get("p95", float("nan")),

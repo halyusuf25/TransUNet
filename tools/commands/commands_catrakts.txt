@@ -385,3 +385,131 @@ CUDA_VISIBLE_DEVICES=0 python tools/visualize.py \
       "ckpt/ckpt_Cataract1k/GumbelTopK50_BuLoss_Cataract1k__best_val_dice_0.9555858261055415_epoch_259_20260628_052737.pth::--topk_attn 0.5 --use_gumbel_topk"
 
     
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt ATS75_Cataract1k_dice_0.93258_fromHPC.pth \
+         --description "TransUNet with ATS (r=0.75) for Cataract1k - abilation"
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt ATS25_Cataract1k_dice_0.91081_fromHPC.pth \
+         --description "TransUNet with ATS (r=0.25) for Cataract1k - abilation"
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt ATS50_Cataract1k__best_val_dice_0.9448827053109804_epoch_247_20260701_193301.pth \
+         --description "TransUNet with ATS (r=0.5) for Cataract1k - abilation"
+
+
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt Gumbel75_Cataract1k_dice_0.94017_fromHPC.pth \
+         --description "TransUNet with GumbelTopK (r=0.75) for Cataract1k - abilation"
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt Gumbel25_Cataract1k_dice_0.90832_fromHPC.pth \
+         --description "TransUNet with GumbelTopK (r=0.25) for Cataract1k - abilation"
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt GumbelTopK_Cataract1k__best_val_dice_0.9378672218571107_epoch_253_20260703_175551.pth \
+         --description "TransUNet with GumbelTopK (r=0.5) for Cataract1k - abilation"
+
+
+
+
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt TopK25_Cataract1k_dice_0.91367_fromHPC.pth \
+         --description "TransUNet with TopK (r=0.25) for Cataract1k - abilation"
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt TopK75_Cataract1k_dice_0.93922_fromHPC.pth \
+         --description "TransUNet with TopK (r=0.75) for Cataract1k - abilation"
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset Cataract1k \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.50 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Cataract1k \
+         --ckpt TopK50_Cataract1k__best_val_dice_0.9137447874993085_epoch_154_20260701_181211.pth \
+         --description "TransUNet with TopK (r=0.50) for Cataract1k - abilation"
+
+

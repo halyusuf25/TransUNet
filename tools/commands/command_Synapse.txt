@@ -510,3 +510,159 @@ CUDA_VISIBLE_DEVICES=2 python tools/visualize.py \
     "Synapse=ckpt/ckpt_Synapse/ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth::--topk_attn 0.5 --use_ats;ACDC=ckpt/ckpt_ACDC/ATS50_ACDC__best_val_dice_0.9024859070777893_epoch_157_20260629_161313.pth::--topk_attn 0.5 --use_ats;Cataract1k=ckpt/ckpt_Cataract1k/ATS50_Cataract1k__best_val_dice_0.9448827053109804_epoch_247_20260701_193301.pth::--topk_attn 0.5 --use_ats" \
     "Synapse=ckpt/ckpt_Synapse/GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth::--topk_attn 0.5 --use_gumbel_topk;ACDC=ckpt/ckpt_ACDC/GumbelTopK_ACDC__best_val_dice_0.8999333381652832_epoch_224_20260627_165854.pth::--topk_attn 0.5 --use_gumbel_topk;Cataract1k=ckpt/ckpt_Cataract1k/GumbelTopK_Cataract1k__best_val_dice_0.9378672218571107_epoch_253_20260703_175551.pth::--topk_attn 0.5 --use_gumbel_topk" \
     "Synapse=ckpt/ckpt_Synapse/Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth::--topk_attn 0.5 --use_gumbel_topk;ACDC=ckpt/ckpt_ACDC/GumbelTopK_BULoss_ACDC__best_val_dice_0.8964883685112_epoch_125_20260627_163047.pth::--topk_attn 0.5 --use_gumbel_topk;Cataract1k=ckpt/ckpt_Cataract1k/GumbelTopK50_BuLoss_Cataract1k__best_val_dice_0.9555858261055415_epoch_259_20260628_052737.pth::--topk_attn 0.5 --use_gumbel_topk"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt TopK25_Synapse_dice_0.75082_fromHPC.pth \
+         --description "TransUNet with TopK (r=0.25) for Synapse - from HPC"
+
+
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt TopK50_Synapse__best_val_dice_0.768968939781189_epoch_61_20260701_234337.pth \
+         --description "TransUNet with TopK (r=0.5) for Synapse - for abilation"
+
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt TopK75_Synapse_dice_0.777268_fromHPC.pth \
+         --description "TransUNet with TopK (r=0.75) for Synapse - for abilation"
+
+
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt Gumbel25_Synapse_dice_0.76510_fromHPC.pth \
+         --description "TransUNet with GumbelTopK (r=0.25) for Synapse - for abilation"
+
+
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth \
+         --description "TransUNet with Gumbel TopK (r=0.5) for Synapse - for abilation"
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt Gumbel75_Synapse_dice_0.78890_fromHPC.pth \
+         --description "TransUNet with Gumbel TopK (r=0.75) for Synapse - for abilation"
+
+
+
+
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt ATS25_Synapse_dice_0.76410_fromHPC.pth \
+         --description "TransUNet with ATS (r=0.25) for Synapse - for abilation"
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt ATS75_Synapse_dice_0.79726_fromHPC.pth \
+         --description "TransUNet with ATS (r=0.75) for Synapse - for abilation"
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt ATS50_Synapse__best_val_dice_0.797399640083313_epoch_178_20260701_173445.pth \
+         --description "TransUNet with ATS (r=0.5) for Synapse - for abilation"

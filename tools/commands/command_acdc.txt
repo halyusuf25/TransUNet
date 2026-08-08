@@ -102,7 +102,7 @@ CUDA_VISIBLE_DEVICES=2 python tools/benchmark_checkpoint_repeats.py \
 
 
 
-CUDA_VISIBLE_DEVICES=2 python test.py \
+CUDA_VISIBLE_DEVICES=0 python test.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
          --max_epoch 270 \
@@ -111,7 +111,7 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
          --repeated_runs 10 \
          --ckpt_dir ckpt/ckpt_ACDC \
          --ckpt BaselineFinal_ACDC__best_val_dice_0.8894063830375671_epoch_41_20260627_154006.pth \
-         --description "TransUNet Baseline for ACDC"
+         --description "TransUNet Baseline for ACDC- fixed mean latency"
 
 CUDA_VISIBLE_DEVICES=4 python test.py \
          --dataset ACDC \
@@ -139,7 +139,7 @@ CUDA_VISIBLE_DEVICES=4 python test.py \
          --description "TransUNet with GumbelTopK (r=0.5) with BULoss (N3x3) - dist sampling"
 
 
-CUDA_VISIBLE_DEVICES=1 python test.py \
+CUDA_VISIBLE_DEVICES=0 python test.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
          --max_epoch 270 \
@@ -302,3 +302,382 @@ CUDA_VISIBLE_DEVICES=1 python train.py \
          --ckpt_dir ckpt/ckpt_ACDC \
          --ckpt BULoss1 \
          --description "ACDC + BULoss  - N(3x3)"
+
+
+
+
+
+Abilation : token reduction
+ATS
+CUDA_VISIBLE_DEVICES=0 python train.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 260 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.25 \
+         --use_ats \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt ATS25 \
+         --description "ACDC_ATS - ratio 0.25"
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 250 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.75 \
+         --use_ats \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt ATS75 \
+         --description "ACDC_ATS - ratio 0.75"
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt ATS25_ACDC__best_val_dice_0.8917858600616455_epoch_40_20260729_034148.pth \
+         --description "TransUNet with ATS (r=0.25) for ACDC"
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.50 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt ATS50_ACDC__best_val_dice_0.9024859070777893_epoch_157_20260629_161313.pth \
+         --description "TransUNet with ATS (r=0.50) for ACDC"
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt ATS75_ACDC__best_val_dice_0.9064107537269592_epoch_133_20260729_041453.pth \
+         --description "TransUNet with ATS (r=0.75) for ACDC"
+
+
+Gumbel
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 250 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.25 \
+         --use_gumbel_topk \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt GumbelTopK25 \
+         --description "ACDC_GumbelTopK - ratio 0.25"
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 250 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt GumbelTopK75 \
+         --description "ACDC_GumbelTopK - ratio 0.75"
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt GumbelTopK25_ACDC__best_val_dice_0.8855255246162415_epoch_40_20260729_052816.pth \
+         --description "TransUNet with Gumbel (r=0.25) for ACDC - gumbel sampling mode is manual"
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.50 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt GumbelTopK_ACDC__best_val_dice_0.8999333381652832_epoch_224_20260627_165854.pth \
+         --description "TransUNet with Gumbel (r=0.50) for ACDC - gumbel sampling mode is manual"
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt GumbelTopK75_ACDC__best_val_dice_0.9044303894042969_epoch_166_20260729_061156.pth \
+         --description "TransUNet with Gumbel (r=0.75) for ACDC - gumbel sampling mode is manual"
+
+TopK
+CUDA_VISIBLE_DEVICES=4 python train.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 250 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.25 \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt TopK25 \
+         --description "ACDC_TopK - ratio 0.25"
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 250 \
+         --batch_size 24 \
+         --img_size 224 \
+         --topk_attn 0.75 \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt TopK75 \
+         --description "ACDC_TopK - ratio 0.75"
+
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt TopK25_ACDC__best_val_dice_0.886837899684906_epoch_46_20260729_082422.pth \
+         --description "TransUNet with TopK (r=0.25) for ACDC"
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.50 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt TopK50_ACDC__best_val_dice_0.8887656331062317_epoch_43_20260629_154454.pth \
+         --description "TransUNet with TopK (r=0.50) for ACDC"
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt TopK75_ACDC__best_val_dice_0.8999476432800293_epoch_97_20260729_083811.pth \
+         --description "TransUNet with TopK (r=0.75) for ACDC"
+
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.50 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt ATS50_ACDC__best_val_dice_0.9024859070777893_epoch_157_20260629_161313.pth \
+         --description "TransUNet with ATS (r=0.50) for ACDC - abilation"
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.50 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt GumbelTopK_ACDC__best_val_dice_0.8999333381652832_epoch_224_20260627_165854.pth \
+         --description "TransUNet with GumbelTopK (r=0.50) for ACDC - abilation"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt TopK75_ACDC__best_val_dice_0.8999476432800293_epoch_97_20260729_083811.pth \
+         --description "TransUNet with TopK (r=0.75) for ACDC - abilation"
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt TopK50_ACDC__best_val_dice_0.8887656331062317_epoch_43_20260629_154454.pth \
+         --description "TransUNet with TopK (r=0.5) for ACDC - abilation"
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt TopK25_ACDC__best_val_dice_0.886837899684906_epoch_46_20260729_082422.pth \
+         --description "TransUNet with TopK (r=0.25) for ACDC - abilation"
+
+
+
+
+
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt ATS50_ACDC__best_val_dice_0.9024859070777893_epoch_157_20260629_161313.pth \
+         --description "TransUNet with ATS (r=0.5) for ACDC - abilation"
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt ATS75_ACDC__best_val_dice_0.9064107537269592_epoch_133_20260729_041453.pth \
+         --description "TransUNet with ATS (r=0.75) for ACDC - abilation"
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --use_ats \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt ATS25_ACDC__best_val_dice_0.8917858600616455_epoch_40_20260729_034148.pth \
+         --description "TransUNet with ATS (r=0.25) for ACDC - abilation"
+
+
+
+
+CUDA_VISIBLE_DEVICES=1 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt GumbelTopK_ACDC__best_val_dice_0.8999333381652832_epoch_224_20260627_165854.pth \
+         --description "TransUNet with GumbelTopK (r=0.5) for ACDC - abilation"
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.75 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt GumbelTopK75_ACDC__best_val_dice_0.9044303894042969_epoch_166_20260729_061156.pth \
+         --description "TransUNet with GumbelTopK (r=0.75) for ACDC - abilation"
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.25 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --benchmark_dict benchmark_abilation/ \
+         --ckpt_dir ckpt/ckpt_ACDC \
+         --ckpt GumbelTopK25_ACDC__best_val_dice_0.8855255246162415_epoch_40_20260729_052816.pth \
+         --description "TransUNet with GumbelTopK (r=0.25) for ACDC - abilation"
