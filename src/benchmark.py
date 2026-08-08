@@ -403,29 +403,39 @@ def _fallback_hook_macs_vit(
         pdim   = int(getattr(m, "pdim"))
         macs_total += B * S * S * (qk_dim + pdim)
 
-    # Register hooks on a copy to avoid mutating the original model. Quantized
-    # WQLinear kernels are CUDA-only, so keep that path on the example device.
-    target_device = example.device if quantized_model else torch.device("cpu")
-    model_copy = copy.deepcopy(model).to(target_device).eval()
-    for mod in model_copy.modules():
-        cname = mod.__class__.__name__
-        if isinstance(mod, nn.Conv2d):
-            handles.append(mod.register_forward_hook(conv_hook))
-        elif isinstance(mod, nn.Linear):
-            handles.append(mod.register_forward_hook(linear_hook))
-        elif isinstance(mod, nn.ConvTranspose2d):
-            handles.append(mod.register_forward_hook(convt_hook))
-        elif quantized_model and WQLinear is not None and isinstance(mod, WQLinear):
-            handles.append(mod.register_forward_hook(wqlinear_hook))
-        elif cname == "Attention":
-            handles.append(mod.register_forward_hook(mha_hook))
-        elif cname == "SHSAttention":
-            handles.append(mod.register_forward_hook(shsa_hook))
+    # Quantization runtimes may cache non-leaf tensors that cannot be deep-copied.
+    # Count on the existing model and remove every temporary hook afterward.
+    model_tensors = list(model.parameters()) + list(model.buffers())
+    target_device = (
+        example.device
+        if quantized_model
+        else (model_tensors[0].device if model_tensors else example.device)
+    )
+    training_states = [(mod, mod.training) for mod in model.modules()]
+    model.eval()
+    try:
+        for mod in model.modules():
+            cname = mod.__class__.__name__
+            if isinstance(mod, nn.Conv2d):
+                handles.append(mod.register_forward_hook(conv_hook))
+            elif isinstance(mod, nn.Linear):
+                handles.append(mod.register_forward_hook(linear_hook))
+            elif isinstance(mod, nn.ConvTranspose2d):
+                handles.append(mod.register_forward_hook(convt_hook))
+            elif quantized_model and WQLinear is not None and isinstance(mod, WQLinear):
+                handles.append(mod.register_forward_hook(wqlinear_hook))
+            elif cname == "Attention":
+                handles.append(mod.register_forward_hook(mha_hook))
+            elif cname == "SHSAttention":
+                handles.append(mod.register_forward_hook(shsa_hook))
 
-    with torch.no_grad():
-        _ = model_copy(example.to(target_device))
-    for h in handles:
-        h.remove()
+        with torch.no_grad():
+            _ = model(example.to(target_device))
+    finally:
+        for handle in handles:
+            handle.remove()
+        for mod, was_training in training_states:
+            mod.training = was_training
     return int(macs_total)
 
 
