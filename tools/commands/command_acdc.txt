@@ -399,7 +399,7 @@ CUDA_VISIBLE_DEVICES=5 python train.py \
          --description "ACDC_GumbelTopK - ratio 0.75"
 
 
-CUDA_VISIBLE_DEVICES=0 python test.py \
+CUDA_VISIBLE_DEVICES=3 python test.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
          --batch_size 24 \
@@ -412,7 +412,7 @@ CUDA_VISIBLE_DEVICES=0 python test.py \
          --ckpt GumbelTopK25_ACDC__best_val_dice_0.8855255246162415_epoch_40_20260729_052816.pth \
          --description "TransUNet with Gumbel (r=0.25) for ACDC - gumbel sampling mode is manual"
 
-CUDA_VISIBLE_DEVICES=1 python test.py \
+CUDA_VISIBLE_DEVICES=4 python test.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
          --batch_size 24 \
@@ -426,7 +426,7 @@ CUDA_VISIBLE_DEVICES=1 python test.py \
          --description "TransUNet with Gumbel (r=0.50) for ACDC - gumbel sampling mode is manual"
 
 
-CUDA_VISIBLE_DEVICES=2 python test.py \
+CUDA_VISIBLE_DEVICES=5 python test.py \
          --dataset ACDC \
          --vit_name R50-ViT-B_16 \
          --batch_size 24 \
@@ -438,6 +438,21 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
          --ckpt_dir ckpt/ckpt_ACDC/ \
          --ckpt GumbelTopK75_ACDC__best_val_dice_0.9044303894042969_epoch_166_20260729_061156.pth \
          --description "TransUNet with Gumbel (r=0.75) for ACDC - gumbel sampling mode is manual"
+
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+         --dataset ACDC \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.50 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --ckpt_dir ckpt/ckpt_ACDC/ \
+         --ckpt GumbelTopK_BULoss_ACDC__best_val_dice_0.8964883685112_epoch_125_20260627_163047.pth \
+         --description "TransUNet with Gumbel+Loss_UB (r=0.50) for ACDC"
+
 
 TopK
 CUDA_VISIBLE_DEVICES=4 python train.py \

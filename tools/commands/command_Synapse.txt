@@ -193,7 +193,7 @@ CUDA_VISIBLE_DEVICES=3 python test.py \
          --repeated_runs 10 \
          --ckpt_dir ckpt/ckpt_Synapse \
          --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
-         --description "TransUNet Baseline for Synapse"
+         --description "TransUNet Baseline for Synapse - single image mean latency"
 
 
 CUDA_VISIBLE_DEVICES=0 python test.py \
@@ -607,6 +607,23 @@ CUDA_VISIBLE_DEVICES=4 python test.py \
          --ckpt_dir ckpt/ckpt_Synapse \
          --ckpt GumbelTopK_Synapse__best_val_dice_0.7911930084228516_epoch_190_20260703_160858.pth \
          --description "TransUNet with Gumbel TopK (r=0.5) for Synapse - for abilation"
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --batch_size 24 \
+         --img_size 224 \
+         --repeated_runs 10 \
+         --topk_attn 0.5 \
+         --use_gumbel_topk \
+         --gumbel_sampling_mode manual \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt Gumbel50_BULoss1_Synapse__best_val_dice_0.794296145439148_epoch_157_20260703_163247.pth \
+         --description "TransUNet with Gumbel+Loss_UB TopK (r=0.5) for Synapse "
+
+
+
 
 CUDA_VISIBLE_DEVICES=5 python test.py \
          --dataset Synapse \

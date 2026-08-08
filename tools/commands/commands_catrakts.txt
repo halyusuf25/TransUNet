@@ -154,7 +154,7 @@ CUDA_VISIBLE_DEVICES=3 python train.py \
 
 
 test command
-CUDA_VISIBLE_DEVICES=1 python test.py \
+CUDA_VISIBLE_DEVICES=3 python test.py \
          --dataset Cataract1k \
          --vit_name R50-ViT-B_16 \
          --max_epoch 260 \
@@ -178,7 +178,7 @@ CUDA_VISIBLE_DEVICES=1 python test.py \
          --gumbel_sampling_mode manual \
          --ckpt_dir ckpt/ckpt_Cataract1k \
          --ckpt GumbelTopK50_BuLoss_Cataract1k__best_val_dice_0.9555858261055415_epoch_259_20260628_052737.pth \
-         --description "TransUNet with GumbelTopK (r=0.5) and BULoss (N3x3) for Cataract1k - old"
+         --description "TransUNet with Gumbel+Loss_UB (r=0.5) and (N3x3)"
 
 CUDA_VISIBLE_DEVICES=2 python test.py \
          --dataset Cataract1k \
