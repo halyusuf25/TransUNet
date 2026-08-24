@@ -505,3 +505,23 @@ CUDA_VISIBLE_DEVICES=3 python test.py \
           --saliency_source activation \
           --quantize_calibrate_batch_size 8 \
           --description "AWQ Quantized TransUNet for Synapse" 
+
+
+CUDA_VISIBLE_DEVICES=5 python train.py \
+         --dataset Synapse \
+         --vit_name R50-ViT-B_16 \
+         --max_epoch 250 \
+         --batch_size 24 \
+         --img_size 224 \
+         --use_se_block \
+         --topk_attn 0.50 \
+         --use_gumbel_topk \
+         --use_bu_loss \
+         --buloss_option B \
+         --learn_tau \
+         --alpha 1.0 \
+         --tau_init 1.0 \
+         --boundary_radius 1 \
+         --ckpt_dir ckpt/ckpt_Synapse \
+         --ckpt SE_UB \
+         --description "Synapse_SEBlock+UB"

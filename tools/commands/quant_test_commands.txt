@@ -201,21 +201,23 @@ CUDA_VISIBLE_DEVICES=0 python test.py \
 
 
 # Gumbel-Top-K
-CUDA_VISIBLE_DEVICES=0 python test.py \
-  --dataset Synapse \
-  --volume_path /data/halyusuf/data/Synapse/test_vol_h5 \
-  --list_dir ./lists/lists_Synapse \
+CUDA_VISIBLE_DEVICES=3 python test.py \
+  --dataset ACDC \
   --vit_name R50-ViT-B_16 \
   --img_size 224 \
   --batch_size 24 \
-  --ckpt_dir ckpt/ckpt_Synapse/ \
-  --ckpt GUMBEL_TOPK_CHECKPOINT.pth \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/ckpt_ACDC/ \
+  --ckpt SE_UB_ACDC__best_val_dice_0.8964728713035583_epoch_115_20260824_024053.pth \
   --topk_attn 0.5 \
   --use_gumbel_topk \
   --gumbel_sampling_mode manual \
   --quantize \
+  --use_se_block \
+  --se_calib_only \
   --quant_backend custom_w4 \
-  --saliency_source activation \
+  --saliency_source se_aux \
   --quantize_calibrate_batch_size 8 \
   --benchmark_dict benchmark_quantize/ \
-  --repeated_runs 10
+  --description "SEAUX Quantized with L_UB for a TransUNet+SE model for ACDC dataset" \
+  2>&1 | tee test_seaux_and_ub.log
