@@ -12,6 +12,7 @@ from src.benchmark import benchmark_segmentation_model, build_benchmark_loader
 from src.quantize import (
     SEViTSegQuantizer,
     collect_inc_awq_calib_inputs,
+    remove_calibration_only_se_branch,
     require_official_awq_runtime,
 )
 from tqdm import tqdm
@@ -459,7 +460,15 @@ def main():
     
     #get checkpoint path
     ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
-    net.load_state_dict(torch.load(ckpt_path))
+    checkpoint_state = torch.load(ckpt_path)
+    try:
+        net.load_state_dict(checkpoint_state, strict=True)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Strict checkpoint loading failed. Ensure the test architecture flags exactly "
+            "match training (including --topk_attn, --use_ats, --use_gumbel_topk, "
+            "and --gumbel_sampling_mode)."
+        ) from exc
 
     fp32_reference_size = model_size_mb_benchmark(
         net,
@@ -603,19 +612,8 @@ def main():
             logging.info("Model quantized successfully.")
         else:
             raise ValueError(f"Unsupported quantization backend: {args.quant_backend}")
-        
-        # Drop only calibration-only SE auxiliary blocks after quantization.
-        se_layers = getattr(net.transformer.encoder, "SELayer", None)
-        if se_layers is not None:
-            if getattr(args, "se_calib_only", False):
-                del net.transformer.encoder.SELayer
-                net.transformer.encoder.args.drop_se_block = True
-                logging.info("Dropped calibration-only SE-auxiliary-block after quantization.")
-            else:
-                logging.warning(
-                    "Keeping active SE blocks after quantization because --se_calib_only is not set. "
-                    "Dropping active SE would change the trained segmentation function."
-                )
+
+        net = remove_calibration_only_se_branch(net, args)
 
     deployed_model_size = model_size_mb_benchmark(net)
 

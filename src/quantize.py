@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+import math
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -11,6 +13,54 @@ import torch.nn.functional as F
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _AttentionLayout:
+    name: str
+    input_projection_paths: Tuple[str, ...]
+    output_projection_path: str
+    clip_projection_paths: Tuple[str, ...]
+
+    @property
+    def attention_target_paths(self):
+        return self.input_projection_paths + (self.output_projection_path,)
+
+    @property
+    def attention_input_path(self):
+        return self.input_projection_paths[0]
+
+
+_STANDARD_ATTENTION_LAYOUT = _AttentionLayout(
+    name="standard",
+    input_projection_paths=("attn.query", "attn.key", "attn.value"),
+    output_projection_path="attn.out",
+    clip_projection_paths=("attn.value", "attn.out"),
+)
+_PACKED_ATTENTION_LAYOUT = _AttentionLayout(
+    name="packed",
+    input_projection_paths=("attn.qkv",),
+    output_projection_path="attn.proj",
+    clip_projection_paths=("attn.qkv", "attn.proj"),
+)
+
+
+def _attention_layout_for_block(block, block_idx=None):
+    """Resolve the projection layout used by one encoder attention block."""
+    attn = getattr(block, "attn", None)
+    has_standard = attn is not None and all(
+        hasattr(attn, name) for name in ("query", "key", "value", "out")
+    )
+    has_packed = attn is not None and all(
+        hasattr(attn, name) for name in ("qkv", "proj")
+    )
+    block_label = "encoder block" if block_idx is None else f"encoder block {block_idx}"
+    if has_standard == has_packed:
+        raise TypeError(
+            f"Unsupported or ambiguous attention layout in {block_label}: expected exactly "
+            "query/key/value/out or qkv/proj projections."
+        )
+    return _STANDARD_ATTENTION_LAYOUT if has_standard else _PACKED_ATTENTION_LAYOUT
 
 
 _OFFICIAL_AWQ_RUNTIME: Optional[Dict[str, Any]] = None
@@ -144,6 +194,105 @@ def collect_inc_awq_calib_inputs(args, calib_loader, max_forwards, chunk_size=8)
                 return calib_inputs
 
     return calib_inputs
+
+
+def remove_calibration_only_se_branch(model, args=None):
+    """Remove a calibration-only SE branch before deployment evaluation."""
+    state_key_fragment = "transformer.encoder.SELayer."
+    se_state_keys = [
+        name
+        for name in model.state_dict()
+        if name.startswith(state_key_fragment) or f".{state_key_fragment}" in name
+    ]
+    wrapped_model = getattr(model, "module", None)
+    core_model = wrapped_model if isinstance(wrapped_model, nn.Module) else model
+    transformer = getattr(core_model, "transformer", None)
+    encoder = getattr(transformer, "encoder", None)
+    if encoder is None:
+        encoder_candidates = [
+            module
+            for name, module in model.named_modules()
+            if name == "transformer.encoder" or name.endswith(".transformer.encoder")
+        ]
+        if len(encoder_candidates) == 1:
+            encoder = encoder_candidates[0]
+        elif len(encoder_candidates) > 1:
+            raise RuntimeError(
+                "Could not safely remove transformer.encoder.SELayer because the "
+                "quantized model exposes multiple encoder candidates."
+            )
+    if encoder is None:
+        if se_state_keys:
+            raise RuntimeError(
+                "The quantized model state_dict still contains calibration-only SE "
+                "parameters, but transformer.encoder could not be located for removal."
+            )
+        return model
+
+    se_layers = getattr(encoder, "SELayer", None)
+    if se_layers is None:
+        if se_state_keys:
+            raise RuntimeError(
+                "The quantized model state_dict still contains calibration-only SE "
+                "parameters, but transformer.encoder.SELayer could not be located."
+            )
+        return model
+
+    encoder_args = getattr(encoder, "args", None)
+    requested_calib_only = (
+        True if args is None else bool(getattr(args, "se_calib_only", False))
+    )
+    configured_calib_only = bool(
+        getattr(encoder_args, "se_calib_only", False)
+    )
+    if not (requested_calib_only and configured_calib_only):
+        raise RuntimeError(
+            "Refusing to remove transformer.encoder.SELayer because it is functionally "
+            "active. Only a branch configured with --se_calib_only may be removed; "
+            "removing an active SE block would change the trained segmentation function."
+        )
+
+    delattr(encoder, "SELayer")
+    for config_state in (
+        args,
+        encoder_args,
+        getattr(transformer, "config", None),
+        getattr(core_model, "config", None),
+        getattr(core_model, "args", None),
+    ):
+        if config_state is not None:
+            setattr(config_state, "drop_se_block", True)
+
+    assert not hasattr(encoder, "SELayer"), (
+        "Calibration-only transformer.encoder.SELayer was not removed."
+    )
+    remaining_state_keys = [
+        name
+        for name in model.state_dict()
+        if name.startswith(state_key_fragment) or f".{state_key_fragment}" in name
+    ]
+    assert not remaining_state_keys, (
+        "Calibration-only SE parameters remain in state_dict(): {}".format(
+            remaining_state_keys
+        )
+    )
+    logger.info(
+        "Removed calibration-only SE auxiliary branch before deployment evaluation."
+    )
+    return model
+
+
+def _capture_torch_rng_state():
+    state = {"cpu": torch.get_rng_state().clone(), "cuda": None}
+    if torch.cuda.is_available():
+        state["cuda"] = [rng_state.clone() for rng_state in torch.cuda.get_rng_state_all()]
+    return state
+
+
+def _restore_torch_rng_state(state):
+    torch.set_rng_state(state["cpu"])
+    if state["cuda"] is not None:
+        torch.cuda.set_rng_state_all(state["cuda"])
 
 
 def _first_tensor_from_output(output):
@@ -536,34 +685,25 @@ def se_quant_sensitivity_aux_loss(
             raise ValueError(f"Block {block_idx} does not expose a valid hidden_size.")
 
         gate_l = _normalize_se_gate_tensor(gate, expected_channels=hidden_size)
+        attention_layout = _attention_layout_for_block(block, block_idx)
 
         with torch.no_grad():
-            q_err = _input_channel_quant_error(
-                _linear_weight_for_aux(block, "attn.query", block_idx),
-                group_size=group_size,
-                w_bit=w_bit,
-            )
-            k_err = _input_channel_quant_error(
-                _linear_weight_for_aux(block, "attn.key", block_idx),
-                group_size=group_size,
-                w_bit=w_bit,
-            )
-            v_err = _input_channel_quant_error(
-                _linear_weight_for_aux(block, "attn.value", block_idx),
-                group_size=group_size,
-                w_bit=w_bit,
-            )
+            attention_errors = [
+                _input_channel_quant_error(
+                    _linear_weight_for_aux(block, rel_path, block_idx),
+                    group_size=group_size,
+                    w_bit=w_bit,
+                )
+                for rel_path in attention_layout.input_projection_paths
+            ]
             fc1_err = _input_channel_quant_error(
                 _linear_weight_for_aux(block, "ffn.fc1", block_idx),
                 group_size=group_size,
                 w_bit=w_bit,
             )
-            for name, err in (
-                ("attn.query", q_err),
-                ("attn.key", k_err),
-                ("attn.value", v_err),
-                ("ffn.fc1", fc1_err),
-            ):
+            for name, err in list(
+                zip(attention_layout.input_projection_paths, attention_errors)
+            ) + [("ffn.fc1", fc1_err)]:
                 if err.numel() != hidden_size:
                     raise ValueError(
                         "Block {} {} input-channel error length {} does not match hidden_size {}.".format(
@@ -571,7 +711,14 @@ def se_quant_sensitivity_aux_loss(
                         )
                     )
 
-            attn_err = (q_err + k_err + v_err) / 3.0
+            if attention_layout.name == "standard":
+                attn_err = (
+                    attention_errors[0]
+                    + attention_errors[1]
+                    + attention_errors[2]
+                ) / 3.0
+            else:
+                attn_err = attention_errors[0]
             combined_err = 0.5 * attn_err + 0.5 * fc1_err
             target = _normalize_sensitivity_target(combined_err)
 
@@ -587,29 +734,18 @@ class SEViTSegQuantizer:
     """
     Official-AWQ-compatible W4A16 quantizer for ViT segmentation.
 
-    The quantizer only converts Transformer encoder Linear layers
-    (attn.query/key/value/out and ffn.fc1/fc2). LayerNorm, attention matmul,
-    softmax, dropout, decoder layers, segmentation heads, SE MLPs, and embedding
-    backbones remain unquantized. saliency_source='activation' provides vanilla
-    mean-absolute activation saliency, while saliency_source='se_aux' weights
-    that saliency by the trained calibration-only SE estimator. Both modes then
-    share scale search, clipping, official WQLinear packing, and CUDA kernels.
+    The quantizer only converts Transformer encoder attention projections and
+    ffn.fc1/fc2. It supports standard query/key/value/out projections and packed
+    qkv/proj projections. LayerNorm, attention matmul, softmax, dropout, decoder
+    layers, segmentation heads, SE MLPs, and embedding backbones remain
+    unquantized. saliency_source='activation' provides vanilla mean-absolute
+    activation saliency, while saliency_source='se_aux' weights that saliency by
+    the trained calibration-only SE estimator. Both modes then share scale
+    search, clipping, official WQLinear packing, and CUDA kernels.
     """
 
-    target_linear_paths = (
-        "attn.query",
-        "attn.key",
-        "attn.value",
-        "attn.out",
-        "ffn.fc1",
-        "ffn.fc2",
-    )
-    clip_target_paths = (
-        "attn.value",
-        "attn.out",
-        "ffn.fc1",
-        "ffn.fc2",
-    )
+    ffn_target_linear_paths = ("ffn.fc1", "ffn.fc2")
+    ffn_clip_target_paths = ("ffn.fc1", "ffn.fc2")
 
     def __init__(
         self,
@@ -667,16 +803,33 @@ class SEViTSegQuantizer:
         if not self.blocks:
             raise ValueError("No Transformer encoder blocks found under model.transformer.encoder.layer.")
 
+        self.attention_layouts = [
+            _attention_layout_for_block(block, block_idx)
+            for block_idx, block in enumerate(self.blocks)
+        ]
+        self.target_linear_paths_by_block = [
+            layout.attention_target_paths + self.ffn_target_linear_paths
+            for layout in self.attention_layouts
+        ]
+        self.clip_target_paths_by_block = [
+            layout.clip_projection_paths + self.ffn_clip_target_paths
+            for layout in self.attention_layouts
+        ]
         self._validate_supported_blocks()
         self.total_encoder_linears = sum(
             1 for block in self.blocks for module in block.modules() if isinstance(module, nn.Linear)
         )
         logger.info("Official AWQ custom_w4 quantizer found %d encoder blocks.", len(self.blocks))
-        logger.info(
-            "Transformer encoder Linear layers found: %d; target layers per block: %s",
-            self.total_encoder_linears,
-            ", ".join(self.target_linear_paths),
-        )
+        for block_idx, (layout, target_paths) in enumerate(
+            zip(self.attention_layouts, self.target_linear_paths_by_block)
+        ):
+            logger.info(
+                "Encoder block %d attention layout=%s; quantization targets: %s",
+                block_idx,
+                layout.name,
+                ", ".join(target_paths),
+            )
+        logger.info("Transformer encoder Linear layers found: %d.", self.total_encoder_linears)
 
     def _model_device(self):
         try:
@@ -684,15 +837,23 @@ class SEViTSegQuantizer:
         except StopIteration:
             return torch.device("cpu")
 
+    def _gumbel_sampling_enabled(self, module=None):
+        module_args = getattr(module, "args", None)
+        if module_args is not None and hasattr(module_args, "use_gumbel_topk"):
+            return bool(getattr(module_args, "use_gumbel_topk", False))
+        return bool(getattr(self.args, "use_gumbel_topk", False))
+
     def _validate_supported_blocks(self):
-        for block_idx, block in enumerate(self.blocks):
+        for block_idx, (block, target_paths) in enumerate(
+            zip(self.blocks, self.target_linear_paths_by_block)
+        ):
             for rel_path in ("attention_norm", "ffn_norm"):
                 module = _get_submodule(block, rel_path)
                 if not isinstance(module, nn.LayerNorm):
                     raise TypeError(
                         f"Block {block_idx} {rel_path} must be nn.LayerNorm, got {type(module).__name__}."
                     )
-            for rel_path in self.target_linear_paths:
+            for rel_path in target_paths:
                 module = _get_submodule(block, rel_path)
                 if not isinstance(module, nn.Linear):
                     raise TypeError(
@@ -791,16 +952,28 @@ class SEViTSegQuantizer:
 
         x = self._first_calib_tensor()
         encoder_args, had_drop_attr, old_drop = self._set_drop_se_block(False)
+        rng_before = (
+            _capture_torch_rng_state() if self._gumbel_sampling_enabled() else None
+        )
+        rng_after = None
         try:
             with torch.no_grad():
                 out_with_se = self.model(x)
+                if rng_before is not None:
+                    rng_after = _capture_torch_rng_state()
                 logits_with_se, se_scales = _extract_logits_and_se_scales(out_with_se, len(self.blocks))
 
                 self._set_drop_se_block(True)
+                if rng_before is not None:
+                    _restore_torch_rng_state(rng_before)
                 out_without_se = self.model(x)
                 logits_without_se = _first_tensor_from_output(out_without_se)
         finally:
             self._restore_drop_se_block(encoder_args, had_drop_attr, old_drop)
+            if rng_before is not None:
+                _restore_torch_rng_state(
+                    rng_after if rng_after is not None else rng_before
+                )
 
         for block_idx, gate in enumerate(se_scales):
             _normalize_se_gate_tensor(gate, expected_channels=self.blocks[block_idx].hidden_size)
@@ -839,8 +1012,10 @@ class SEViTSegQuantizer:
 
             return hook
 
-        for block_idx, block in enumerate(self.blocks):
-            for module_path in self.target_linear_paths:
+        for block_idx, (block, target_paths) in enumerate(
+            zip(self.blocks, self.target_linear_paths_by_block)
+        ):
+            for module_path in target_paths:
                 module = _get_submodule(block, module_path)
                 hooks.append(
                     module.register_forward_pre_hook(make_hook(block_idx, module_path))
@@ -854,7 +1029,7 @@ class SEViTSegQuantizer:
         ffn_mse_inputs: List[List[torch.Tensor]] = [[] for _ in self.blocks]
         attn_mse_counts = [0] * len(self.blocks)
         ffn_mse_counts = [0] * len(self.blocks)
-        feature_cache_names = ("attn.qkv", "attn.out", "ffn.fc1", "ffn.fc2")
+        feature_cache_names = ("attn.input", "attn.output", "ffn.fc1", "ffn.fc2")
         feature_caches = [
             {name: [] for name in feature_cache_names} for _ in self.blocks
         ]
@@ -884,9 +1059,15 @@ class SEViTSegQuantizer:
                             se_scales = None
                         total_images += int(chunk.shape[0])
 
-                        for block_idx, block in enumerate(self.blocks):
+                        for block_idx, (block, attention_layout, target_paths) in enumerate(
+                            zip(
+                                self.blocks,
+                                self.attention_layouts,
+                                self.target_linear_paths_by_block,
+                            )
+                        ):
                             block_inputs = {}
-                            for module_path in self.target_linear_paths:
+                            for module_path in target_paths:
                                 module_input = captured.get((block_idx, module_path))
                                 if module_input is None:
                                     raise RuntimeError(
@@ -908,12 +1089,14 @@ class SEViTSegQuantizer:
                                     )
                                 block_inputs[module_path] = module_input
 
-                            attn_in = block_inputs["attn.query"]
+                            attn_in = block_inputs[
+                                attention_layout.attention_input_path
+                            ]
                             ffn_in = block_inputs["ffn.fc1"]
-                            for shared_path in ("attn.key", "attn.value"):
+                            for shared_path in attention_layout.input_projection_paths[1:]:
                                 if block_inputs[shared_path].shape != attn_in.shape:
                                     raise ValueError(
-                                        "Block {} {} input shape {} does not match shared q/k/v shape {}.".format(
+                                        "Block {} {} input shape {} does not match shared attention input shape {}.".format(
                                             block_idx,
                                             shared_path,
                                             tuple(block_inputs[shared_path].shape),
@@ -957,8 +1140,10 @@ class SEViTSegQuantizer:
                             )
 
                             feature_sources = {
-                                "attn.qkv": attn_in,
-                                "attn.out": block_inputs["attn.out"],
+                                "attn.input": attn_in,
+                                "attn.output": block_inputs[
+                                    attention_layout.output_projection_path
+                                ],
                                 "ffn.fc1": ffn_in,
                                 "ffn.fc2": block_inputs["ffn.fc2"],
                             }
@@ -978,7 +1163,9 @@ class SEViTSegQuantizer:
         saliency_attn = []
         saliency_ffn = []
         input_feat = []
-        for block_idx, block in enumerate(self.blocks):
+        for block_idx, (block, attention_layout) in enumerate(
+            zip(self.blocks, self.attention_layouts)
+        ):
             if (
                 attn_counts[block_idx] <= 0
                 or ffn_counts[block_idx] <= 0
@@ -1003,17 +1190,16 @@ class SEViTSegQuantizer:
                         f"No clipping inputs cached for block {block_idx} {cache_name}."
                     )
                 cached[cache_name] = torch.cat(tensors, dim=0).contiguous()
-            qkv_input = cached["attn.qkv"]
-            input_feat.append(
-                {
-                    "attn.query": qkv_input,
-                    "attn.key": qkv_input,
-                    "attn.value": qkv_input,
-                    "attn.out": cached["attn.out"],
-                    "ffn.fc1": cached["ffn.fc1"],
-                    "ffn.fc2": cached["ffn.fc2"],
-                }
-            )
+            block_input_feat = {
+                rel_path: cached["attn.input"]
+                for rel_path in attention_layout.input_projection_paths
+            }
+            block_input_feat[attention_layout.output_projection_path] = cached[
+                "attn.output"
+            ]
+            block_input_feat["ffn.fc1"] = cached["ffn.fc1"]
+            block_input_feat["ffn.fc2"] = cached["ffn.fc2"]
+            input_feat.append(block_input_feat)
 
         logger.info(
             "Calibration images/slices used: %d from %d dataloader batches.",
@@ -1090,13 +1276,18 @@ class SEViTSegQuantizer:
 
     def _search_and_apply_scales(self, calib):
         scales_list = []
-        for block_idx, block in enumerate(self.blocks):
+        for block_idx, (block, attention_layout) in enumerate(
+            zip(self.blocks, self.attention_layouts)
+        ):
             attn_x = self._mse_inputs_to_device(calib["attn_mse_inputs"][block_idx], block_idx, "attention")
             ffn_x = self._mse_inputs_to_device(calib["ffn_mse_inputs"][block_idx], block_idx, "ffn")
 
             attn_scales, attn_ratio, attn_mse = self._search_best_scales_from_saliency(
                 module2inspect=block.attn,
-                linears2scale=[block.attn.query, block.attn.key, block.attn.value],
+                linears2scale=[
+                    _get_submodule(block, rel_path)
+                    for rel_path in attention_layout.input_projection_paths
+                ],
                 x_for_mse=attn_x,
                 saliency=calib["saliency_attn"][block_idx],
             )
@@ -1119,7 +1310,7 @@ class SEViTSegQuantizer:
             self._apply_scale_to_norm_and_linears(
                 block,
                 "attention_norm",
-                ("attn.query", "attn.key", "attn.value"),
+                attention_layout.input_projection_paths,
                 attn_scales,
                 calib["input_feat"][block_idx],
             )
@@ -1132,7 +1323,11 @@ class SEViTSegQuantizer:
             )
             scales_list.extend(
                 [
-                    ("attention_norm", ("attn.query", "attn.key", "attn.value"), attn_scales),
+                    (
+                        "attention_norm",
+                        attention_layout.input_projection_paths,
+                        attn_scales,
+                    ),
                     ("ffn_norm", ("ffn.fc1",), ffn_scales),
                 ]
             )
@@ -1141,7 +1336,37 @@ class SEViTSegQuantizer:
     def _mse_inputs_to_device(self, cache, block_idx, kind):
         if not cache:
             raise RuntimeError(f"No cached {kind} MSE inputs for encoder block {block_idx}.")
-        return torch.cat(cache, dim=0).to(self.device, non_blocking=True)
+        return tuple(
+            tensor.to(self.device, non_blocking=True)
+            for tensor in cache
+        )
+
+    def _forward_mse_inputs(self, module, inputs):
+        return [
+            _module_first_tensor(module(module_input)).detach().float()
+            for module_input in inputs
+        ]
+
+    def _output_list_mse(self, candidate_outputs, reference_outputs):
+        if len(candidate_outputs) != len(reference_outputs):
+            raise RuntimeError("AWQ scale-search output count changed between paired forwards.")
+        squared_error = 0.0
+        value_count = 0
+        for candidate, reference in zip(candidate_outputs, reference_outputs):
+            if candidate.shape != reference.shape:
+                logger.debug(
+                    "AWQ candidate output shape %s differs from reference shape %s; "
+                    "assigning infinite MSE without padding token sequences.",
+                    tuple(candidate.shape),
+                    tuple(reference.shape),
+                )
+                return float("inf")
+            difference = candidate - reference
+            squared_error += difference.square().sum().item()
+            value_count += difference.numel()
+        if value_count <= 0:
+            raise RuntimeError("AWQ scale search produced no output values for MSE.")
+        return squared_error / float(value_count)
 
     def _search_best_scales_from_saliency(
         self,
@@ -1153,17 +1378,28 @@ class SEViTSegQuantizer:
     ):
         """TransUNet adapter of llm-awq auto_scale._search_module_scale."""
         saliency = saliency.detach().to(device=self.device, dtype=torch.float32)
+        mse_inputs = (
+            tuple(x_for_mse)
+            if isinstance(x_for_mse, (list, tuple))
+            else (x_for_mse,)
+        )
+        if not mse_inputs:
+            raise RuntimeError("AWQ scale search received no MSE inputs.")
 
-        with torch.no_grad():
-            fp_output = _module_first_tensor(module2inspect(x_for_mse))
-            fp_output = fp_output.detach().float()
-
+        replay_rng = self._gumbel_sampling_enabled(module2inspect)
+        rng_before = _capture_torch_rng_state() if replay_rng else None
+        rng_after = None
         original_weights = [linear.weight.detach().clone() for linear in linears2scale]
         best_mse = None
         best_ratio = None
         best_scales = None
 
         try:
+            with torch.no_grad():
+                fp_outputs = self._forward_mse_inputs(module2inspect, mse_inputs)
+                if rng_before is not None:
+                    rng_after = _capture_torch_rng_state()
+
             for grid_idx in range(int(n_grid)):
                 ratio = float(grid_idx) / float(n_grid)
                 scales = saliency.pow(ratio).clamp(min=1e-4).view(-1)
@@ -1183,12 +1419,16 @@ class SEViTSegQuantizer:
                         quantized = self._pseudo_quantize_weight(scaled_weight)
                         linear.weight.copy_(quantized / linear_scales)
 
-                    q_output = _module_first_tensor(module2inspect(x_for_mse)).detach().float()
-                    mse = F.mse_loss(q_output, fp_output).item()
+                    if rng_before is not None:
+                        _restore_torch_rng_state(rng_before)
+                    q_outputs = self._forward_mse_inputs(module2inspect, mse_inputs)
+                    mse = self._output_list_mse(q_outputs, fp_outputs)
 
                     for linear, original in zip(linears2scale, original_weights):
                         linear.weight.copy_(original.to(linear.weight.device))
 
+                if not math.isfinite(mse):
+                    continue
                 if best_mse is None or mse < best_mse:
                     best_mse = float(mse)
                     best_ratio = float(ratio)
@@ -1197,9 +1437,16 @@ class SEViTSegQuantizer:
             with torch.no_grad():
                 for linear, original in zip(linears2scale, original_weights):
                     linear.weight.copy_(original.to(device=linear.weight.device))
+            if rng_before is not None:
+                _restore_torch_rng_state(
+                    rng_after if rng_after is not None else rng_before
+                )
 
         if best_scales is None or best_ratio is None or best_mse is None:
-            raise RuntimeError("AWQ-style alpha search failed to evaluate any candidate scales.")
+            raise RuntimeError(
+                "AWQ-style alpha search found no finite, shape-comparable candidate. "
+                "Token-reduction outputs are compared without padding."
+            )
         if not torch.isfinite(best_scales).all():
             raise RuntimeError("Selected AWQ scales contain NaN or Inf.")
         return best_scales, best_ratio, best_mse
@@ -1248,9 +1495,11 @@ class SEViTSegQuantizer:
 
     def _search_and_apply_clipping(self, input_feat):
         clipped = 0
-        for block_idx, block in enumerate(self.blocks):
+        for block_idx, (block, clip_target_paths) in enumerate(
+            zip(self.blocks, self.clip_target_paths_by_block)
+        ):
             block_input_feat = input_feat[block_idx]
-            for rel_path in self.clip_target_paths:
+            for rel_path in clip_target_paths:
                 linear = _get_submodule(block, rel_path)
                 if not isinstance(linear, nn.Linear):
                     raise TypeError(
@@ -1300,8 +1549,10 @@ class SEViTSegQuantizer:
 
     def _convert_target_linears_to_wqlinear(self):
         quantized = 0
-        for block_idx, block in enumerate(self.blocks):
-            for rel_path in self.target_linear_paths:
+        for block_idx, (block, target_paths) in enumerate(
+            zip(self.blocks, self.target_linear_paths_by_block)
+        ):
+            for rel_path in target_paths:
                 module = _get_submodule(block, rel_path)
                 if not isinstance(module, nn.Linear):
                     raise TypeError(
@@ -1333,7 +1584,7 @@ class SEViTSegQuantizer:
                     rel_path,
                 )
 
-        expected = len(self.blocks) * len(self.target_linear_paths)
+        expected = sum(len(paths) for paths in self.target_linear_paths_by_block)
         if quantized != expected:
             raise RuntimeError(
                 f"Expected {expected} official AWQ WQLinear modules, converted {quantized}."

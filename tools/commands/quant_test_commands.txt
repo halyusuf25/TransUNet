@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+
+# Token-reduction custom-W4 W4A16 quantization test matrix.
+#
+# Coverage:
+#   - Datasets: Synapse, ACDC, Cataract1k
+#   - Methods: Top-K, ATS, Gumbel-Top-K
+#   - Saliency options: activation, se_aux
+#
+# Replace the nine checkpoint placeholders below. Every checkpoint must have
+# been trained with its matching token-reduction flags and with:
+#   --use_se_block --se_calib_only
+#
+# The activation and se_aux commands for a method intentionally share the same
+# calibration-only-SE checkpoint for a fair comparison. Do not add
+# --drop_se_block: test.py keeps SE enabled for calibration and removes it after
+# quantization, before inference and benchmarking.
+#
+# Run the whole matrix with:
+#   bash tools/commands/quant_test_commands.txt
+# To run one case, keep the function and the desired invocation in a scratch file.
+
+CUDA_DEVICE="${CUDA_DEVICE:-0}"
+CALIBRATION_BATCHES="${CALIBRATION_BATCHES:-8}"
+REPEATED_RUNS="${REPEATED_RUNS:-10}"
+BENCHMARK_DIR="${BENCHMARK_DIR:-benchmark_quantize_token_reduction/}"
+
+SYNAPSE_TOPK_CKPT="${SYNAPSE_TOPK_CKPT:-TOPK_SE_CALIB_ONLY_CHECKPOINT.pth}"
+SYNAPSE_ATS_CKPT="${SYNAPSE_ATS_CKPT:-ATS_SE_CALIB_ONLY_CHECKPOINT.pth}"
+SYNAPSE_GUMBEL_CKPT="${SYNAPSE_GUMBEL_CKPT:-GUMBEL_TOPK_SE_CALIB_ONLY_CHECKPOINT.pth}"
+
+ACDC_TOPK_CKPT="${ACDC_TOPK_CKPT:-TOPK_SE_CALIB_ONLY_CHECKPOINT.pth}"
+ACDC_ATS_CKPT="${ACDC_ATS_CKPT:-ATS_SE_CALIB_ONLY_CHECKPOINT.pth}"
+ACDC_GUMBEL_CKPT="${ACDC_GUMBEL_CKPT:-GUMBEL_TOPK_SE_CALIB_ONLY_CHECKPOINT.pth}"
+
+CATARACT_TOPK_CKPT="${CATARACT_TOPK_CKPT:-TOPK_SE_CALIB_ONLY_CHECKPOINT.pth}"
+CATARACT_ATS_CKPT="${CATARACT_ATS_CKPT:-ATS_SE_CALIB_ONLY_CHECKPOINT.pth}"
+CATARACT_GUMBEL_CKPT="${CATARACT_GUMBEL_CKPT:-GUMBEL_TOPK_SE_CALIB_ONLY_CHECKPOINT.pth}"
+
+run_quant_test() {
+  local dataset="$1"
+  local volume_path="$2"
+  local list_dir="$3"
+  local ckpt_dir="$4"
+  local ckpt="$5"
+  local method="$6"
+  local saliency_source="$7"
+  shift 7
+
+  CUDA_VISIBLE_DEVICES="$CUDA_DEVICE" python test.py \
+    --dataset "$dataset" \
+    --volume_path "$volume_path" \
+    --list_dir "$list_dir" \
+    --vit_name R50-ViT-B_16 \
+    --img_size 224 \
+    --batch_size 24 \
+    --ckpt_dir "$ckpt_dir" \
+    --ckpt "$ckpt" \
+    --use_se_block \
+    --se_calib_only \
+    --quantize \
+    --quant_backend custom_w4 \
+    --saliency_source "$saliency_source" \
+    --quantize_calibrate_batch_size "$CALIBRATION_BATCHES" \
+    --benchmark_dict "$BENCHMARK_DIR" \
+    --repeated_runs "$REPEATED_RUNS" \
+    --description "$dataset $method custom-W4 $saliency_source saliency" \
+    "$@"
+}
+
+
+# =============================================================================
+# Synapse
+# Held-out calibration volumes: /data/halyusuf/data/Synapse/test_vol_h5
+# =============================================================================
+
+# Top-K: activation and SE-guided saliency
+run_quant_test Synapse /data/halyusuf/data/Synapse/test_vol_h5 ./lists/lists_Synapse \
+  ckpt/ckpt_Synapse/ "$SYNAPSE_TOPK_CKPT" Top-K activation \
+  --topk_attn 0.5
+run_quant_test Synapse /data/halyusuf/data/Synapse/test_vol_h5 ./lists/lists_Synapse \
+  ckpt/ckpt_Synapse/ "$SYNAPSE_TOPK_CKPT" Top-K se_aux \
+  --topk_attn 0.5
+
+# ATS: activation and SE-guided saliency
+run_quant_test Synapse /data/halyusuf/data/Synapse/test_vol_h5 ./lists/lists_Synapse \
+  ckpt/ckpt_Synapse/ "$SYNAPSE_ATS_CKPT" ATS activation \
+  --topk_attn 0.5 --use_ats
+run_quant_test Synapse /data/halyusuf/data/Synapse/test_vol_h5 ./lists/lists_Synapse \
+  ckpt/ckpt_Synapse/ "$SYNAPSE_ATS_CKPT" ATS se_aux \
+  --topk_attn 0.5 --use_ats
+
+# Gumbel-Top-K: activation and SE-guided saliency
+run_quant_test Synapse /data/halyusuf/data/Synapse/test_vol_h5 ./lists/lists_Synapse \
+  ckpt/ckpt_Synapse/ "$SYNAPSE_GUMBEL_CKPT" Gumbel-Top-K activation \
+  --topk_attn 0.5 --use_gumbel_topk --gumbel_sampling_mode manual
+run_quant_test Synapse /data/halyusuf/data/Synapse/test_vol_h5 ./lists/lists_Synapse \
+  ckpt/ckpt_Synapse/ "$SYNAPSE_GUMBEL_CKPT" Gumbel-Top-K se_aux \
+  --topk_attn 0.5 --use_gumbel_topk --gumbel_sampling_mode manual
+
+
+# =============================================================================
+# ACDC
+# Held-out calibration volumes: /data/halyusuf/data/ACDC/
+# =============================================================================
+
+# Top-K: activation and SE-guided saliency
+run_quant_test ACDC /data/halyusuf/data/ACDC/ . \
+  ckpt/ckpt_ACDC/ "$ACDC_TOPK_CKPT" Top-K activation \
+  --topk_attn 0.5
+run_quant_test ACDC /data/halyusuf/data/ACDC/ . \
+  ckpt/ckpt_ACDC/ "$ACDC_TOPK_CKPT" Top-K se_aux \
+  --topk_attn 0.5
+
+# ATS: activation and SE-guided saliency
+run_quant_test ACDC /data/halyusuf/data/ACDC/ . \
+  ckpt/ckpt_ACDC/ "$ACDC_ATS_CKPT" ATS activation \
+  --topk_attn 0.5 --use_ats
+run_quant_test ACDC /data/halyusuf/data/ACDC/ . \
+  ckpt/ckpt_ACDC/ "$ACDC_ATS_CKPT" ATS se_aux \
+  --topk_attn 0.5 --use_ats
+
+# Gumbel-Top-K: activation and SE-guided saliency
+run_quant_test ACDC /data/halyusuf/data/ACDC/ . \
+  ckpt/ckpt_ACDC/ "$ACDC_GUMBEL_CKPT" Gumbel-Top-K activation \
+  --topk_attn 0.5 --use_gumbel_topk --gumbel_sampling_mode manual
+run_quant_test ACDC /data/halyusuf/data/ACDC/ . \
+  ckpt/ckpt_ACDC/ "$ACDC_GUMBEL_CKPT" Gumbel-Top-K se_aux \
+  --topk_attn 0.5 --use_gumbel_topk --gumbel_sampling_mode manual
+
+
+# =============================================================================
+# Cataract1k
+# Held-out calibration frames: /data/halyusuf/data/CataractData/
+# =============================================================================
+
+# Top-K: activation and SE-guided saliency
+run_quant_test Cataract1k /data/halyusuf/data/CataractData/ . \
+  ckpt/ckpt_Cataract1k/ "$CATARACT_TOPK_CKPT" Top-K activation \
+  --topk_attn 0.5
+run_quant_test Cataract1k /data/halyusuf/data/CataractData/ . \
+  ckpt/ckpt_Cataract1k/ "$CATARACT_TOPK_CKPT" Top-K se_aux \
+  --topk_attn 0.5
+
+# ATS: activation and SE-guided saliency
+run_quant_test Cataract1k /data/halyusuf/data/CataractData/ . \
+  ckpt/ckpt_Cataract1k/ "$CATARACT_ATS_CKPT" ATS activation \
+  --topk_attn 0.5 --use_ats
+run_quant_test Cataract1k /data/halyusuf/data/CataractData/ . \
+  ckpt/ckpt_Cataract1k/ "$CATARACT_ATS_CKPT" ATS se_aux \
+  --topk_attn 0.5 --use_ats
+
+# Gumbel-Top-K: activation and SE-guided saliency
+run_quant_test Cataract1k /data/halyusuf/data/CataractData/ . \
+  ckpt/ckpt_Cataract1k/ "$CATARACT_GUMBEL_CKPT" Gumbel-Top-K activation \
+  --topk_attn 0.5 --use_gumbel_topk --gumbel_sampling_mode manual
+run_quant_test Cataract1k /data/halyusuf/data/CataractData/ . \
+  ckpt/ckpt_Cataract1k/ "$CATARACT_GUMBEL_CKPT" Gumbel-Top-K se_aux \
+  --topk_attn 0.5 --use_gumbel_topk --gumbel_sampling_mode manual
+
+
+
+
+# Top-K
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Synapse \
+  --volume_path /data/halyusuf/data/Synapse/test_vol_h5 \
+  --list_dir ./lists/lists_Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --ckpt_dir ckpt/ckpt_Synapse/ \
+  --ckpt TOPK_CHECKPOINT.pth \
+  --topk_attn 0.5 \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source activation \
+  --quantize_calibrate_batch_size 8 \
+  --benchmark_dict benchmark_quantize/ \
+  --repeated_runs 10
+
+
+# ATS
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Synapse \
+  --volume_path /data/halyusuf/data/Synapse/test_vol_h5 \
+  --list_dir ./lists/lists_Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --ckpt_dir ckpt/ckpt_Synapse/ \
+  --ckpt ATS_CHECKPOINT.pth \
+  --topk_attn 0.5 \
+  --use_ats \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source activation \
+  --quantize_calibrate_batch_size 8 \
+  --benchmark_dict benchmark_quantize/ \
+  --repeated_runs 10
+
+
+# Gumbel-Top-K
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Synapse \
+  --volume_path /data/halyusuf/data/Synapse/test_vol_h5 \
+  --list_dir ./lists/lists_Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --ckpt_dir ckpt/ckpt_Synapse/ \
+  --ckpt GUMBEL_TOPK_CHECKPOINT.pth \
+  --topk_attn 0.5 \
+  --use_gumbel_topk \
+  --gumbel_sampling_mode manual \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source activation \
+  --quantize_calibrate_batch_size 8 \
+  --benchmark_dict benchmark_quantize/ \
+  --repeated_runs 10
