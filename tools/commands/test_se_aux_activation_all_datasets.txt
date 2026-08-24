@@ -1,0 +1,163 @@
+# custom_w4 requires the official MIT-HAN-Lab AWQ CUDA runtime.
+# Each dataset uses the same calibration-only SE checkpoint for both saliency modes.
+# Replace REPLACE_WITH_ENDOVIS_SE_AUX_CHECKPOINT.pth before running EndoVis2018.
+
+##############################
+# Synapse: SE-aux saliency
+##############################
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --repeated_runs 10 \
+  --benchmark_dict benchmark_quantize/ \
+  --ckpt_dir ckpt/ckpt_Synapse/ \
+  --ckpt SE_AUX_Calib_Synapse__best_val_dice_0.7875882387161255_epoch_97_20260709_092104.pth \
+  --use_se_block \
+  --se_calib_only \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source se_aux \
+  --quantize_calibrate_batch_size 8 \
+  --description "Synapse custom W4 quantization with SE-aux saliency"
+
+##############################
+# Synapse: activation saliency
+##############################
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --repeated_runs 10 \
+  --benchmark_dict benchmark_quantize/ \
+  --ckpt_dir ckpt/ckpt_Synapse/ \
+  --ckpt SE_AUX_Calib_Synapse__best_val_dice_0.7875882387161255_epoch_97_20260709_092104.pth \
+  --use_se_block \
+  --se_calib_only \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source activation \
+  --quantize_calibrate_batch_size 8 \
+  --description "Synapse custom W4 quantization with activation saliency"
+
+##############################
+# ACDC: SE-aux saliency
+##############################
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset ACDC \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --repeated_runs 10 \
+  --benchmark_dict benchmark_quantize/ \
+  --ckpt_dir ckpt/ckpt_ACDC/ \
+  --ckpt SE_AUX_Calib_ACDC__best_val_dice_0.899115264415741_epoch_88_20260709_084046.pth \
+  --use_se_block \
+  --se_calib_only \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source se_aux \
+  --quantize_calibrate_batch_size 8 \
+  --description "ACDC custom W4 quantization with SE-aux saliency"
+
+##############################
+# ACDC: activation saliency
+##############################
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset ACDC \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --repeated_runs 10 \
+  --benchmark_dict benchmark_quantize/ \
+  --ckpt_dir ckpt/ckpt_ACDC/ \
+  --ckpt SE_AUX_Calib_ACDC__best_val_dice_0.899115264415741_epoch_88_20260709_084046.pth \
+  --use_se_block \
+  --se_calib_only \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source activation \
+  --quantize_calibrate_batch_size 8 \
+  --description "ACDC custom W4 quantization with activation saliency"
+
+##############################
+# Cataract1K: SE-aux saliency
+##############################
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --repeated_runs 10 \
+  --benchmark_dict benchmark_quantize/ \
+  --ckpt_dir ckpt/ckpt_Cataract1k/ \
+  --ckpt SE_AUX_Calib_Cataract1k__best_val_dice_0.9409288987517357_epoch_241_20260709_114040.pth \
+  --use_se_block \
+  --se_calib_only \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source se_aux \
+  --quantize_calibrate_batch_size 8 \
+  --description "Cataract1K custom W4 quantization with SE-aux saliency"
+
+##############################
+# Cataract1K: activation saliency
+##############################
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --batch_size 24 \
+  --repeated_runs 10 \
+  --benchmark_dict benchmark_quantize/ \
+  --ckpt_dir ckpt/ckpt_Cataract1k/ \
+  --ckpt SE_AUX_Calib_Cataract1k__best_val_dice_0.9409288987517357_epoch_241_20260709_114040.pth \
+  --use_se_block \
+  --se_calib_only \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source activation \
+  --quantize_calibrate_batch_size 8 \
+  --description "Cataract1K custom W4 quantization with activation saliency"
+
+##############################
+# EndoVis2018: SE-aux saliency
+##############################
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset EndoVis2018 \
+  --vit_name R50-ViT-B_16 \
+  --img_size 512 \
+  --batch_size 6 \
+  --repeated_runs 10 \
+  --benchmark_dict benchmark_quantize/ \
+  --ckpt_dir ckpt/ckpt_EndoVis2018/ \
+  --ckpt REPLACE_WITH_ENDOVIS_SE_AUX_CHECKPOINT.pth \
+  --use_se_block \
+  --se_calib_only \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source se_aux \
+  --quantize_calibrate_batch_size 8 \
+  --description "EndoVis2018 custom W4 quantization with SE-aux saliency"
+
+##############################
+# EndoVis2018: activation saliency
+##############################
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset EndoVis2018 \
+  --vit_name R50-ViT-B_16 \
+  --img_size 512 \
+  --batch_size 6 \
+  --repeated_runs 10 \
+  --benchmark_dict benchmark_quantize/ \
+  --ckpt_dir ckpt/ckpt_EndoVis2018/ \
+  --ckpt REPLACE_WITH_ENDOVIS_SE_AUX_CHECKPOINT.pth \
+  --use_se_block \
+  --se_calib_only \
+  --quantize \
+  --quant_backend custom_w4 \
+  --saliency_source activation \
+  --quantize_calibrate_batch_size 8 \
+  --description "EndoVis2018 custom W4 quantization with activation saliency"
