@@ -1,9 +1,16 @@
 import argparse
+import logging
+from collections import OrderedDict
+from collections.abc import Mapping
 
 import numpy as np
 import torch
 
+from networks.attention import ATSAttention, TopkAttention
 from utils import _safe_nanmean
+
+
+logger = logging.getLogger(__name__)
 
 
 ACDC_SPACING_KEYS = (
@@ -16,6 +23,262 @@ ACDC_SPACING_KEYS = (
     "zooms",
 )
 ACDC_SPACING_ZYX_KEYS = {"voxelspacing_zyx", "spacing_zyx"}
+
+
+def convert_token_reduction_checkpoint_state_dict(model, state_dict):
+    """Convert legacy packed Top-K/Gumbel/ATS projections for strict loading."""
+    if not isinstance(state_dict, Mapping):
+        raise TypeError(
+            "Checkpoint state_dict must be a mapping, got {}.".format(
+                type(state_dict).__name__
+            )
+        )
+
+    checkpoint_keys = list(state_dict.keys())
+    if any(not isinstance(key, str) for key in checkpoint_keys):
+        raise TypeError("Checkpoint state_dict keys must all be strings.")
+    prefixed = [key.startswith("module.") for key in checkpoint_keys]
+    if any(prefixed) and not all(prefixed):
+        raise ValueError(
+            "Checkpoint contains a mixed set of DataParallel 'module.'-prefixed "
+            "and unprefixed keys."
+        )
+    checkpoint_has_module_prefix = bool(prefixed) and all(prefixed)
+    converted_state = OrderedDict(
+        (
+            key[len("module."):] if checkpoint_has_module_prefix else key,
+            value,
+        )
+        for key, value in state_dict.items()
+    )
+    checkpoint_metadata = getattr(state_dict, "_metadata", None)
+    normalized_metadata = None
+    if checkpoint_metadata is not None:
+        normalized_metadata = OrderedDict()
+        for key, value in checkpoint_metadata.items():
+            if checkpoint_has_module_prefix:
+                if key == "":
+                    continue
+                if key == "module":
+                    key = ""
+                elif key.startswith("module."):
+                    key = key[len("module."):]
+                else:
+                    raise ValueError(
+                        "Checkpoint metadata contains a mixed set of DataParallel "
+                        "'module.'-prefixed and unprefixed module paths."
+                    )
+            normalized_metadata[key] = value
+
+    core_model = model.module if hasattr(model, "module") else model
+    transformer = getattr(core_model, "transformer", None)
+    encoder = getattr(transformer, "encoder", None)
+    blocks = getattr(encoder, "layer", ())
+    token_blocks = [
+        (block_idx, block.attn)
+        for block_idx, block in enumerate(blocks)
+        if isinstance(getattr(block, "attn", None), (TopkAttention, ATSAttention))
+    ]
+
+    block_modes = []
+    for block_idx, attention in token_blocks:
+        prefix = "transformer.encoder.layer.{}.attn.".format(block_idx)
+        packed_suffixes = ("qkv.weight", "qkv.bias", "proj.weight", "proj.bias")
+        separate_suffixes = (
+            "query.weight",
+            "query.bias",
+            "key.weight",
+            "key.bias",
+            "value.weight",
+            "value.bias",
+            "out.weight",
+            "out.bias",
+        )
+        packed = {suffix for suffix in packed_suffixes if prefix + suffix in converted_state}
+        separate = {suffix for suffix in separate_suffixes if prefix + suffix in converted_state}
+        if packed and separate:
+            raise ValueError(
+                "Token-reduction encoder block {} contains ambiguous mixed packed "
+                "and separate attention projection keys.".format(block_idx)
+            )
+
+        has_bias = attention.query.bias is not None
+        required_packed = {"qkv.weight", "proj.weight"}
+        required_separate = {
+            "query.weight",
+            "key.weight",
+            "value.weight",
+            "out.weight",
+        }
+        if has_bias:
+            required_packed.update(("qkv.bias", "proj.bias"))
+            required_separate.update(
+                ("query.bias", "key.bias", "value.bias", "out.bias")
+            )
+
+        if packed:
+            missing = sorted(required_packed - packed)
+            unexpected_bias = sorted(packed - required_packed)
+            if missing or unexpected_bias:
+                raise ValueError(
+                    "Incomplete packed attention projections for token-reduction encoder "
+                    "block {}: missing={}, unexpected={}.".format(
+                        block_idx, missing, unexpected_bias
+                    )
+                )
+            mode = "packed"
+        else:
+            missing = sorted(required_separate - separate)
+            unexpected_bias = sorted(separate - required_separate)
+            if missing or unexpected_bias:
+                raise ValueError(
+                    "Incomplete separate attention projections for token-reduction encoder "
+                    "block {}: missing={}, unexpected={}.".format(
+                        block_idx, missing, unexpected_bias
+                    )
+                )
+            mode = "separate"
+        block_modes.append(mode)
+
+        hidden_size = int(attention.embed_dim)
+
+        def validate_shape(suffix, expected_shape):
+            tensor = converted_state[prefix + suffix]
+            if not torch.is_tensor(tensor) or tuple(tensor.shape) != tuple(expected_shape):
+                actual_shape = tuple(tensor.shape) if torch.is_tensor(tensor) else type(tensor).__name__
+                raise ValueError(
+                    "Token-reduction encoder block {} {} must have shape {}, got {}.".format(
+                        block_idx, suffix, tuple(expected_shape), actual_shape
+                    )
+                )
+
+        if mode == "packed":
+            validate_shape("qkv.weight", (3 * hidden_size, hidden_size))
+            validate_shape("proj.weight", (hidden_size, hidden_size))
+            if has_bias:
+                validate_shape("qkv.bias", (3 * hidden_size,))
+                validate_shape("proj.bias", (hidden_size,))
+        else:
+            for name in ("query", "key", "value", "out"):
+                validate_shape(name + ".weight", (hidden_size, hidden_size))
+                if has_bias:
+                    validate_shape(name + ".bias", (hidden_size,))
+
+    if len(set(block_modes)) > 1:
+        raise ValueError(
+            "Checkpoint contains ambiguous mixed packed and separate projection "
+            "representations across token-reduction encoder blocks."
+        )
+
+    converted_blocks = 0
+    if block_modes and block_modes[0] == "packed":
+        for block_idx, attention in token_blocks:
+            prefix = "transformer.encoder.layer.{}.attn.".format(block_idx)
+            q_weight, k_weight, v_weight = converted_state.pop(
+                prefix + "qkv.weight"
+            ).chunk(3, dim=0)
+            converted_state[prefix + "query.weight"] = q_weight
+            converted_state[prefix + "key.weight"] = k_weight
+            converted_state[prefix + "value.weight"] = v_weight
+
+            if attention.query.bias is not None:
+                q_bias, k_bias, v_bias = converted_state.pop(
+                    prefix + "qkv.bias"
+                ).chunk(3, dim=0)
+                converted_state[prefix + "query.bias"] = q_bias
+                converted_state[prefix + "key.bias"] = k_bias
+                converted_state[prefix + "value.bias"] = v_bias
+
+            converted_state[prefix + "out.weight"] = converted_state.pop(
+                prefix + "proj.weight"
+            )
+            if attention.out.bias is not None:
+                converted_state[prefix + "out.bias"] = converted_state.pop(
+                    prefix + "proj.bias"
+                )
+            converted_blocks += 1
+
+    model_state = model.state_dict()
+    model_keys = list(model_state.keys())
+    model_expects_module_prefix = bool(model_keys) and all(
+        key.startswith("module.") for key in model_keys
+    )
+    if model_expects_module_prefix:
+        converted_state = OrderedDict(
+            ("module." + key, value) for key, value in converted_state.items()
+        )
+    if normalized_metadata is not None:
+        if model_expects_module_prefix:
+            converted_metadata = OrderedDict()
+            model_metadata = getattr(model_state, "_metadata", {})
+            if "" in model_metadata:
+                converted_metadata[""] = model_metadata[""]
+            for key, value in normalized_metadata.items():
+                prefixed_key = "module" if key == "" else "module." + key
+                converted_metadata[prefixed_key] = value
+        else:
+            converted_metadata = normalized_metadata
+        converted_state._metadata = converted_metadata
+
+    logger.info(
+        "Converted %d token-reduction encoder block(s) from packed checkpoint projections.",
+        converted_blocks,
+    )
+    return converted_state
+
+
+def remove_calibration_only_se_branch(model, se_calib_only):
+    """Remove the calibration-only SE auxiliary branch before deployment evaluation."""
+    core_model = model.module if hasattr(model, "module") else model
+    transformer = getattr(core_model, "transformer", None)
+    encoder = getattr(transformer, "encoder", None)
+    if encoder is None:
+        return False
+
+    se_layers = getattr(encoder, "SELayer", None)
+    if se_layers is None:
+        return False
+
+    encoder_args = getattr(encoder, "args", None)
+    model_calibration_only = bool(
+        getattr(encoder_args, "se_calib_only", False)
+    )
+    if not bool(se_calib_only) or not model_calibration_only:
+        raise RuntimeError(
+            "Refusing to remove transformer.encoder.SELayer because it is not "
+            "configured as a calibration-only SE branch. Removing a functionally "
+            "active SE block would change the trained segmentation function."
+        )
+
+    setattr(encoder_args, "drop_se_block", True)
+    del encoder.SELayer
+
+    assert not hasattr(encoder, "SELayer"), (
+        "transformer.encoder.SELayer is still present after deployment cleanup."
+    )
+    module_names = [
+        name[len("module."):] if name.startswith("module.") else name
+        for name, _module in model.named_modules()
+    ]
+    assert "transformer.encoder.SELayer" not in module_names, (
+        "transformer.encoder.SELayer remains registered after deployment cleanup."
+    )
+    remaining_state_keys = [
+        key
+        for key in model.state_dict()
+        if (key[len("module."):] if key.startswith("module.") else key).startswith(
+            "transformer.encoder.SELayer."
+        )
+    ]
+    assert not remaining_state_keys, (
+        "SE auxiliary state_dict entries remain after deployment cleanup: {}".format(
+            remaining_state_keys
+        )
+    )
+    logger.info(
+        "Removed the calibration-only SE auxiliary branch before deployment evaluation."
+    )
+    return True
 
 
 def _spacing_value_to_vector(value):

@@ -97,8 +97,10 @@ class TopkAttention(nn.Module):
         self.keep_rate = float(keep_rate)
         self.min_tokens = max(1, int(min_tokens))
 
-        self.qkv = nn.Linear(embed_dim, 3 * embed_dim, bias=qkv_bias)
-        self.proj = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.query = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.key = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.value = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.out = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
 
         self.attn_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
         self.proj_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
@@ -244,9 +246,12 @@ class TopkAttention(nn.Module):
         if D != self.embed_dim:
             raise ValueError(f"Expected embedding dim D={self.embed_dim}, got {D}.")
 
-        # qkv: [B, N, 3D] -> [3, B, H, N, Dh], where Dh = D / H.
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)  # each: [B, H, N, Dh]
+        query = self.query(x)
+        key = self.key(x)
+        value = self.value(x)
+        q = query.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        k = key.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        v = value.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
 
         # Full attention map over all query-key token pairs: [B, H, N, N].
         attn = (q @ k.transpose(-2, -1)) * self.scale
@@ -282,7 +287,7 @@ class TopkAttention(nn.Module):
 
         # Merge heads back: [B, H, k, Dh] -> [B, k, D], then output projection.
         y = y.transpose(1, 2).contiguous().reshape(B, k_keep, D)
-        y = self.proj_drop(self.proj(y))
+        y = self.proj_drop(self.out(y))
 
         if return_indices:
             return y, topk_attn, topk_idx
@@ -323,8 +328,10 @@ class ATSAttention(nn.Module):
         self.min_tokens = max(10, int(min_tokens))
         self.eps = float(eps)
 
-        self.qkv = nn.Linear(embed_dim, 3 * embed_dim, bias=qkv_bias)
-        self.proj = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.query = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.key = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.value = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.out = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
 
         self.attn_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
         self.proj_drop = nn.Dropout(config.transformer["attention_dropout_rate"])
@@ -454,9 +461,12 @@ class ATSAttention(nn.Module):
             raise ValueError(f"Expected embedding dim D={self.embed_dim}, got {D}.")
 
         k_keep = self._num_tokens_to_keep(N)
-        # qkv: [B, N, 3D] -> [3, B, H, N, Dh]
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)
+        query = self.query(x)
+        key = self.key(x)
+        value = self.value(x)
+        q = query.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        k = key.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        v = value.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
         if self.args.verbose:
             print(f"[ATSAttention] Input x shape: {x.shape}, keeping top {k_keep} tokens per sample.")
             print(f"[ATSAttention] q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
@@ -470,7 +480,7 @@ class ATSAttention(nn.Module):
             full_attn = self.attn_drop(attn)
             y = full_attn @ v
             y = y.transpose(1, 2).contiguous().reshape(B, N, D)
-            y = self.proj_drop(self.proj(y))
+            y = self.proj_drop(self.out(y))
 
             idx = torch.arange(N, device=x.device, dtype=torch.long).unsqueeze(0).expand(B, N)
             mask = torch.ones(B, N, device=x.device, dtype=torch.bool)
@@ -488,7 +498,7 @@ class ATSAttention(nn.Module):
 
         y = attn_s @ v  # [B, H, K_max, Dh]
         y = y.transpose(1, 2).contiguous().reshape(B, sampled_idx.shape[1], D)
-        y = self.proj_drop(self.proj(y))
+        y = self.proj_drop(self.out(y))
         y = y * sampled_mask.unsqueeze(-1).to(y.dtype)
 
         if return_indices:

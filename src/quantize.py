@@ -1154,9 +1154,17 @@ class SEViTSegQuantizer:
         """TransUNet adapter of llm-awq auto_scale._search_module_scale."""
         saliency = saliency.detach().to(device=self.device, dtype=torch.float32)
 
+        reference_cpu_rng_state = torch.get_rng_state()
+        reference_cuda_rng_state = None
+        if self.device.type == "cuda":
+            reference_cuda_rng_state = torch.cuda.get_rng_state(self.device)
         with torch.no_grad():
             fp_output = _module_first_tensor(module2inspect(x_for_mse))
             fp_output = fp_output.detach().float()
+        post_reference_cpu_rng_state = torch.get_rng_state()
+        post_reference_cuda_rng_state = None
+        if self.device.type == "cuda":
+            post_reference_cuda_rng_state = torch.cuda.get_rng_state(self.device)
 
         original_weights = [linear.weight.detach().clone() for linear in linears2scale]
         best_mse = None
@@ -1183,6 +1191,9 @@ class SEViTSegQuantizer:
                         quantized = self._pseudo_quantize_weight(scaled_weight)
                         linear.weight.copy_(quantized / linear_scales)
 
+                    torch.set_rng_state(reference_cpu_rng_state)
+                    if reference_cuda_rng_state is not None:
+                        torch.cuda.set_rng_state(reference_cuda_rng_state, self.device)
                     q_output = _module_first_tensor(module2inspect(x_for_mse)).detach().float()
                     mse = F.mse_loss(q_output, fp_output).item()
 
@@ -1197,6 +1208,9 @@ class SEViTSegQuantizer:
             with torch.no_grad():
                 for linear, original in zip(linears2scale, original_weights):
                     linear.weight.copy_(original.to(device=linear.weight.device))
+            torch.set_rng_state(post_reference_cpu_rng_state)
+            if post_reference_cuda_rng_state is not None:
+                torch.cuda.set_rng_state(post_reference_cuda_rng_state, self.device)
 
         if best_scales is None or best_ratio is None or best_mse is None:
             raise RuntimeError("AWQ-style alpha search failed to evaluate any candidate scales.")

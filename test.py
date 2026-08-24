@@ -38,6 +38,8 @@ from src.test_helpers import (
     _extract_acdc_voxelspacing_zyx,
     _fallback_acdc_voxelspacing_zyx,
     _mean_metric_array,
+    convert_token_reduction_checkpoint_state_dict,
+    remove_calibration_only_se_branch,
 )
 
 
@@ -411,6 +413,11 @@ def main():
     
     # name the same snapshot defined in train script!
     args.exp = 'TU_' + dataset_name + str(args.img_size)
+    log_folder = './test_log/test_log_' + args.exp
+    os.makedirs(log_folder, exist_ok=True)
+    logging.basicConfig(filename=log_folder + '/'+args.ckpt+".txt", level=logging.INFO, format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+
     config_vit = CONFIGS_ViT_seg[args.vit_name]
     config_vit.verbose = args.verbose
     config_vit.n_classes = args.num_classes
@@ -459,7 +466,11 @@ def main():
     
     #get checkpoint path
     ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
-    net.load_state_dict(torch.load(ckpt_path))
+    checkpoint_state = convert_token_reduction_checkpoint_state_dict(
+        net,
+        torch.load(ckpt_path),
+    )
+    net.load_state_dict(checkpoint_state, strict=True)
 
     fp32_reference_size = model_size_mb_benchmark(
         net,
@@ -468,10 +479,6 @@ def main():
         else None,
     )
 
-    log_folder = './test_log/test_log_' + args.exp
-    os.makedirs(log_folder, exist_ok=True)
-    logging.basicConfig(filename=log_folder + '/'+args.ckpt+".txt", level=logging.INFO, format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
     logging.info(args.ckpt)
     if args.use_se_block:
@@ -603,19 +610,8 @@ def main():
             logging.info("Model quantized successfully.")
         else:
             raise ValueError(f"Unsupported quantization backend: {args.quant_backend}")
-        
-        # Drop only calibration-only SE auxiliary blocks after quantization.
-        se_layers = getattr(net.transformer.encoder, "SELayer", None)
-        if se_layers is not None:
-            if getattr(args, "se_calib_only", False):
-                del net.transformer.encoder.SELayer
-                net.transformer.encoder.args.drop_se_block = True
-                logging.info("Dropped calibration-only SE-auxiliary-block after quantization.")
-            else:
-                logging.warning(
-                    "Keeping active SE blocks after quantization because --se_calib_only is not set. "
-                    "Dropping active SE would change the trained segmentation function."
-                )
+
+        remove_calibration_only_se_branch(net, args.se_calib_only)
 
     deployed_model_size = model_size_mb_benchmark(net)
 
