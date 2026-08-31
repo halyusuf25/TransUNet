@@ -40,7 +40,7 @@ CUDA_VISIBLE_DEVICES=0 python test.py \
   --quant_backend custom_w4 \
   --saliency_source activation \
   --quantize_calibrate_batch_size 8 \
-  --description "Synapse custom W4 quantization with activation saliency"
+  --description "Synapse custom W4 quantization with activation saliency (fixed_attn branch)"
 
 ##############################
 # ACDC: SE-aux saliency
@@ -65,7 +65,7 @@ CUDA_VISIBLE_DEVICES=0 python test.py \
 ##############################
 # ACDC: activation saliency
 ##############################
-CUDA_VISIBLE_DEVICES=0 python test.py \
+CUDA_VISIBLE_DEVICES=3 python test.py \
   --dataset ACDC \
   --vit_name R50-ViT-B_16 \
   --img_size 224 \
@@ -73,7 +73,7 @@ CUDA_VISIBLE_DEVICES=0 python test.py \
   --repeated_runs 10 \
   --benchmark_dict benchmark_quantize/ \
   --ckpt_dir ckpt/ckpt_ACDC/ \
-  --ckpt SE_AUX_Calib_ACDC__best_val_dice_0.899115264415741_epoch_88_20260709_084046.pth \
+  --ckpt SE_UB_ACDC__best_val_dice_0.8964728713035583_epoch_115_20260824_024053.pth \
   --use_se_block \
   --se_calib_only \
   --quantize \
