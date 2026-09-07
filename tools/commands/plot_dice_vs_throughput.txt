@@ -1,0 +1,127 @@
+Dice-versus-throughput plotting examples
+========================================
+
+Run these commands from the repository root. Each command saves both a PDF and
+a PNG. The default output directory is qualitative/; use --output_dir to choose
+another directory. Use --output_name to replace the default dataset-based file
+stem. Missing output directories are created automatically.
+
+
+1. Default Synapse plot
+------------------------
+Uses fixed-size markers and saves to qualitative/.
+
+python tools/plot_dice_vs_throughput.py
+
+
+2. ACDC with model names and throughput error bars
+---------------------------------------------------
+Labels every model, displays Throughput Std as horizontal error bars, and saves
+the outputs to a custom subdirectory. The model-name font size is set to 7 pt.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset ACDC \
+  --dislay_model_names \
+  --model_name_font_size 7 \
+  --throughput_std \
+  --grid \
+  --output_dir qualitative/sota_acdc
+
+
+3. Cataract-1k memory bubble plot
+----------------------------------
+Scales bubble areas by memory, adds the representative memory-size legend, and
+uses a thin x to indicate each exact throughput-Dice coordinate. Omit
+--center_x_marker to retain the default small center dot. The misspelled option
+names below are intentional and match the plotting script.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Cataract-1k \
+  --memorey \
+  --center_x_marker \
+  --buble-size_legened \
+  --dislay_model_names \
+  --output_dir qualitative/sota_cataract
+
+
+4. All datasets in publication style
+--------------------------------------
+Plots all datasets with distinct colors and markers, memory-scaled bubbles,
+model names, throughput error bars, and IEEE-sized PDF/1800-dpi PNG output.
+
+python tools/plot_dice_vs_throughput.py \
+  --multiple_dataset Synapse ACDC Cataract-1k \
+  --memorey \
+  --buble-size_legened \
+  --dislay_model_names \
+  --throughput_std \
+  --paper_style \
+  --output_dir qualitative/sota_publication
+
+
+5. Custom title, axis labels, and output filename
+--------------------------------------------------
+Overrides the display text and saves synapse_accuracy_efficiency.pdf plus
+synapse_accuracy_efficiency.png in the selected output directory.
+Use \n inside --title to choose a line break, as below. Both lines are centered
+above the figure. Long titles without an explicit break automatically wrap to
+two lines when needed. --title_font_size sets the font size for both lines.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --title "Accuracy–Efficiency Trade-off\non Synapse" \
+  --xlabel "Throughput (img/sec)" \
+  --ylabel "Dice (%)" \
+  --output_name synapse_accuracy_efficiency \
+  --output_dir qualitative/sota_custom
+
+
+6. JBHI model-symbol bubble plot
+----------------------------------
+Uses a distinct center symbol for every model, optionally colors those symbols,
+and adds a compact legend below the plot mapping each symbol to its model. The
+bare --model_marker_legend flag uses 5 pt; an optional numeric value overrides
+that size. The same 8-point font size is applied to both axis labels and their
+tick numbers. For one dataset, paper style retains IEEE's 3.5-inch
+single-column width and adds only the vertical room needed for the model legend.
+The legend uses one row when it fits and otherwise no more than two rows. The
+CSV names are left unchanged; the plot and legend abbreviate SwinUNet
+(Swin-Base) to SwinUNet and remove (Ours) from the displayed
+Lightweight-TransUNet name. Its bubble is emphasized with a thin dark-red
+outline.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --memorey \
+  --model_center_markers \
+  --model_center_colors \
+  --model_marker_legend  \
+  --center_icon_size 7 \
+  --axis_label_font_size 6 \
+  --title_font_size 6.8 \
+  --title "Segmentation Accuracy and Resource Efficiency \non Synapse Dataset" \
+  --paper_style \
+  --output_name legend \
+  --output_dir qualitative/sota_model_symbols
+
+Use --model_center_markers without --model_center_colors for a shape-only,
+grayscale-friendly version. Add --buble-size_legened to show the memory-size
+key alongside the model legend. To override the default 5-point legend text,
+use a value such as --model_marker_legend 6. --center_icon_size is a marker area
+in points squared. --model_center_markers and --center_x_marker are alternative
+center encodings and cannot be used together.
+
+
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --memorey \
+  --dislay_model_names \
+  --model_name_font_size 4.5 \
+  --center_x_marker \
+  --center_icon_size 6 \
+  --axis_label_font_size 6 \
+  --title_font_size 7 \
+  --title "Segmentation Accuracy and Resource Efficiency on Synapse Dataset" \
+  --paper_style \
+  --output_name ModelNames
