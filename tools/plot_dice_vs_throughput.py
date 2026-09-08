@@ -27,7 +27,7 @@ Publication-ready output::
         --multiple_dataset Synapse ACDC Cataract-1k \
         --memorey --paper_style
 
-Proportional bubbles with exact-size memory references and highlighting::
+Proportional bubbles with memory references and highlighting::
 
     python tools/plot_dice_vs_throughput.py \
         --dataset Synapse --memorey --buble-size_legened \
@@ -52,9 +52,28 @@ Calibrate all bubbles to a physical reference in the lower-right corner::
         --dataset Synapse --add_memory_legende --radius 1 --runtime_memory 1024 \
         --model_center_markers --model_center_colors --model_marker_legend --paper_style
 
+Use the compact reference label r=2 mm = 2048 MiB::
+
+    python tools/plot_dice_vs_throughput.py \
+        --dataset Synapse --add_memory_legende --radius 2 --runtime_memory 2048 \
+        --memory_legend_compact_label --paper_style
+
 Only --add_memory_legende activates the radius/MiB calibration. Without it,
 the existing bubble scale is unchanged, even if --radius or --runtime_memory
 is supplied. The calibrated circle radius is measured to the outline center.
+
+Legend-only radius illustrations with a custom heading::
+
+    python tools/plot_dice_vs_throughput.py \
+        --dataset Synapse --add_memory_legende --memory_legend_radius_annotation 2 \
+        --memory_legend_title "Peak Runtime Memory" --memory_legend_font_size 5 \
+        --paper_style
+
+The annotation radius defaults to 1 mm and controls only legend illustrations,
+not plot bubbles. For min/median/max legends it sets the smallest radius and
+preserves relative areas. Each radius is marked with r. The heading is displayed
+verbatim, defaults to Peak Runtime Memory, and shares the memory-legend font size
+(5 points by default).
 
 The physical area key describes nominal circle area, excluding the outline,
 at the exported dimensions. Resizing the figure changes its mm² calibration.
@@ -108,8 +127,11 @@ from matplotlib.figure import Figure
 from matplotlib.legend import Legend
 from matplotlib.legend_handler import HandlerBase
 from matplotlib.lines import Line2D
+from matplotlib.offsetbox import TextArea
+from matplotlib.patches import PathPatch
 from matplotlib.path import Path as PlotPath
-from matplotlib.transforms import Bbox
+from matplotlib.textpath import TextPath
+from matplotlib.transforms import Affine2D, Bbox
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -168,6 +190,8 @@ OURS_HIGHLIGHT_WIDTH = 1.5
 OURS_HIGHLIGHT_LABEL = "Lightweight TransUNet (ours)"
 DEFAULT_MODEL_LEGEND_FONT_SIZE = 7.0
 MAX_MEMORY_MARKER_AREA = 900.0
+DEFAULT_MEMORY_LEGEND_TITLE = "Peak Runtime Memory"
+MEMORY_LEGEND_OUTLINE_WIDTH = 0.4
 
 REQUIRED_COLUMNS: Tuple[str, ...] = (
     "Model",
@@ -226,6 +250,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
   %(prog)s --dataset Synapse --memorey --buble-size_legened --highlight_ours --paper_style
   %(prog)s --dataset Synapse --memorey --remove_title --paper_style
   %(prog)s --dataset Synapse --add_memory_legende --radius 1 --runtime_memory 1024 --paper_style
+  %(prog)s --dataset Synapse --add_memory_legende --memory_legend_compact_label --paper_style
+  %(prog)s --dataset Synapse --add_memory_legende --memory_legend_radius_annotation 2 \
+      --memory_legend_title "Peak Runtime Memory" --memory_legend_font_size 5 --paper_style
   %(prog)s --dataset Synapse --memorey --buble-size_legened \
       --right_memory_legend --scaled_memorey_legened --paper_style
   %(prog)s --dataset Synapse --memorey --model_center_markers \
@@ -271,6 +298,43 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--memory_legend_font_size",
+        type=float,
+        default=5.0,
+        metavar="POINTS",
+        help=(
+            "font size for memory-legend labels and titles, including the lower-right "
+            "reference key (default: %(default)s points)"
+        ),
+    )
+    parser.add_argument(
+        "--memory_legend_radius_annotation",
+        type=float,
+        default=1.0,
+        metavar="MM",
+        help=(
+            "radius of the legend reference circle in millimeters (default: %(default)s); "
+            "sets the smallest radius for min/median/max references, preserving their "
+            "relative areas; draws an internal r without changing plot bubbles"
+        ),
+    )
+    parser.add_argument(
+        "--memory_legend_title",
+        default=DEFAULT_MEMORY_LEGEND_TITLE,
+        help=(
+            "verbatim heading above memory-legend entries, using --memory_legend_font_size "
+            "(default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
+        "--memory_legend_compact_label",
+        action="store_true",
+        help=(
+            "use 'r=R mm = M MiB' instead of 'R mm radius = M MiB' in the "
+            "lower-right memory legend (disabled by default); used with --add_memory_legende"
+        ),
+    )
+    parser.add_argument(
         "--radius",
         type=float,
         default=1.0,
@@ -294,7 +358,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--buble-size_legened",
         action="store_true",
         help=(
-            "show distinct min/median/max MiB references at the plotted bubble sizes; "
+            "show distinct min/median/max MiB references with proportional areas; "
             "requires --memorey "
             "(spelling is intentional)"
         ),
@@ -922,14 +986,20 @@ def _pad_for_marker_extents(ax: plt.Axes, bottom_padding_points: float = 0.0) ->
 
 
 class _MemoryLegendHandler(HandlerBase):
-    """Pack each reference at its real diameter, centered beside its label."""
+    """Pack physical-radius illustrations beside labels without resizing bubbles."""
 
-    def __init__(self, handle_width: float = 0.0):
+    def __init__(
+        self,
+        handle_width: float = 0.0,
+        marker_scale: float = 1.0,
+    ):
         super().__init__()
         self.handle_width = handle_width
+        self.marker_scale = marker_scale
 
     def legend_artist(self, legend, orig_handle, fontsize, handlebox):
-        diameter = orig_handle.get_markersize() + orig_handle.get_markeredgewidth()
+        marker_diameter = orig_handle.get_markersize() * self.marker_scale
+        diameter = marker_diameter + orig_handle.get_markeredgewidth()
         handlebox.width = max(diameter + 4.0, self.handle_width)
         handlebox.height = max(diameter + 4.0, fontsize)
         # Align marker centers to the text's approximate midline. Each drawing
@@ -938,9 +1008,52 @@ class _MemoryLegendHandler(HandlerBase):
         handlebox.ydescent = handlebox.height / 2.0 - center_y
         marker = Line2D([handlebox.width / 2.0], [center_y], linestyle="none")
         self.update_prop(marker, orig_handle, legend)
+        marker.set_markersize(marker_diameter)
         marker.set_transform(handlebox.get_transform())
         handlebox.add_artist(marker)
+        center_x = handlebox.width / 2.0
+        radius = marker_diameter / 2.0
+        radius_line = Line2D(
+            [center_x, center_x + radius], [center_y, center_y],
+            color="#303030", linewidth=0.6, marker="none",
+            transform=handlebox.get_transform(),
+        )
+        radius_line.set_gid("memory-legend-radius-line")
+        # Place the actual glyph above the radius, not its font's padded text
+        # box. A vector glyph keeps the small r inside a 1 mm circle at any DPI.
+        radius_glyph = TextPath((0.0, 0.0), r"$r$", size=min(fontsize, radius * 0.75))
+        glyph_box = radius_glyph.get_extents()
+        label_gap = max(radius * 0.12, radius_line.get_linewidth() / 2.0 + 0.05)
+        radius_label = PathPatch(
+            radius_glyph,
+            facecolor="#202020",
+            edgecolor="none",
+            transform=Affine2D().translate(
+                center_x + radius * 0.45 - (glyph_box.x0 + glyph_box.x1) / 2.0,
+                center_y + label_gap - glyph_box.y0,
+            ) + handlebox.get_transform(),
+        )
+        radius_label.set_gid("memory-legend-radius-label")
+        handlebox.add_artist(radius_line)
+        handlebox.add_artist(radius_label)
         return marker
+
+
+def _memory_legend_marker_scale(
+    handles: Sequence[Line2D], radius_mm: float,
+) -> float:
+    """Set the smallest reference radius in mm, retaining all area ratios."""
+
+    if not np.isfinite(radius_mm) or radius_mm <= 0:
+        raise ValueError("--memory_legend_radius_annotation must be finite and greater than zero.")
+    minimum_diameter = min(handle.get_markersize() for handle in handles)
+    # Line2D markersize is the diameter in points, with 72 pt = 25.4 mm.
+    # Measure the radius to the outline center, independent of output DPI.
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        scale = np.float64(radius_mm) * (2.0 * 72.0 / 25.4) / minimum_diameter
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError("--memory_legend_radius_annotation must give a finite, positive size.")
+    return float(scale)
 
 
 def _memory_scale_label(scale_factor: float, vertical: bool = False) -> str:
@@ -965,16 +1078,20 @@ def _create_memory_legend(
     font_size: float,
     right_side: bool = False,
     scale_factor: Optional[float] = None,
+    title: str = DEFAULT_MEMORY_LEGEND_TITLE,
+    radius_annotation: float = 1.0,
 ) -> Legend:
-    """Reserve real circle diameters in the legend's horizontal/vertical cells."""
+    """Reserve illustrated circle diameters in horizontal/vertical cells."""
 
-    title = "Memory (MiB)"
     if scale_factor is not None:
-        title = _memory_scale_label(scale_factor, vertical=right_side)
         for handle in handles:
             handle.set_label("")
+    marker_scale = _memory_legend_marker_scale(handles, radius_annotation)
     handle_width = (
-        max(handle.get_markersize() + handle.get_markeredgewidth() + 4.0 for handle in handles)
+        max(
+            handle.get_markersize() * marker_scale + handle.get_markeredgewidth() + 4.0
+            for handle in handles
+        )
         if right_side else 0.0
     )
     column_counts = (1,) if right_side else range(len(handles), 0, -1)
@@ -986,7 +1103,10 @@ def _create_memory_legend(
         ]
         legend = figure.legend(
             handles=ordered_handles,
-            handler_map={Line2D: _MemoryLegendHandler(handle_width=handle_width)},
+            handler_map={Line2D: _MemoryLegendHandler(
+                handle_width=handle_width,
+                marker_scale=marker_scale,
+            )},
             markerscale=1.0,
             title=title,
             loc="upper left" if right_side else "upper center",
@@ -1002,6 +1122,16 @@ def _create_memory_legend(
             labelspacing=0.8,
         )
         legend.get_title().set_multialignment("center")
+        if scale_factor is not None:
+            # Keep the physical plot-scale explanation in the legend body,
+            # below its circles, without altering the user's verbatim title.
+            scale_note = TextArea(
+                _memory_scale_label(scale_factor, vertical=right_side),
+                textprops={"fontsize": font_size, "multialignment": "center"},
+            )
+            scale_note.set_figure(figure)
+            scale_note.get_children()[0].set_gid("memory-legend-scale-label")
+            legend._legend_box.get_children().append(scale_note)
         figure.canvas.draw()
         if right_side or legend.get_window_extent().width <= figure.bbox.width * 0.96:
             return legend
@@ -1016,6 +1146,9 @@ def _create_reference_memory_legend(
     scale_factor: float,
     font_size: float,
     obstacles: Sequence[object],
+    title: str = DEFAULT_MEMORY_LEGEND_TITLE,
+    radius_annotation: float = 1.0,
+    compact_label: bool = False,
 ) -> Legend:
     """Place the calibrated reference near the lower-right, clear of data."""
 
@@ -1025,18 +1158,27 @@ def _create_reference_memory_legend(
     reference = Line2D(
         [], [], linestyle="none", marker="o",
         markersize=float(np.sqrt(reference_area)),
-        markerfacecolor="#B8B8B8", markeredgecolor="#303030", markeredgewidth=0.75,
+        markerfacecolor="#B8B8B8", markeredgecolor="#303030",
+        markeredgewidth=MEMORY_LEGEND_OUTLINE_WIDTH,
+    )
+    marker_scale = _memory_legend_marker_scale([reference], radius_annotation)
+    label_template = (
+        "r={:.12g} mm = {:.12g} MiB" if compact_label else "{:.12g} mm radius = {:.12g} MiB"
     )
     legend = Legend(
         ax,
         handles=[reference],
-        labels=["{:.12g} mm radius = {:.12g} MiB".format(radius, runtime_memory)],
-        handler_map={Line2D: _MemoryLegendHandler()},
+        labels=[label_template.format(radius, runtime_memory)],
+        handler_map={Line2D: _MemoryLegendHandler(
+            marker_scale=marker_scale,
+        )},
         markerscale=1.0,
         loc="lower right",
         bbox_to_anchor=(1.0, 0.0),
         bbox_transform=ax.transAxes,
         fontsize=font_size,
+        title=title,
+        title_fontsize=font_size,
         frameon=True,
         fancybox=False,
         framealpha=0.96,
@@ -1046,6 +1188,7 @@ def _create_reference_memory_legend(
         borderaxespad=0.6,
         handletextpad=0.6,
     )
+    legend.get_title().set_multialignment("center")
     legend.get_frame().set_linewidth(0.6)
     ax.add_artist(legend)
     # The key is inside the already-laid-out axes; it must not reserve another
@@ -1065,7 +1208,8 @@ def _create_reference_memory_legend(
         legend.remove()
         raise ValueError(
             "The memory reference legend does not fit inside the plot; "
-            "choose a smaller --radius or shorter reference values."
+            "reduce --memory_legend_font_size or --memory_legend_radius_annotation, "
+            "or shorten --memory_legend_title or the reference values."
         )
 
     def data_boxes() -> List[Bbox]:
@@ -1340,7 +1484,7 @@ def _memory_legend_handles(
             markersize=float(np.sqrt(area)),
             markerfacecolor="#B8B8B8",
             markeredgecolor="#303030",
-            markeredgewidth=0.75,
+            markeredgewidth=MEMORY_LEGEND_OUTLINE_WIDTH,
             alpha=0.8,
             label=label,
         )
@@ -1587,6 +1731,10 @@ def plot_dice_vs_throughput(
     add_memory_legende: bool = False,
     radius: float = 1.0,
     runtime_memory: float = 1024.0,
+    memory_legend_font_size: float = 5.0,
+    memory_legend_radius_annotation: float = 1.0,
+    memory_legend_title: str = DEFAULT_MEMORY_LEGEND_TITLE,
+    memory_legend_compact_label: bool = False,
 ) -> Figure:
     """Create the requested figure without mutating the source dataframe."""
 
@@ -1597,6 +1745,10 @@ def plot_dice_vs_throughput(
     if not datasets:
         raise ValueError("At least one dataset must be selected.")
     selected = parse_selected_datasets(datasets[0], datasets)
+    if not np.isfinite(memory_legend_font_size) or memory_legend_font_size <= 0:
+        raise ValueError("--memory_legend_font_size must be a finite value greater than zero.")
+    if not np.isfinite(memory_legend_radius_annotation) or memory_legend_radius_annotation <= 0:
+        raise ValueError("--memory_legend_radius_annotation must be finite and greater than zero.")
     if model_marker_legend_font_size is not None:
         if (
             not np.isfinite(model_marker_legend_font_size)
@@ -1840,9 +1992,11 @@ def plot_dice_vs_throughput(
                 data[MEMORY_COLUMN],
                 scale_factor=memory_scale_factor,
             ),
-            style.legend_size,
+            memory_legend_font_size,
             right_side=right_memory_legend,
             scale_factor=memory_scale_factor if scaled_memorey_legened else None,
+            title=memory_legend_title,
+            radius_annotation=memory_legend_radius_annotation,
         )
 
     all_y_values = np.concatenate(
@@ -1934,7 +2088,10 @@ def plot_dice_vs_throughput(
     _pad_for_marker_extents(ax)
     if add_memory_legende:
         legends.append(_create_reference_memory_legend(
-            ax, radius, runtime_memory, memory_scale_factor, style.legend_size, legends
+            ax, radius, runtime_memory, memory_scale_factor, memory_legend_font_size, legends,
+            title=memory_legend_title,
+            radius_annotation=memory_legend_radius_annotation,
+            compact_label=memory_legend_compact_label,
         ))
 
     if display_model_names or highlight_ours:
@@ -2070,6 +2227,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 add_memory_legende=args.add_memory_legende,
                 radius=args.radius,
                 runtime_memory=args.runtime_memory,
+                memory_legend_font_size=args.memory_legend_font_size,
+                memory_legend_radius_annotation=args.memory_legend_radius_annotation,
+                memory_legend_title=args.memory_legend_title,
+                memory_legend_compact_label=args.memory_legend_compact_label,
             )
             save_figure(figure, pdf_path, png_path, args.paper_style)
 
