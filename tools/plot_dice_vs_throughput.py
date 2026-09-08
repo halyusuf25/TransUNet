@@ -27,6 +27,38 @@ Publication-ready output::
         --multiple_dataset Synapse ACDC Cataract-1k \
         --memorey --paper_style
 
+Proportional bubbles with exact-size memory references and highlighting::
+
+    python tools/plot_dice_vs_throughput.py \
+        --dataset Synapse --memorey --buble-size_legened \
+        --model_center_markers --model_center_colors --model_marker_legend \
+        --highlight_ours --paper_style
+
+Omit the title when the manuscript caption supplies the context::
+
+    python tools/plot_dice_vs_throughput.py \
+        --dataset Synapse --memorey --highlight_ours --remove_title --paper_style
+
+Right-side memory scale key (the two legend modifiers also work separately)::
+
+    python tools/plot_dice_vs_throughput.py \
+        --dataset Synapse --memorey --buble-size_legened \
+        --right_memory_legend --scaled_memorey_legened \
+        --model_center_markers --model_marker_legend --paper_style
+
+Calibrate all bubbles to a physical reference in the lower-right corner::
+
+    python tools/plot_dice_vs_throughput.py \
+        --dataset Synapse --add_memory_legende --radius 1 --runtime_memory 1024 \
+        --model_center_markers --model_center_colors --model_marker_legend --paper_style
+
+Only --add_memory_legende activates the radius/MiB calibration. Without it,
+the existing bubble scale is unchanged, even if --radius or --runtime_memory
+is supplied. The calibrated circle radius is measured to the outline center.
+
+The physical area key describes nominal circle area, excluding the outline,
+at the exported dimensions. Resizing the figure changes its mm² calibration.
+
 Custom labels::
 
     python tools/plot_dice_vs_throughput.py \
@@ -71,9 +103,12 @@ import matplotlib.font_manager as font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 from matplotlib.legend import Legend
+from matplotlib.legend_handler import HandlerBase
 from matplotlib.lines import Line2D
+from matplotlib.path import Path as PlotPath
 from matplotlib.transforms import Bbox
 
 
@@ -128,6 +163,11 @@ DEFAULT_MODEL_MARKER_COLOR = "#252525"
 MODEL_CENTER_AREA_SCALE = 0.70
 OURS_OUTLINE_COLOR = "#B2182B"
 OURS_OUTLINE_WIDTH = 0.85
+OURS_HIGHLIGHT_FILL = "#E69F00"
+OURS_HIGHLIGHT_WIDTH = 1.5
+OURS_HIGHLIGHT_LABEL = "Lightweight TransUNet (ours)"
+DEFAULT_MODEL_LEGEND_FONT_SIZE = 7.0
+MAX_MEMORY_MARKER_AREA = 900.0
 
 REQUIRED_COLUMNS: Tuple[str, ...] = (
     "Model",
@@ -147,8 +187,8 @@ MEMORY_COLUMN = "Memory (MiB)"
 OURS_MODEL = "Lightweight-TransUNet (Ours)"
 
 DEFAULT_TITLE = "Comparision between SOTA and our Lightweight Model"
-DEFAULT_XLABEL = "Throughput (img/sec)"
-DEFAULT_YLABEL = "Dice(%)"
+DEFAULT_XLABEL = "Throughput (images/s)"
+DEFAULT_YLABEL = "Dice (%)"
 
 FONT_PREFERENCES: Tuple[str, ...] = (
     "Times New Roman",
@@ -183,6 +223,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
   %(prog)s --multiple_dataset Synapse ACDC Cataract-1k
   %(prog)s --multiple_dataset Synapse ACDC Cataract-1k --memorey --paper_style
   %(prog)s --dataset Synapse --dislay_model_names --model_name_font_size 7
+  %(prog)s --dataset Synapse --memorey --buble-size_legened --highlight_ours --paper_style
+  %(prog)s --dataset Synapse --memorey --remove_title --paper_style
+  %(prog)s --dataset Synapse --add_memory_legende --radius 1 --runtime_memory 1024 --paper_style
+  %(prog)s --dataset Synapse --memorey --buble-size_legened \
+      --right_memory_legend --scaled_memorey_legened --paper_style
   %(prog)s --dataset Synapse --memorey --model_center_markers \
       --model_center_colors --model_marker_legend --axis_label_font_size 9 \
       --paper_style
@@ -215,14 +260,68 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--memorey",
         action="store_true",
-        help="encode model memory as bounded bubble area (spelling is intentional)",
+        help="make bubble area proportional to memory in MiB (spelling is intentional)",
+    )
+    parser.add_argument(
+        "--add_memory_legende",
+        action="store_true",
+        help=(
+            "enable physically calibrated memory bubbles (implies --memorey) and a "
+            "compact lower-right legend; uses --radius and --runtime_memory"
+        ),
+    )
+    parser.add_argument(
+        "--radius",
+        type=float,
+        default=1.0,
+        metavar="MM",
+        help=(
+            "reference-circle radius in millimeters at the exported size "
+            "(default: %(default)s); used only with --add_memory_legende"
+        ),
+    )
+    parser.add_argument(
+        "--runtime_memory",
+        type=float,
+        default=1024.0,
+        metavar="MIB",
+        help=(
+            "memory represented by the reference circle (default: %(default)s MiB); "
+            "used only with --add_memory_legende"
+        ),
     )
     parser.add_argument(
         "--buble-size_legened",
         action="store_true",
         help=(
-            "show a min/median/max memory-size legend; requires --memorey "
+            "show distinct min/median/max MiB references at the plotted bubble sizes; "
+            "requires --memorey "
             "(spelling is intentional)"
+        ),
+    )
+    parser.add_argument(
+        "--right_memory_legend",
+        action="store_true",
+        help=(
+            "place the memory legend outside the plot on the right in one column, "
+            "reserving extra figure width; used only with --buble-size_legened"
+        ),
+    )
+    parser.add_argument(
+        "--scaled_memorey_legened",
+        action="store_true",
+        help=(
+            "replace memory-value labels with a computed bubble-area scale in mm² "
+            "at the exported physical size (outline excluded); used only with "
+            "--buble-size_legened"
+        ),
+    )
+    parser.add_argument(
+        "--highlight_ours",
+        action="store_true",
+        help=(
+            "highlight Lightweight TransUNet with a direct label and clearer outline; "
+            "also use a distinct fill for a single dataset"
         ),
     )
     parser.add_argument(
@@ -273,12 +372,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--model_marker_legend",
         type=float,
         nargs="?",
-        const=5.0,
+        const=DEFAULT_MODEL_LEGEND_FONT_SIZE,
         default=None,
         metavar="POINTS",
         help=(
-            "show a one- or two-row model-marker legend below the plot using "
-            "an optional font size in points; a bare flag uses 5 pt; requires "
+            "show a model-marker legend below the plot, adding rows as needed; "
+            "optional font size in points (a bare flag uses 7 pt); requires "
             "--model_center_markers"
         ),
     )
@@ -289,6 +388,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "centered plot title; use \\n for an explicit line break; long titles "
             "automatically wrap to two lines (default: %(default)s)"
         ),
+    )
+    parser.add_argument(
+        "--remove_title",
+        action="store_true",
+        help="hide the title and reclaim its space, overriding --title in all styles",
     )
     parser.add_argument(
         "--xlabel",
@@ -560,15 +664,22 @@ def load_and_validate_csv(csv_path: Path) -> pd.DataFrame:
 
 def scale_memory_to_marker_area(
     memory: pd.Series,
-    min_area: float = 70.0,
-    max_area: float = 900.0,
+    max_area: float = MAX_MEMORY_MARKER_AREA,
+    scale_factor: Optional[float] = None,
 ) -> np.ndarray:
-    """Log-scale positive memory values to finite marker areas in points squared."""
+    """Map positive memory to proportional marker areas in points squared.
 
-    if not np.isfinite(min_area) or not np.isfinite(max_area):
-        raise ValueError("Marker-area bounds must be finite.")
-    if min_area <= 0 or max_area <= min_area:
-        raise ValueError("Marker-area bounds must satisfy 0 < min_area < max_area.")
+    By default the largest memory value receives ``max_area``. Supplying the
+    resulting points-squared-per-MiB factor reuses that exact mapping for other
+    series or memory-legend references, including equal-valued inputs.
+    """
+
+    if not np.isfinite(max_area) or max_area <= 0:
+        raise ValueError("Maximum marker area must be finite and greater than zero.")
+    if scale_factor is not None and (
+        not np.isfinite(scale_factor) or scale_factor <= 0
+    ):
+        raise ValueError("Memory scale factor must be finite and greater than zero.")
 
     try:
         values = pd.to_numeric(memory, errors="raise").to_numpy(dtype=float)
@@ -582,31 +693,31 @@ def scale_memory_to_marker_area(
     if bool((values <= 0).any()):
         raise ValueError("Memory values must all be greater than zero MiB.")
 
-    minimum = float(values.min())
-    maximum = float(values.max())
-    if minimum == maximum:
-        return np.full(values.shape, (min_area + max_area) / 2.0, dtype=float)
+    if scale_factor is None:
+        scale_factor = max_area / float(values.max())
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        areas = values * scale_factor
+    if not bool(np.isfinite(areas).all()) or bool((areas <= 0).any()):
+        raise ValueError("Memory scaling must produce finite, positive marker areas.")
+    return areas
 
-    logged = np.log(values)
-    logged_span = float(np.log(maximum) - np.log(minimum))
-    if not np.isfinite(logged_span) or logged_span <= 0.0:
-        unique_values, inverse = np.unique(values, return_inverse=True)
-        normalized = inverse.astype(float) / float(len(unique_values) - 1)
-    else:
-        normalized = (logged - np.log(minimum)) / logged_span
-    areas = min_area + normalized * (max_area - min_area)
-    sorted_indices = np.argsort(values, kind="stable")
-    sorted_values = values[sorted_indices]
-    sorted_areas = areas[sorted_indices]
-    distinct_values = np.diff(sorted_values) > 0
-    if bool((np.diff(sorted_areas)[distinct_values] <= 0).any()):
-        unique_values, inverse = np.unique(values, return_inverse=True)
-        areas = min_area + inverse.astype(float) / float(len(unique_values) - 1) * (
-            max_area - min_area
-        )
-    if not bool(np.isfinite(areas).all()):
-        raise ValueError("Memory scaling produced a non-finite marker area.")
-    return np.clip(areas, min_area, max_area)
+
+def _reference_memory_scale(radius: float, runtime_memory: float) -> float:
+    """Convert the reference radius/MiB pair to scatter points squared per MiB."""
+
+    if not np.isfinite(radius) or radius <= 0:
+        raise ValueError("--radius must be a finite value greater than zero millimeters.")
+    if not np.isfinite(runtime_memory) or runtime_memory <= 0:
+        raise ValueError("--runtime_memory must be a finite value greater than zero MiB.")
+    # The circular scatter path has unit diameter, so sqrt(s) is its diameter
+    # in points, not its radius or its disk area. The outline is decorative;
+    # the calibrated radius is measured to the outline's centerline.
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        diameter_points = np.float64(radius) * (2.0 * 72.0 / 25.4)
+        scale_factor = np.square(diameter_points) / runtime_memory
+    if not np.isfinite(scale_factor) or scale_factor <= 0:
+        raise ValueError("The radius/memory reference must give a finite, positive bubble scale.")
+    return float(scale_factor)
 
 
 def _select_font() -> str:
@@ -643,8 +754,8 @@ def apply_paper_style(
 
     if paper_style:
         if dataset_count == 1:
-            # Retain one-column width and add vertical room for the bottom key.
-            figure_size = (3.5, 3.6 if bottom_model_legend else 2.8)
+            # Legend space is measured and added after the plot layout is known.
+            figure_size = (3.5, 2.8)
         else:
             figure_size = (7.16, 3.8)
         style = PlotStyle(
@@ -739,6 +850,350 @@ def _draw_error_bars(
     )
 
 
+def _pad_for_marker_extents(ax: plt.Axes, bottom_padding_points: float = 0.0) -> None:
+    """Expand limits using physical marker/outline sizes at the final axes size."""
+
+    figure = ax.figure
+    figure.canvas.draw()
+    points_to_pixels = figure.dpi / 72.0
+    coordinates = []
+    lower_extents = []
+    upper_extents = []
+    for collection in ax.collections:
+        if not isinstance(collection, PathCollection):
+            continue
+        paths = collection.get_paths()
+        sizes = collection.get_sizes()
+        widths = collection.get_linewidths()
+        for index, offset in enumerate(collection.get_offsets()):
+            bounds = paths[index % len(paths)].get_extents()
+            size = float(np.sqrt(sizes[index % len(sizes)]))
+            # Include half the stroke and a small clearance from the axis spine.
+            clearance = widths[index % len(widths)] / 2.0 + 1.5
+            coordinates.append(offset)
+            lower_extents.append(
+                (clearance - bounds.x0 * size, clearance - bounds.y0 * size)
+            )
+            upper_extents.append(
+                (clearance + bounds.x1 * size, clearance + bounds.y1 * size)
+            )
+
+    # Error-bar caps are Line2D markers in physical points, too. Their data
+    # endpoints already incorporate the optional throughput standard deviation.
+    for line in ax.lines:
+        if line.get_marker() != "|":
+            continue
+        clearance = line.get_markeredgewidth() / 2.0 + 1.5
+        radius = line.get_markersize() / 2.0 + clearance
+        for x_value, y_value in zip(line.get_xdata(), line.get_ydata()):
+            coordinates.append((x_value, y_value))
+            lower_extents.append((clearance, radius))
+            upper_extents.append((clearance, radius))
+
+    if not coordinates:
+        return
+    values = np.asarray(coordinates, dtype=float)
+    lower_pixels = np.asarray(lower_extents) * points_to_pixels
+    lower_pixels[:, 1] += bottom_padding_points * points_to_pixels
+    upper_pixels = np.asarray(upper_extents) * points_to_pixels
+    for dimension, (get_limits, set_limits, pixel_span) in enumerate((
+        (ax.get_xlim, ax.set_xlim, ax.bbox.width),
+        (ax.get_ylim, ax.set_ylim, ax.bbox.height),
+    )):
+        low_fraction = lower_pixels[:, dimension] / pixel_span
+        high_fraction = upper_pixels[:, dimension] / pixel_span
+        if np.any(low_fraction + high_fraction >= 1.0):
+            raise ValueError(
+                "A marker is larger than the plot; reduce --center_icon_size or --radius, "
+                "or increase --runtime_memory for calibrated bubbles."
+            )
+        lower, upper = get_limits()
+        # Expanding the data span changes the data-to-point conversion. Iterate
+        # to convergence without moving any coordinates or changing any areas.
+        for _ in range(100):
+            span = upper - lower
+            new_lower = min(lower, float(np.min(values[:, dimension] - low_fraction * span)))
+            new_upper = max(upper, float(np.max(values[:, dimension] + high_fraction * span)))
+            change_pixels = max(lower - new_lower, new_upper - upper) / span * pixel_span
+            lower, upper = new_lower, new_upper
+            if change_pixels < 1e-7:
+                break
+        set_limits(lower, upper)
+
+
+class _MemoryLegendHandler(HandlerBase):
+    """Pack each reference at its real diameter, centered beside its label."""
+
+    def __init__(self, handle_width: float = 0.0):
+        super().__init__()
+        self.handle_width = handle_width
+
+    def legend_artist(self, legend, orig_handle, fontsize, handlebox):
+        diameter = orig_handle.get_markersize() + orig_handle.get_markeredgewidth()
+        handlebox.width = max(diameter + 4.0, self.handle_width)
+        handlebox.height = max(diameter + 4.0, fontsize)
+        # Align marker centers to the text's approximate midline. Each drawing
+        # box includes the full outline, even for a reference larger than text.
+        center_y = fontsize * 0.35
+        handlebox.ydescent = handlebox.height / 2.0 - center_y
+        marker = Line2D([handlebox.width / 2.0], [center_y], linestyle="none")
+        self.update_prop(marker, orig_handle, legend)
+        marker.set_transform(handlebox.get_transform())
+        handlebox.add_artist(marker)
+        return marker
+
+
+def _memory_scale_label(scale_factor: float, vertical: bool = False) -> str:
+    """Describe nominal circle area in physical units, independent of export DPI."""
+
+    if not np.isfinite(scale_factor) or scale_factor <= 0:
+        raise ValueError("Memory scale factor must be finite and greater than zero.")
+    # For scatter(marker='o'), sqrt(s) is the diameter in points. The disk
+    # area is therefore pi/4 * s, not s itself. Outlines are decorative and
+    # excluded from this geometric area; 72 points = 1 inch = 25.4 mm.
+    square_mm_per_mib = (np.pi / 4.0) * scale_factor * (25.4 / 72.0) ** 2
+    mib_per_square_mm = 1.0 / square_mm_per_mib
+    separator = "\n" if vertical else " "
+    return "Bubble area:{}1 mm² ≈ {:.4g} MiB\n(outline excluded)".format(
+        separator, mib_per_square_mm
+    )
+
+
+def _create_memory_legend(
+    figure: Figure,
+    handles: Sequence[Line2D],
+    font_size: float,
+    right_side: bool = False,
+    scale_factor: Optional[float] = None,
+) -> Legend:
+    """Reserve real circle diameters in the legend's horizontal/vertical cells."""
+
+    title = "Memory (MiB)"
+    if scale_factor is not None:
+        title = _memory_scale_label(scale_factor, vertical=right_side)
+        for handle in handles:
+            handle.set_label("")
+    handle_width = (
+        max(handle.get_markersize() + handle.get_markeredgewidth() + 4.0 for handle in handles)
+        if right_side else 0.0
+    )
+    column_counts = (1,) if right_side else range(len(handles), 0, -1)
+    for columns in column_counts:
+        ordered_handles = [
+            handles[index]
+            for column in range(columns)
+            for index in range(column, len(handles), columns)
+        ]
+        legend = figure.legend(
+            handles=ordered_handles,
+            handler_map={Line2D: _MemoryLegendHandler(handle_width=handle_width)},
+            markerscale=1.0,
+            title=title,
+            loc="upper left" if right_side else "upper center",
+            bbox_to_anchor=(0.5, 0.0),
+            ncol=columns,
+            fontsize=font_size,
+            title_fontsize=font_size,
+            frameon=False,
+            borderaxespad=0.0,
+            borderpad=0.4,
+            handletextpad=0.0 if scale_factor is not None else 0.7,
+            columnspacing=1.2,
+            labelspacing=0.8,
+        )
+        legend.get_title().set_multialignment("center")
+        figure.canvas.draw()
+        if right_side or legend.get_window_extent().width <= figure.bbox.width * 0.96:
+            return legend
+        legend.remove()
+    raise ValueError("Memory-legend labels do not fit within the figure width.")
+
+
+def _create_reference_memory_legend(
+    ax: plt.Axes,
+    radius: float,
+    runtime_memory: float,
+    scale_factor: float,
+    font_size: float,
+    obstacles: Sequence[object],
+) -> Legend:
+    """Place the calibrated reference near the lower-right, clear of data."""
+
+    reference_area = scale_memory_to_marker_area(
+        pd.Series([runtime_memory]), scale_factor=scale_factor
+    )[0]
+    reference = Line2D(
+        [], [], linestyle="none", marker="o",
+        markersize=float(np.sqrt(reference_area)),
+        markerfacecolor="#B8B8B8", markeredgecolor="#303030", markeredgewidth=0.75,
+    )
+    legend = Legend(
+        ax,
+        handles=[reference],
+        labels=["{:.12g} mm radius = {:.12g} MiB".format(radius, runtime_memory)],
+        handler_map={Line2D: _MemoryLegendHandler()},
+        markerscale=1.0,
+        loc="lower right",
+        bbox_to_anchor=(1.0, 0.0),
+        bbox_transform=ax.transAxes,
+        fontsize=font_size,
+        frameon=True,
+        fancybox=False,
+        framealpha=0.96,
+        facecolor="white",
+        edgecolor="#B8B8B8",
+        borderpad=0.5,
+        borderaxespad=0.6,
+        handletextpad=0.6,
+    )
+    legend.get_frame().set_linewidth(0.6)
+    ax.add_artist(legend)
+    # The key is inside the already-laid-out axes; it must not reserve another
+    # external legend row or change the panel's physical dimensions.
+    legend.set_in_layout(False)
+    figure = ax.figure
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    pixels_per_point = figure.dpi / 72.0
+    axes_box = ax.get_window_extent(renderer)
+    legend_box = legend.get_window_extent(renderer)
+    inset = font_size * 0.6 * pixels_per_point
+    if (
+        legend_box.width + 2 * inset > axes_box.width
+        or legend_box.height + 2 * inset > axes_box.height
+    ):
+        legend.remove()
+        raise ValueError(
+            "The memory reference legend does not fit inside the plot; "
+            "choose a smaller --radius or shorter reference values."
+        )
+
+    def data_boxes() -> List[Bbox]:
+        boxes = [artist.get_window_extent(renderer) for artist in obstacles]
+        for collection in ax.collections:
+            if isinstance(collection, PathCollection):
+                centers = collection.get_offset_transform().transform(collection.get_offsets())
+                sizes = collection.get_sizes()
+                widths = collection.get_linewidths()
+                paths = collection.get_paths()
+                for index, (x_value, y_value) in enumerate(centers):
+                    bounds = paths[index % len(paths)].get_extents()
+                    scale = np.sqrt(sizes[index % len(sizes)]) * pixels_per_point
+                    margin = (widths[index % len(widths)] / 2.0 + 1.5) * pixels_per_point
+                    boxes.append(Bbox.from_extents(
+                        x_value + bounds.x0 * scale - margin,
+                        y_value + bounds.y0 * scale - margin,
+                        x_value + bounds.x1 * scale + margin,
+                        y_value + bounds.y1 * scale + margin,
+                    ))
+            elif isinstance(collection, LineCollection):
+                for segment in collection.get_segments():
+                    points = collection.get_transform().transform(segment)
+                    if len(points):
+                        boxes.append(Bbox.from_extents(
+                            *points.min(axis=0), *points.max(axis=0)
+                        ).padded(2.0 * pixels_per_point))
+        for line in ax.lines:
+            if line.get_marker() == "|":
+                margin = (line.get_markeredgewidth() / 2.0 + 1.5) * pixels_per_point
+                half_height = line.get_markersize() / 2.0 * pixels_per_point + margin
+                for x_value, y_value in line.get_transform().transform(line.get_xydata()):
+                    boxes.append(Bbox.from_extents(
+                        x_value - margin, y_value - half_height,
+                        x_value + margin, y_value + half_height,
+                    ))
+        return boxes
+
+    occupied = data_boxes()
+    # Prefer the corner itself. If needed, move only slightly upward within the
+    # lower-right portion of the axes, keeping the reference's physical size.
+    step = max(2.0, font_size / 2.0) * pixels_per_point
+    for offset in np.arange(0.0, axes_box.height * 0.35 + step, step):
+        legend.set_bbox_to_anchor((1.0, offset / axes_box.height), transform=ax.transAxes)
+        candidate_box = legend.get_window_extent(renderer)
+        if candidate_box.y1 > axes_box.y1 - inset:
+            break
+        if not any(candidate_box.overlaps(box) for box in occupied):
+            return legend
+
+    # A crowded lower-right region needs a small empty band below the data.
+    # Reserve it through limits, keeping all coordinates and marker areas intact.
+    legend.set_bbox_to_anchor((1.0, 0.0), transform=ax.transAxes)
+    reserved_points = (legend_box.height + inset) / pixels_per_point + 3.0
+    _pad_for_marker_extents(ax, bottom_padding_points=reserved_points)
+    return legend
+
+
+def _layout_plot_legends(
+    figure: Figure,
+    ax: plt.Axes,
+    legends: Sequence[Legend],
+    paper_style: bool,
+    right_legend: Optional[Legend] = None,
+) -> None:
+    """Reserve measured bottom/right legend space without scaling the artwork."""
+
+    plot_width = figure.get_figwidth()
+    for legend in legends:
+        legend.set_in_layout(False)
+    legends = [legend for legend in legends if legend is not right_legend]
+    figure.tight_layout(pad=0.8 if paper_style else 1.0)
+    if legends:
+        figure.canvas.draw()
+        heights = [legend.get_window_extent().height / figure.dpi for legend in legends]
+        gap = 6.0 / 72.0
+        extra_height = sum(heights) + gap * (len(legends) + 1)
+        width, height = figure.get_size_inches()
+        position = ax.get_position()
+        figure.set_size_inches(width, height + extra_height)
+        ax.set_position((
+            position.x0,
+            (position.y0 * height + extra_height) / (height + extra_height),
+            position.width,
+            position.height * height / (height + extra_height),
+        ))
+        top = extra_height - gap
+        for legend, legend_height in zip(legends, heights):
+            legend.set_bbox_to_anchor(
+                (0.5, top / (height + extra_height)), transform=figure.transFigure
+            )
+            legend.set_in_layout(True)
+            top -= legend_height + gap
+    if right_legend is not None:
+        figure.canvas.draw()
+        legend_box = right_legend.get_window_extent()
+        legend_width = legend_box.width / figure.dpi
+        legend_height = legend_box.height / figure.dpi
+        width, height = figure.get_size_inches()
+        position = ax.get_position()
+        axes_bottom = position.y0 * height
+        axes_height = position.height * height
+        extra_height = max(0.0, legend_height - axes_height)
+        final_width = width + legend_width + 6.0 / 72.0
+        final_height = height + extra_height
+        bottom_anchors = [legend.get_bbox_to_anchor().y0 / figure.dpi for legend in legends]
+        figure.set_size_inches(final_width, final_height)
+        ax.set_position((
+            position.x0 * width / final_width,
+            axes_bottom / final_height,
+            position.width * width / final_width,
+            (axes_height + extra_height) / final_height,
+        ))
+        for legend, anchor_y in zip(legends, bottom_anchors):
+            legend.set_bbox_to_anchor(
+                (plot_width / (2.0 * final_width), anchor_y / final_height),
+                transform=figure.transFigure,
+            )
+        top = axes_bottom + (axes_height + extra_height + legend_height) / 2.0
+        right_legend.set_bbox_to_anchor(
+            (width / final_width, top / final_height), transform=figure.transFigure
+        )
+        right_legend.set_in_layout(True)
+    position = ax.get_position()
+    panel_center = plot_width / (2.0 * figure.get_figwidth())
+    ax.title.set_x((panel_center - position.x0) / position.width)
+
+
 def _dataset_legend_handles(
     datasets: Sequence[str],
     marker_size: float,
@@ -798,10 +1253,12 @@ def _create_model_legend(
     font_size: float,
     anchor_y: float,
 ) -> Tuple[Legend, int]:
-    """Create the widest model legend that fits in at most two rows."""
+    """Fit a model legend to the figure width, adding rows as necessary."""
 
     if not handles:
         raise ValueError("At least one model handle is required for the model legend.")
+    if not np.isfinite(font_size) or font_size <= 0:
+        raise ValueError("Model-legend font size must be finite and greater than zero.")
 
     def create(
         legend_handles: Sequence[Line2D],
@@ -817,74 +1274,77 @@ def _create_model_legend(
             frameon=False,
             borderaxespad=0.0,
             borderpad=0.1,
-            labelspacing=0.25,
-            handlelength=0.6,
-            handletextpad=0.2,
-            columnspacing=0.3,
+            labelspacing=0.6,
+            handlelength=1.0,
+            handletextpad=0.5,
+            columnspacing=1.0,
         )
         return legend
 
     maximum_width = figure.bbox.width * 0.96
-    legend = create(handles, len(handles))
-    figure.canvas.draw()
-    renderer = figure.canvas.get_renderer()
-    if legend.get_window_extent(renderer=renderer).width <= maximum_width:
-        return legend, 1
-
-    legend.remove()
-    two_row_columns = max(1, (len(handles) + 1) // 2)
-    # Matplotlib fills columns top-to-bottom. Reorder only the supplied handles
-    # so readers still encounter models left-to-right in their CSV order.
-    two_row_handles = [
-        handles[index]
-        for column_index in range(two_row_columns)
-        for index in (column_index, column_index + two_row_columns)
-        if index < len(handles)
-    ]
-    legend = create(two_row_handles, two_row_columns)
-    figure.canvas.draw()
-    if legend.get_window_extent(renderer=renderer).width > maximum_width:
+    for column_count in range(len(handles), 0, -1):
+        # Matplotlib fills columns top-to-bottom. Reorder only the handles so
+        # readers encounter models left-to-right in their CSV order.
+        ordered_handles = [
+            handles[index]
+            for column_index in range(column_count)
+            for index in range(column_index, len(handles), column_count)
+        ]
+        legend = create(ordered_handles, column_count)
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        if legend.get_window_extent(renderer=renderer).width <= maximum_width:
+            return legend, (len(handles) + column_count - 1) // column_count
         legend.remove()
-        raise ValueError(
-            "--model_marker_legend font size {:g} pt is too large for a "
-            "two-row legend at the selected figure width; choose a smaller "
-            "value (5 pt is recommended for a JBHI one-column figure).".format(
-                font_size
-            )
+    raise ValueError(
+        "--model_marker_legend font size {:g} pt leaves a model entry wider "
+        "than the selected figure; choose a smaller value.".format(
+            font_size
         )
-    return legend, 2
+    )
 
 
 def _memory_legend_handles(
     memory: pd.Series,
-    area_scale: float = 1.0,
+    scale_factor: Optional[float] = None,
 ) -> List[Line2D]:
-    """Create min/median/max memory handles using the plot's area scaler."""
+    """Create distinct min/median/max references at the plotted physical sizes."""
 
-    if not np.isfinite(area_scale) or area_scale <= 0:
-        raise ValueError("Memory-legend area scale must be finite and greater than zero.")
-
+    # Validate all source values before choosing representatives, and derive the
+    # shared factor from the full source rather than independently scaling keys.
+    source_areas = scale_memory_to_marker_area(memory, scale_factor=scale_factor)
     values = memory.to_numpy(dtype=float)
-    representatives = np.asarray(
+    if scale_factor is None:
+        scale_factor = float(source_areas[np.argmax(values)]) / float(values.max())
+    representatives = np.unique(
         [float(np.min(values)), float(np.median(values)), float(np.max(values))],
-        dtype=float,
     )
-    representatives = np.asarray(list(dict.fromkeys(representatives.tolist())), dtype=float)
-    areas = scale_memory_to_marker_area(pd.Series(representatives))
+    areas = scale_memory_to_marker_area(
+        pd.Series(representatives), scale_factor=scale_factor
+    )
+    # Increase decimal precision only when rounding would conflate references.
+    for decimals in range(13):
+        labels = ["{:,.{}f} MiB".format(value, decimals) for value in representatives]
+        if len(set(labels)) == len(labels) and all(
+            round(float(value), decimals) > 0 for value in representatives
+        ):
+            break
+    else:
+        labels = ["{:.17g} MiB".format(value) for value in representatives]
     return [
         Line2D(
             [],
             [],
             linestyle="none",
             marker="o",
-            markersize=float(np.sqrt(area * area_scale)),
+            markersize=float(np.sqrt(area)),
             markerfacecolor="#B8B8B8",
             markeredgecolor="#303030",
-            markeredgewidth=0.7,
+            markeredgewidth=0.75,
             alpha=0.8,
-            label="{:,.0f}".format(value),
+            label=label,
         )
-        for value, area in zip(representatives, areas)
+        for label, area in zip(labels, areas)
     ]
 
 
@@ -896,6 +1356,8 @@ def _annotate_models(
     marker_areas: np.ndarray,
     obstacles: Sequence[object],
     paper_style: bool,
+    highlight_ours: bool = False,
+    display_all: bool = True,
 ) -> None:
     """Annotate each model once, avoiding earlier labels and plot legends."""
 
@@ -913,6 +1375,8 @@ def _annotate_models(
         artist.get_window_extent(renderer=renderer).expanded(1.03, 1.08)
         for artist in obstacles
     ]
+    label_boxes = []
+    connector_paths = []
     pixels_per_point = figure.dpi / 72.0
     for dataset in datasets:
         dataset_y = data[DATASET_COLUMNS[dataset]].to_numpy(dtype=float)
@@ -943,8 +1407,9 @@ def _annotate_models(
         connector: bool = False,
     ) -> object:
         model_name = str(data.iloc[row_index]["Model"])
-        displayed_name = display_model_name(model_name)
-        if paper_style and len(datasets) == 1 and len(displayed_name) > 18:
+        highlighted = highlight_ours and model_name == OURS_MODEL
+        displayed_name = OURS_HIGHLIGHT_LABEL if highlighted else display_model_name(model_name)
+        if paper_style and len(datasets) == 1 and len(displayed_name) > 18 and not highlighted:
             if " (" in displayed_name and len(displayed_name.split(" (", 1)[0]) <= 14:
                 displayed_name = displayed_name.replace(" (", "\n(", 1)
             else:
@@ -965,7 +1430,7 @@ def _annotate_models(
             multialignment=alignment,
             fontsize=annotation_size,
             fontweight="semibold" if model_name == OURS_MODEL else "normal",
-            color="#111111",
+            color=OURS_OUTLINE_COLOR if highlighted else "#111111",
             annotation_clip=False,
             arrowprops=(
                 {
@@ -984,8 +1449,12 @@ def _annotate_models(
     # Place long labels first because they have the fewest collision-free options.
     sorted_indices = np.asarray(
         sorted(
-            range(len(data)),
+            [
+                index for index in range(len(data))
+                if display_all or (highlight_ours and str(data.iloc[index]["Model"]) == OURS_MODEL)
+            ],
             key=lambda index: (
+                0 if highlight_ours and str(data.iloc[index]["Model"]) == OURS_MODEL else 1,
                 -len(display_model_name(str(data.iloc[index]["Model"]))),
                 x_values[index],
             ),
@@ -997,18 +1466,23 @@ def _annotate_models(
         preferred_side = 1.0 if x_value <= x_midpoint else -1.0
         marker_clearance = float(np.sqrt(marker_areas[row_index]) / 2.0 + 4.0)
         vertical_offsets = (
-            4.0,
-            -5.0,
+            0.0,
+            3.0,
+            -3.0,
+            6.0,
+            -6.0,
             10.0,
-            -11.0,
-            17.0,
-            -18.0,
-            25.0,
-            -26.0,
-            34.0,
-            -35.0,
+            -10.0,
+            14.0,
+            -14.0,
+            20.0,
+            -20.0,
+            28.0,
+            -28.0,
+            36.0,
+            -36.0,
             44.0,
-            -45.0,
+            -44.0,
         )
         candidates = [
             (side * (marker_clearance + extra_clearance), vertical_offset)
@@ -1020,6 +1494,7 @@ def _annotate_models(
         best_candidate = candidates[0]
         best_box = None
         best_key = None
+        best_connector_path = None
         for horizontal_offset, vertical_offset in candidates:
             annotation = add_annotation(row_index, horizontal_offset, vertical_offset)
             candidate_box = annotation.get_window_extent(renderer=renderer).expanded(
@@ -1028,6 +1503,26 @@ def _annotate_models(
             overlap_score = sum(
                 overlap_area(candidate_box, occupied) for occupied in occupied_boxes
             )
+            # A connector must not run through another model's label, and later
+            # labels must not be placed over connectors already selected.
+            needs_connector = (
+                abs(vertical_offset) > 11.0
+                or abs(horizontal_offset) > marker_clearance + 4.0
+            )
+            connector_path = None
+            connector_collisions = sum(
+                path.intersects_bbox(candidate_box, filled=False) for path in connector_paths
+            )
+            if needs_connector:
+                connector_path = PlotPath([
+                    ((candidate_box.x0 + candidate_box.x1) / 2.0,
+                     (candidate_box.y0 + candidate_box.y1) / 2.0),
+                    ax.transData.transform((x_value, float(y_values[row_index]))),
+                ])
+                connector_collisions += sum(
+                    connector_path.intersects_bbox(box, filled=False) for box in label_boxes
+                )
+            overlap_score += connector_collisions * axes_box.width * axes_box.height
             outside_distance = max(axes_box.x0 - candidate_box.x0, 0.0)
             outside_distance += max(candidate_box.x1 - axes_box.x1, 0.0)
             outside_distance += max(axes_box.y0 - candidate_box.y0, 0.0)
@@ -1049,6 +1544,7 @@ def _annotate_models(
                 best_key = candidate_key
                 best_candidate = (horizontal_offset, vertical_offset)
                 best_box = candidate_box
+                best_connector_path = connector_path
             annotation.remove()
 
         needs_connector = abs(best_candidate[1]) > 11.0
@@ -1058,6 +1554,9 @@ def _annotate_models(
         )
         add_annotation(row_index, *best_candidate, connector=needs_connector)
         occupied_boxes.append(best_box)
+        label_boxes.append(best_box)
+        if best_connector_path is not None:
+            connector_paths.append(best_connector_path)
 
 
 def plot_dice_vs_throughput(
@@ -1081,9 +1580,20 @@ def plot_dice_vs_throughput(
     model_marker_legend_font_size: Optional[float] = None,
     title_font_size: Optional[float] = None,
     center_icon_size: Optional[float] = None,
+    highlight_ours: bool = False,
+    remove_title: bool = False,
+    right_memory_legend: bool = False,
+    scaled_memorey_legened: bool = False,
+    add_memory_legende: bool = False,
+    radius: float = 1.0,
+    runtime_memory: float = 1024.0,
 ) -> Figure:
     """Create the requested figure without mutating the source dataframe."""
 
+    memory_scaling = memory_scaling or add_memory_legende
+    reference_scale_factor = (
+        _reference_memory_scale(radius, runtime_memory) if add_memory_legende else None
+    )
     if not datasets:
         raise ValueError("At least one dataset must be selected.")
     selected = parse_selected_datasets(datasets[0], datasets)
@@ -1151,13 +1661,21 @@ def plot_dice_vs_throughput(
     standard_deviations = data[THROUGHPUT_STD_COLUMN].to_numpy(dtype=float)
     model_names = data["Model"].astype(str).tolist()
     memory_areas = (
-        scale_memory_to_marker_area(data[MEMORY_COLUMN])
+        scale_memory_to_marker_area(data[MEMORY_COLUMN], scale_factor=reference_scale_factor)
         if memory_scaling
         else np.full(len(data), style.fixed_marker_area, dtype=float)
     )
+    # Reuse the scaler's factor after it has validated all memory inputs.
+    memory_scale_factor = reference_scale_factor
+    if memory_scaling and memory_scale_factor is None:
+        memory_scale_factor = (
+            MAX_MEMORY_MARKER_AREA / float(pd.to_numeric(data[MEMORY_COLUMN]).max())
+        )
     ours = data["Model"].eq(OURS_MODEL).to_numpy()
     edge_colors = np.where(ours, OURS_OUTLINE_COLOR, "#383838")
     edge_widths = np.where(ours, OURS_OUTLINE_WIDTH, 0.75)
+    if highlight_ours:
+        edge_widths = np.where(ours, OURS_HIGHLIGHT_WIDTH, edge_widths)
     model_center_area = (
         float(center_icon_size)
         if center_icon_size is not None
@@ -1190,6 +1708,11 @@ def plot_dice_vs_throughput(
     for dataset in selected:
         dataset_style = DATASET_STYLES[dataset]
         y_values = data[DATASET_COLUMNS[dataset]].to_numpy(dtype=float)
+        face_colors = np.where(
+            ours & highlight_ours & (len(selected) == 1),
+            OURS_HIGHLIGHT_FILL,
+            dataset_style["color"],
+        )
 
         if show_throughput_std:
             _draw_error_bars(ax, x_values, y_values, standard_deviations)
@@ -1200,7 +1723,7 @@ def plot_dice_vs_throughput(
                 y_values,
                 s=memory_areas,
                 marker="o",
-                facecolor=dataset_style["color"],
+                facecolor=face_colors,
                 edgecolors=edge_colors,
                 linewidths=edge_widths,
                 alpha=0.38 if len(selected) > 1 else 0.72,
@@ -1263,7 +1786,7 @@ def plot_dice_vs_throughput(
                 y_values,
                 s=np.full(len(data), style.fixed_marker_area, dtype=float),
                 marker=dataset_style["marker"],
-                facecolor=dataset_style["color"],
+                facecolor=face_colors,
                 edgecolors=edge_colors,
                 linewidths=edge_widths,
                 alpha=0.9,
@@ -1272,37 +1795,32 @@ def plot_dice_vs_throughput(
 
     dataset_legend = None
     if len(selected) > 1:
-        dataset_legend = ax.legend(
+        dataset_legend = figure.legend(
             handles=_dataset_legend_handles(
                 selected,
                 marker_size=6.5,
                 use_bubble_shape=model_center_markers,
             ),
             title="Dataset",
-            loc="upper left",
-            bbox_to_anchor=(1.01, 1.0),
-            frameon=not show_model_marker_legend,
-            framealpha=0.94,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.0),
+            ncol=len(selected),
+            frameon=False,
+            borderaxespad=0.0,
             borderpad=0.45,
-            labelspacing=0.35,
-            handletextpad=0.45,
+            labelspacing=0.6,
+            handletextpad=0.7,
         )
         dataset_legend.get_title().set_fontsize(style.legend_size)
 
     model_legend = None
-    model_legend_rows = 0
     if show_model_marker_legend:
         model_legend_size = (
             float(model_marker_legend_font_size)
             if model_marker_legend_font_size is not None
-            else 5.0
+            else DEFAULT_MODEL_LEGEND_FONT_SIZE
         )
-        model_legend_anchor_y = (
-            0.14 if paper_style and len(selected) == 1 else 0.10
-        )
-        if dataset_legend is not None:
-            ax.add_artist(dataset_legend)
-        model_legend, model_legend_rows = _create_model_legend(
+        model_legend, _ = _create_model_legend(
             ax,
             figure,
             _model_legend_handles(
@@ -1311,40 +1829,21 @@ def plot_dice_vs_throughput(
                 marker_size=max(3.8, float(np.sqrt(model_center_area))),
             ),
             model_legend_size,
-            model_legend_anchor_y,
+            0.0,
         )
 
     memory_legend = None
     if show_bubble_legend:
-        if dataset_legend is not None and model_legend is None:
-            ax.add_artist(dataset_legend)
-        if model_legend is not None:
-            ax.add_artist(model_legend)
-        memory_legend = ax.legend(
-            handles=_memory_legend_handles(
+        memory_legend = _create_memory_legend(
+            figure,
+            _memory_legend_handles(
                 data[MEMORY_COLUMN],
-                area_scale=0.5 if model_legend is not None else 1.0,
+                scale_factor=memory_scale_factor,
             ),
-            title="Memory (MiB)",
-            loc=(
-                "lower left"
-                if dataset_legend is not None or model_legend is not None
-                else "center left"
-            ),
-            bbox_to_anchor=(
-                1.01,
-                0.0
-                if dataset_legend is not None or model_legend is not None
-                else 0.5,
-            ),
-            frameon=model_legend is None,
-            framealpha=0.94,
-            borderpad=0.35 if model_legend is not None else 1.25,
-            labelspacing=0.55 if model_legend is not None else 1.25,
-            handletextpad=0.6 if model_legend is not None else 0.7,
-            handleheight=1.4 if model_legend is not None else 2.1,
+            style.legend_size,
+            right_side=right_memory_legend,
+            scale_factor=memory_scale_factor if scaled_memorey_legened else None,
         )
-        memory_legend.get_title().set_fontsize(style.legend_size)
 
     all_y_values = np.concatenate(
         [data[DATASET_COLUMNS[dataset]].to_numpy(dtype=float) for dataset in selected]
@@ -1353,7 +1852,7 @@ def plot_dice_vs_throughput(
     ax.set_xlim(_padded_limits(x_values, x_errors, padding_fraction=0.09))
     ax.set_ylim(_padded_limits(all_y_values, padding_fraction=0.09))
 
-    title_text = "\n".join(
+    title_text = "" if remove_title else "\n".join(
         " ".join(line.split())
         for line in str(title).replace(r"\n", "\n").splitlines()
     ).strip()
@@ -1365,6 +1864,7 @@ def plot_dice_vs_throughput(
         horizontalalignment="center",
         multialignment="center",
     )
+    ax.title.set_visible(not remove_title)
     ax.set_xlabel(xlabel, fontsize=axis_label_size)
     ax.set_ylabel(ylabel, fontsize=axis_label_size)
     ax.tick_params(
@@ -1423,43 +1923,21 @@ def plot_dice_vs_throughput(
                 )
             ax.title.set_fontsize(fitted_title_size)
 
-    legends = []
-    if dataset_legend is not None:
-        legends.append(dataset_legend)
-    if model_legend is not None:
-        legends.append(model_legend)
-    if memory_legend is not None:
-        legends.append(memory_legend)
-    current_legend = ax.get_legend()
-    if current_legend is not None and current_legend not in legends:
-        legends.append(current_legend)
+    legends = [
+        legend for legend in (dataset_legend, memory_legend, model_legend)
+        if legend is not None
+    ]
+    _layout_plot_legends(
+        figure, ax, legends, paper_style,
+        right_legend=memory_legend if right_memory_legend else None,
+    )
+    _pad_for_marker_extents(ax)
+    if add_memory_legende:
+        legends.append(_create_reference_memory_legend(
+            ax, radius, runtime_memory, memory_scale_factor, style.legend_size, legends
+        ))
 
-    if legends:
-        for legend in legends:
-            legend.set_in_layout(False)
-        figure.tight_layout(pad=0.5 if paper_style else 1.0)
-        has_right_legend = dataset_legend is not None or memory_legend is not None
-        if has_right_legend:
-            reserved_right = 0.64 if paper_style and len(selected) == 1 else 0.79
-            figure.subplots_adjust(right=reserved_right)
-        if show_model_marker_legend:
-            if paper_style and len(selected) == 1:
-                reserved_bottom = 0.27
-            elif paper_style:
-                reserved_bottom = 0.23 if model_legend_rows == 1 else 0.28
-            else:
-                reserved_bottom = 0.22 if model_legend_rows == 1 else 0.27
-            figure.subplots_adjust(bottom=reserved_bottom)
-        for legend in legends:
-            legend.set_in_layout(True)
-    else:
-        figure.tight_layout(pad=0.5 if paper_style else 1.0)
-
-    axes_position = ax.get_position()
-    figure_center_in_axes = (0.5 - axes_position.x0) / axes_position.width
-    ax.title.set_x(figure_center_in_axes)
-
-    if display_model_names:
+    if display_model_names or highlight_ours:
         _annotate_models(
             ax,
             data,
@@ -1468,6 +1946,8 @@ def plot_dice_vs_throughput(
             memory_areas,
             legends,
             paper_style,
+            highlight_ours=highlight_ours,
+            display_all=display_model_names,
         )
     return figure
 
@@ -1549,7 +2029,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         selected = parse_selected_datasets(args.dataset, args.multiple_dataset)
-        if args.buble_size_legened and not args.memorey:
+        memory_scaling = args.memorey or args.add_memory_legende
+        if args.buble_size_legened and not memory_scaling:
             raise ValueError("--buble-size_legened requires --memorey.")
 
         csv_path = resolve_csv_path()
@@ -1567,7 +2048,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 title=args.title,
                 xlabel=args.xlabel,
                 ylabel=args.ylabel,
-                memory_scaling=args.memorey,
+                memory_scaling=memory_scaling,
                 display_model_names=args.dislay_model_names,
                 model_name_font_size=args.model_name_font_size,
                 show_throughput_std=args.throughput_std,
@@ -1582,11 +2063,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 model_marker_legend_font_size=args.model_marker_legend,
                 title_font_size=args.title_font_size,
                 center_icon_size=args.center_icon_size,
+                highlight_ours=args.highlight_ours,
+                remove_title=args.remove_title,
+                right_memory_legend=args.right_memory_legend,
+                scaled_memorey_legened=args.scaled_memorey_legened,
+                add_memory_legende=args.add_memory_legende,
+                radius=args.radius,
+                runtime_memory=args.runtime_memory,
             )
             save_figure(figure, pdf_path, png_path, args.paper_style)
 
         print("Selected dataset(s): {}".format(", ".join(selected)))
-        print("Memory scaling enabled: {}".format(args.memorey))
+        print("Memory scaling enabled: {}".format(memory_scaling))
         print("Paper style enabled: {}".format(args.paper_style))
         print("Generated files:")
         print("  {}".format(pdf_path.resolve()))

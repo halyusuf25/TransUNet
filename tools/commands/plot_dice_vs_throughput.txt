@@ -6,6 +6,10 @@ a PNG. The default output directory is qualitative/; use --output_dir to choose
 another directory. Use --output_name to replace the default dataset-based file
 stem. Missing output directories are created automatically.
 
+Default axis labels are "Throughput (images/s)" and "Dice (%)". Use --xlabel
+and --ylabel to override them. --axis_label_font_size controls both axis-label
+and tick-number sizes; explicit font-size settings are respected.
+
 
 1. Default Synapse plot
 ------------------------
@@ -34,6 +38,13 @@ Scales bubble areas by memory, adds the representative memory-size legend, and
 uses a thin x to indicate each exact throughput-Dice coordinate. Omit
 --center_x_marker to retain the default small center dot. The misspelled option
 names below are intentional and match the plotting script.
+
+Bubble area is proportional to memory: area = scale_factor * memory, with one
+scale_factor = max_area / max(memory) shared by every plotted dataset and the
+memory-size legend. References show distinct minimum/median/maximum values in
+MiB, at exactly the plotted bubble sizes. Equal reference values appear once.
+The memory legend is disabled by default; --buble-size_legened requires
+--memorey. It is placed below the plot with room for its complete circles.
 
 python tools/plot_dice_vs_throughput.py \
   --dataset Cataract-1k \
@@ -80,11 +91,12 @@ python tools/plot_dice_vs_throughput.py \
 ----------------------------------
 Uses a distinct center symbol for every model, optionally colors those symbols,
 and adds a compact legend below the plot mapping each symbol to its model. The
-bare --model_marker_legend flag uses 5 pt; an optional numeric value overrides
+bare --model_marker_legend flag uses 7 pt; an optional numeric value overrides
 that size. The same 8-point font size is applied to both axis labels and their
-tick numbers. For one dataset, paper style retains IEEE's 3.5-inch
-single-column width and adds only the vertical room needed for the model legend.
-The legend uses one row when it fits and otherwise no more than two rows. The
+tick numbers. For one dataset, paper style retains the 3.5-inch single-column
+width and adds vertical room as needed. All legends are measured and stacked
+below the plot with space between entries and legends. Model legends use one
+row when it fits and add as many rows as needed at the requested font size. The
 CSV names are left unchanged; the plot and legend abbreviate SwinUNet
 (Swin-Base) to SwinUNet and remove (Ours) from the displayed
 Lightweight-TransUNet name. Its bubble is emphasized with a thin dark-red
@@ -95,10 +107,10 @@ python tools/plot_dice_vs_throughput.py \
   --memorey \
   --model_center_markers \
   --model_center_colors \
-  --model_marker_legend  \
+  --model_marker_legend \
   --center_icon_size 7 \
-  --axis_label_font_size 6 \
-  --title_font_size 6.8 \
+  --axis_label_font_size 8 \
+  --title_font_size 9 \
   --title "Segmentation Accuracy and Resource Efficiency \non Synapse Dataset" \
   --paper_style \
   --output_name legend \
@@ -106,22 +118,149 @@ python tools/plot_dice_vs_throughput.py \
 
 Use --model_center_markers without --model_center_colors for a shape-only,
 grayscale-friendly version. Add --buble-size_legened to show the memory-size
-key alongside the model legend. To override the default 5-point legend text,
-use a value such as --model_marker_legend 6. --center_icon_size is a marker area
+key below the plot as well. To override the default 7-point legend text,
+use a value such as --model_marker_legend 5. --center_icon_size is a marker area
 in points squared. --model_center_markers and --center_x_marker are alternative
 center encodings and cannot be used together.
-
-
+7. Direct model labels
+------------------------
+Uses readable direct annotations instead of the model-symbol legend. Explicit
+font-size options set the model names, both axes, and the title independently.
 
 python tools/plot_dice_vs_throughput.py \
   --dataset Synapse \
   --memorey \
   --dislay_model_names \
-  --model_name_font_size 4.5 \
+  --model_name_font_size 7 \
   --center_x_marker \
   --center_icon_size 6 \
-  --axis_label_font_size 6 \
-  --title_font_size 7 \
+  --axis_label_font_size 8 \
+  --title_font_size 9 \
   --title "Segmentation Accuracy and Resource Efficiency on Synapse Dataset" \
   --paper_style \
   --output_name ModelNames
+
+
+8. Manuscript figure with both legends and optional highlighting
+----------------------------------------------------------------
+Shows exact-size memory references and a model-symbol legend below the plot.
+--highlight_ours is disabled by default. When enabled for one dataset, it gives
+Lightweight TransUNet a distinct gold bubble fill, a clearer outline, and the
+direct label "Lightweight TransUNet (ours)". Its bubble area and center symbol
+are preserved. With multiple datasets, dataset fills are retained and the
+highlight uses outlines and labeling. Combining this flag with
+--dislay_model_names does not duplicate the direct label.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --memorey \
+  --buble-size_legened \
+  --model_center_markers \
+  --model_center_colors \
+  --center_icon_size 8 \
+  --dislay_model_names \
+  --model_name_font_size 7 \
+  --axis_label_font_size 8 \
+  --title_font_size 9 \
+  --paper_style \
+  --remove_title \
+  --output_name sota_synapse_modelnames \
+  --output_dir qualitative/sota_publication
+
+
+9. Manuscript figure without a title
+-------------------------------------
+Titles remain visible by default, including with --paper_style. Add exactly
+--remove_title to suppress any title, including an explicitly supplied --title.
+Title fitting is skipped and its space is reclaimed.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --memorey \
+  --model_center_markers \
+  --model_center_colors \
+  --model_marker_legend \
+  --axis_label_font_size 8 \
+  --paper_style \
+  --remove_title \
+  --output_name sota_synapse \
+  --output_dir qualitative/sota_publication
+
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --memorey \
+  --buble-size_legened \
+  --model_center_markers \
+  --model_center_colors \
+  --model_marker_legend \
+  --axis_label_font_size 8 \
+  --paper_style \
+  --remove_title \
+  --right_memory_legend \
+  --scaled_memorey_legened \
+  --output_name synapse_manuscript_no_title_right
+
+
+10. Calibrated memory bubbles with a lower-right scale key
+---------------------------------------------------------
+--add_memory_legende is disabled by default. When supplied, it enables memory
+bubbles and adds a compact reference circle inside the lower-right corner of
+the axes. --memorey is optional with this flag and remains compatible with it.
+The model-symbol legend stays below the plot.
+
+--radius sets the reference circle's physical radius in millimeters (default
+1.0); --runtime_memory sets the memory that circle represents in MiB (default
+1024). Both must be positive finite numbers. The default key reads
+"1 mm radius = 1024 MiB". With these defaults, 1024 MiB has a 1 mm radius,
+4096 MiB has a 2 mm radius, and 256 MiB has a 0.5 mm radius.
+
+Every bubble uses the same area-proportional memory scale:
+  radius_mm = reference_radius_mm * sqrt(memory_MiB / reference_memory_MiB)
+For Matplotlib's circular scatter markers, the corresponding size is:
+  s = (2 * reference_radius_mm * 72 / 25.4)^2
+      * memory_MiB / reference_memory_MiB
+Here s is the squared marker diameter in points; the circular area is pi/4
+times s. The reference radius is measured to the center of its outline, with
+half the outline width extending beyond that radius.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --add_memory_legende \
+  --model_center_markers \
+  --model_center_colors \
+  --model_marker_legend \
+  --center_icon_size 7 \
+  --axis_label_font_size 8 \
+  --paper_style \
+  --output_name synapse_calibrated_memory
+
+To make a 2 mm radius circle represent 2048 MiB, change both reference values:
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --add_memory_legende \
+  --radius 2 \
+  --runtime_memory 2048 \
+  --model_center_markers \
+  --model_center_colors \
+  --model_marker_legend \
+  --center_icon_size 7 \
+  --axis_label_font_size 8 \
+  --paper_style \
+  --output_name synapse_calibrated_memory_custom
+
+Changing either reference value changes the plotted bubbles and the reference
+circle consistently. Without --add_memory_legende, --radius and
+--runtime_memory do not change the original bubble scaling or add a legend.
+The physical scale holds at the PDF's exported page dimensions and the PNG's
+physical dimensions specified by its DPI metadata, independent of figure size
+and rendering DPI. Resizing the exported figure changes the displayed or
+printed millimeter scale.
+
+If explicitly enabled, the existing --buble-size_legened also uses the active
+memory scale. Its --right_memory_legend and --scaled_memorey_legened modifiers
+apply only to that existing legend; they do not move or alter the new
+lower-right reference key. For example, add --memorey --buble-size_legened
+--right_memory_legend to either command above to include the existing memory
+references outside the axes on the right as well.
