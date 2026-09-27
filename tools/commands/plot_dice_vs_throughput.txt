@@ -40,9 +40,9 @@ uses a thin x to indicate each exact throughput-Dice coordinate. Omit
 names below are intentional and match the plotting script.
 
 Bubble area is proportional to memory: area = scale_factor * memory, with one
-scale_factor = max_area / max(memory) shared by every plotted dataset and the
-memory-size legend. References show distinct minimum/median/maximum values in
-MiB, at exactly the plotted bubble sizes. Equal reference values appear once.
+scale_factor = max_area / max(memory) shared by every plotted dataset.
+References show distinct minimum/median/maximum values in MiB at exactly the
+plotted physical sizes, using that same scale factor. Equal values appear once.
 The memory legend is disabled by default; --buble-size_legened requires
 --memorey. It is placed below the plot with room for its complete circles.
 
@@ -143,7 +143,7 @@ python tools/plot_dice_vs_throughput.py \
 
 8. Manuscript figure with both legends and optional highlighting
 ----------------------------------------------------------------
-Shows exact-size memory references and a model-symbol legend below the plot.
+Shows proportional memory references and a model-symbol legend below the plot.
 --highlight_ours is disabled by default. When enabled for one dataset, it gives
 Lightweight TransUNet a distinct gold bubble fill, a clearer outline, and the
 direct label "Lightweight TransUNet (ours)". Its bubble area and center symbol
@@ -209,8 +209,21 @@ bubbles and adds a compact reference circle inside the lower-right corner of
 the axes. --memorey is optional with this flag and remains compatible with it.
 The model-symbol legend stays below the plot.
 
---radius sets the reference circle's physical radius in millimeters (default
-1.0); --runtime_memory sets the memory that circle represents in MiB (default
+--memory_legend_font_size controls memory-legend text in points (default: 5).
+It applies to the lower-right reference key and to the labels and titles of
+the existing bottom/right memory legends. Bubble and reference-circle sizes
+remain unchanged. For larger text, use --memory_legend_font_size 7.
+
+--memory_legend_title sets the heading above the entries inside the memory
+legend (default: "Peak Runtime Memory"). The heading uses the same font size
+as --memory_legend_font_size. The supplied text is displayed exactly, with no
+generated prefix, suffix, or enlargement note; an empty string hides the title.
+Both settings also apply to bottom/right memory legends without changing the
+model-symbol legend. With --scaled_memorey_legened, the computed plot-area
+explanation is separate body text below the circles, not part of the title.
+
+--radius sets the plot calibration's physical radius in millimeters (default
+1.0); --runtime_memory sets the memory that radius represents in MiB (default
 1024). Both must be positive finite numbers. The default key reads
 "1 mm radius = 1024 MiB". With these defaults, 1024 MiB has a 1 mm radius,
 4096 MiB has a 2 mm radius, and 256 MiB has a 0.5 mm radius.
@@ -235,13 +248,15 @@ python tools/plot_dice_vs_throughput.py \
   --paper_style \
   --output_name synapse_calibrated_memory
 
-To make a 2 mm radius circle represent 2048 MiB, change both reference values:
+To make a 2 mm plot radius represent 2048 MiB and show a matching legend circle:
 
 python tools/plot_dice_vs_throughput.py \
   --dataset Synapse \
   --add_memory_legende \
   --radius 2 \
   --runtime_memory 2048 \
+  --memory_legend_radius_annotation 2 \
+  --memory_legend_font_size 7 \
   --model_center_markers \
   --model_center_colors \
   --model_marker_legend \
@@ -250,17 +265,118 @@ python tools/plot_dice_vs_throughput.py \
   --paper_style \
   --output_name synapse_calibrated_memory_custom
 
-Changing either reference value changes the plotted bubbles and the reference
-circle consistently. Without --add_memory_legende, --radius and
+Changing either calibration value changes the plotted bubbles and the key
+consistently. The key's reference circle always has radius --radius and
+represents --runtime_memory MiB; it cannot be resized independently.
+Without --add_memory_legende, --radius and
 --runtime_memory do not change the original bubble scaling or add a legend.
 The physical scale holds at the PDF's exported page dimensions and the PNG's
 physical dimensions specified by its DPI metadata, independent of figure size
 and rendering DPI. Resizing the exported figure changes the displayed or
 printed millimeter scale.
 
-If explicitly enabled, the existing --buble-size_legened also uses the active
-memory scale. Its --right_memory_legend and --scaled_memorey_legened modifiers
+If explicitly enabled, --buble-size_legened also uses the exact same memory
+scale. Its --right_memory_legend and --scaled_memorey_legened modifiers
 apply only to that existing legend; they do not move or alter the new
 lower-right reference key. For example, add --memorey --buble-size_legened
 --right_memory_legend to either command above to include the existing memory
 references outside the axes on the right as well.
+
+
+11. One physical scale for memory legends and plot bubbles
+-------------------------------------------------------
+--radius and --runtime_memory define the same physical calibration for the
+lower-right reference, any min/median/max references, and every model bubble.
+All memory-legend circles use a thin 0.4-point outline and show a center-to-edge
+radius line, with r above the line inside the circle. The r label shrinks to
+fit small circles; it never changes the requested radius.
+Title and entry text sizes remain controlled by --memory_legend_font_size.
+
+--memory_legend_radius_annotation is now a deprecated compatibility option.
+It still accepts a positive finite float (default: 1.0), so existing commands
+continue to run, but its value no longer changes circle sizes. Its former
+independent resizing could make a legend disagree with its stated memory scale.
+The r annotation and thin outline remain present without this option.
+
+For the command below, every bubble has radius 2 * sqrt(memory_MiB / 2048) mm.
+The 2048 MiB reference has radius 2 mm; Lightweight-TransUNet (1710.81 MiB)
+has radius 1.827956723 mm and AD2Former (22869.29 MiB) has radius 6.683306220 mm.
+Radii are measured to the outline centerline, excluding decorative stroke width.
+They are independent of export DPI; resizing an exported image changes its
+physical millimeter dimensions. The legacy annotation option is kept in this
+example only to demonstrate command compatibility and may be omitted.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --add_memory_legende \
+  --model_center_markers \
+  --model_center_colors \
+  --model_marker_legend 5 \
+  --add_memory_legende \
+  --memory_legend_title "Peak Runtime Memory" \
+  --memory_legend_font_size 5 \
+  --radius 2 \
+  --runtime_memory 2048 \
+  --axis_label_font_size 6 \
+  --remove_title \
+  --memory_legend_compac \
+  --paper_style \
+  --output_name dice_through_mem
+
+
+12. Compact memory calibration label
+-------------------------------------
+--memory_legend_compact_label is a Boolean flag, disabled by default. With
+--add_memory_legende, it changes only the reference label's wording:
+  default:  2 mm radius = 2048 MiB
+  enabled:  r = 2mm ↔ 2048 MiB
+The values come from --radius and --runtime_memory and match the actual
+reference-circle size. The title, radius annotation, circle sizes, and plotted
+data are unchanged. Without the lower-right reference legend, this flag has
+no effect and does not enable a legend by itself.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --add_memory_legende \
+  --radius 2 \
+  --runtime_memory 2048 \
+  --memory_legend_radius_annotation 2 \
+  --memory_legend_compact_label \
+  --model_center_markers \
+  --model_center_colors \
+  --model_marker_legend \
+  --remove_title \
+  --paper_style \
+  --output_name dice_through_mem_compact
+
+
+13. Dice-axis guides for AD2Former and Lightweight TransUNet
+-----------------------------------------------------------
+--dice_guide_lines draws thin red dashed horizontal lines from these two models'
+exact coordinates to the left Dice axis. --dice_guide_labels adds their Dice
+values beside the axis, to two decimal places. Both are store_true flags and
+disabled by default; --dice_guide_labels alone has no effect.
+
+The labels use the y-axis tick font size (set with --axis_label_font_size).
+Space is reserved within the existing figure width. Overlapping ordinary tick
+labels are hidden, but tick locations and grid lines are preserved. For multiple
+datasets, both models receive guides for each selected dataset; close value
+labels use separate columns and duplicate values are labeled once. Missing
+models are skipped. Bubble sizes, colors, center markers, and data values do
+not change. The guides also work with fixed-size markers, without --memorey.
+
+python tools/plot_dice_vs_throughput.py \
+  --dataset Synapse \
+  --add_memory_legende \
+  --radius 2 \
+  --runtime_memory 2048 \
+  --memory_legend_compact_label \
+  --model_center_markers \
+  --model_center_colors \
+  --model_marker_legend 5 \
+  --axis_label_font_size 6 \
+  --dice_guide_lines \
+  --dice_guide_labels \
+  --remove_title \
+  --paper_style \
+  --output_name dice_through_mem_guides

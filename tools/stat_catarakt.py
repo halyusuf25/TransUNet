@@ -23,7 +23,9 @@ CLASS_NAMES = [
 ]
 CLASS_MAP = {
     "Pupil": 1,
+    "pupil1": 1, #dataset has both pupil and pupil1, so we map both to the same class
     "Cornea": 2,
+    "cornea1": 2, #dataset has both cornea and cornea1, so we map both to the same class
     "Lens": 3,
     "Instruments": 4,
 }

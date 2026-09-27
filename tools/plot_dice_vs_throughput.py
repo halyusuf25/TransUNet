@@ -39,6 +39,12 @@ Omit the title when the manuscript caption supplies the context::
     python tools/plot_dice_vs_throughput.py \
         --dataset Synapse --memorey --highlight_ours --remove_title --paper_style
 
+Mark AD2Former and Lightweight TransUNet Dice values at the y-axis::
+
+    python tools/plot_dice_vs_throughput.py \
+        --dataset Synapse --add_memory_legende --paper_style \
+        --dice_guide_lines --dice_guide_labels
+
 Right-side memory scale key (the two legend modifiers also work separately)::
 
     python tools/plot_dice_vs_throughput.py \
@@ -52,7 +58,7 @@ Calibrate all bubbles to a physical reference in the lower-right corner::
         --dataset Synapse --add_memory_legende --radius 1 --runtime_memory 1024 \
         --model_center_markers --model_center_colors --model_marker_legend --paper_style
 
-Use the compact reference label r=2 mm = 2048 MiB::
+Use the compact reference label r = 2mm ↔ 2048 MiB::
 
     python tools/plot_dice_vs_throughput.py \
         --dataset Synapse --add_memory_legende --radius 2 --runtime_memory 2048 \
@@ -62,18 +68,18 @@ Only --add_memory_legende activates the radius/MiB calibration. Without it,
 the existing bubble scale is unchanged, even if --radius or --runtime_memory
 is supplied. The calibrated circle radius is measured to the outline center.
 
-Legend-only radius illustrations with a custom heading::
+Calibrated radius references with a custom heading::
 
     python tools/plot_dice_vs_throughput.py \
-        --dataset Synapse --add_memory_legende --memory_legend_radius_annotation 2 \
+        --dataset Synapse --add_memory_legende --radius 2 --runtime_memory 2048 \
         --memory_legend_title "Peak Runtime Memory" --memory_legend_font_size 5 \
         --paper_style
 
-The annotation radius defaults to 1 mm and controls only legend illustrations,
-not plot bubbles. For min/median/max legends it sets the smallest radius and
-preserves relative areas. Each radius is marked with r. The heading is displayed
-verbatim, defaults to Peak Runtime Memory, and shares the memory-legend font size
-(5 points by default).
+All legend circles use exactly the same memory-to-area mapping as plot bubbles,
+including min/median/max references. Each radius is marked with r. The legacy
+--memory_legend_radius_annotation option remains accepted but no longer resizes
+legend circles independently. The heading is displayed verbatim, defaults to
+Peak Runtime Memory, and shares the memory-legend font size (5 points by default).
 
 The physical area key describes nominal circle area, excluding the outline,
 at the exported dimensions. Resizing the figure changes its mm² calibration.
@@ -249,9 +255,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
   %(prog)s --dataset Synapse --dislay_model_names --model_name_font_size 7
   %(prog)s --dataset Synapse --memorey --buble-size_legened --highlight_ours --paper_style
   %(prog)s --dataset Synapse --memorey --remove_title --paper_style
+  %(prog)s --dataset Synapse --add_memory_legende --dice_guide_lines --dice_guide_labels
   %(prog)s --dataset Synapse --add_memory_legende --radius 1 --runtime_memory 1024 --paper_style
   %(prog)s --dataset Synapse --add_memory_legende --memory_legend_compact_label --paper_style
-  %(prog)s --dataset Synapse --add_memory_legende --memory_legend_radius_annotation 2 \
+  %(prog)s --dataset Synapse --add_memory_legende --radius 2 --runtime_memory 2048 \
       --memory_legend_title "Peak Runtime Memory" --memory_legend_font_size 5 --paper_style
   %(prog)s --dataset Synapse --memorey --buble-size_legened \
       --right_memory_legend --scaled_memorey_legened --paper_style
@@ -307,15 +314,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "reference key (default: %(default)s points)"
         ),
     )
+    # Deprecated: retained only for compatibility with older commands; its value
+    # has no effect. Use --radius and --runtime_memory with --add_memory_legende
+    # to set the shared scale for plot bubbles and memory-legend circles.
     parser.add_argument(
         "--memory_legend_radius_annotation",
         type=float,
         default=1.0,
         metavar="MM",
         help=(
-            "radius of the legend reference circle in millimeters (default: %(default)s); "
-            "sets the smallest radius for min/median/max references, preserving their "
-            "relative areas; draws an internal r without changing plot bubbles"
+            "deprecated compatibility option (default: %(default)s); accepted but does "
+            "not resize circles. Legends always use the plot's memory scale; "
+            "use --radius and --runtime_memory with --add_memory_legende to calibrate both"
         ),
     )
     parser.add_argument(
@@ -330,7 +340,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--memory_legend_compact_label",
         action="store_true",
         help=(
-            "use 'r=R mm = M MiB' instead of 'R mm radius = M MiB' in the "
+            "use 'r = Rmm ↔ M MiB' instead of 'R mm radius = M MiB' in the "
             "lower-right memory legend (disabled by default); used with --add_memory_legende"
         ),
     )
@@ -358,7 +368,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--buble-size_legened",
         action="store_true",
         help=(
-            "show distinct min/median/max MiB references with proportional areas; "
+            "show distinct min/median/max MiB references at the plotted bubble sizes; "
             "requires --memorey "
             "(spelling is intentional)"
         ),
@@ -386,6 +396,22 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help=(
             "highlight Lightweight TransUNet with a direct label and clearer outline; "
             "also use a distinct fill for a single dataset"
+        ),
+    )
+    parser.add_argument(
+        "--dice_guide_lines",
+        action="store_true",
+        help=(
+            "draw red dashed horizontal guides from AD2Former and Lightweight TransUNet "
+            "points to the Dice y-axis for each selected dataset (disabled by default)"
+        ),
+    )
+    parser.add_argument(
+        "--dice_guide_labels",
+        action="store_true",
+        help=(
+            "label the guided Dice values beside the y-axis, using its tick font size; "
+            "has no effect without --dice_guide_lines (disabled by default)"
         ),
     )
     parser.add_argument(
@@ -986,19 +1012,14 @@ def _pad_for_marker_extents(ax: plt.Axes, bottom_padding_points: float = 0.0) ->
 
 
 class _MemoryLegendHandler(HandlerBase):
-    """Pack physical-radius illustrations beside labels without resizing bubbles."""
+    """Pack reference circles at their calibrated physical sizes beside labels."""
 
-    def __init__(
-        self,
-        handle_width: float = 0.0,
-        marker_scale: float = 1.0,
-    ):
+    def __init__(self, handle_width: float = 0.0):
         super().__init__()
         self.handle_width = handle_width
-        self.marker_scale = marker_scale
 
     def legend_artist(self, legend, orig_handle, fontsize, handlebox):
-        marker_diameter = orig_handle.get_markersize() * self.marker_scale
+        marker_diameter = orig_handle.get_markersize()
         diameter = marker_diameter + orig_handle.get_markeredgewidth()
         handlebox.width = max(diameter + 4.0, self.handle_width)
         handlebox.height = max(diameter + 4.0, fontsize)
@@ -1039,23 +1060,6 @@ class _MemoryLegendHandler(HandlerBase):
         return marker
 
 
-def _memory_legend_marker_scale(
-    handles: Sequence[Line2D], radius_mm: float,
-) -> float:
-    """Set the smallest reference radius in mm, retaining all area ratios."""
-
-    if not np.isfinite(radius_mm) or radius_mm <= 0:
-        raise ValueError("--memory_legend_radius_annotation must be finite and greater than zero.")
-    minimum_diameter = min(handle.get_markersize() for handle in handles)
-    # Line2D markersize is the diameter in points, with 72 pt = 25.4 mm.
-    # Measure the radius to the outline center, independent of output DPI.
-    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        scale = np.float64(radius_mm) * (2.0 * 72.0 / 25.4) / minimum_diameter
-    if not np.isfinite(scale) or scale <= 0:
-        raise ValueError("--memory_legend_radius_annotation must give a finite, positive size.")
-    return float(scale)
-
-
 def _memory_scale_label(scale_factor: float, vertical: bool = False) -> str:
     """Describe nominal circle area in physical units, independent of export DPI."""
 
@@ -1079,17 +1083,15 @@ def _create_memory_legend(
     right_side: bool = False,
     scale_factor: Optional[float] = None,
     title: str = DEFAULT_MEMORY_LEGEND_TITLE,
-    radius_annotation: float = 1.0,
 ) -> Legend:
-    """Reserve illustrated circle diameters in horizontal/vertical cells."""
+    """Reserve calibrated circle diameters in horizontal/vertical cells."""
 
     if scale_factor is not None:
         for handle in handles:
             handle.set_label("")
-    marker_scale = _memory_legend_marker_scale(handles, radius_annotation)
     handle_width = (
         max(
-            handle.get_markersize() * marker_scale + handle.get_markeredgewidth() + 4.0
+            handle.get_markersize() + handle.get_markeredgewidth() + 4.0
             for handle in handles
         )
         if right_side else 0.0
@@ -1105,7 +1107,6 @@ def _create_memory_legend(
             handles=ordered_handles,
             handler_map={Line2D: _MemoryLegendHandler(
                 handle_width=handle_width,
-                marker_scale=marker_scale,
             )},
             markerscale=1.0,
             title=title,
@@ -1147,7 +1148,6 @@ def _create_reference_memory_legend(
     font_size: float,
     obstacles: Sequence[object],
     title: str = DEFAULT_MEMORY_LEGEND_TITLE,
-    radius_annotation: float = 1.0,
     compact_label: bool = False,
 ) -> Legend:
     """Place the calibrated reference near the lower-right, clear of data."""
@@ -1161,17 +1161,14 @@ def _create_reference_memory_legend(
         markerfacecolor="#B8B8B8", markeredgecolor="#303030",
         markeredgewidth=MEMORY_LEGEND_OUTLINE_WIDTH,
     )
-    marker_scale = _memory_legend_marker_scale([reference], radius_annotation)
     label_template = (
-        "r={:.12g} mm = {:.12g} MiB" if compact_label else "{:.12g} mm radius = {:.12g} MiB"
+        "r = {:.12g}mm ↔ {:.12g} MiB" if compact_label else "{:.12g} mm radius = {:.12g} MiB"
     )
     legend = Legend(
         ax,
         handles=[reference],
         labels=[label_template.format(radius, runtime_memory)],
-        handler_map={Line2D: _MemoryLegendHandler(
-            marker_scale=marker_scale,
-        )},
+        handler_map={Line2D: _MemoryLegendHandler()},
         markerscale=1.0,
         loc="lower right",
         bbox_to_anchor=(1.0, 0.0),
@@ -1208,7 +1205,7 @@ def _create_reference_memory_legend(
         legend.remove()
         raise ValueError(
             "The memory reference legend does not fit inside the plot; "
-            "reduce --memory_legend_font_size or --memory_legend_radius_annotation, "
+            "reduce --memory_legend_font_size or --radius, "
             "or shorten --memory_legend_title or the reference values."
         )
 
@@ -1515,10 +1512,14 @@ def _annotate_models(
     figure.canvas.draw()
     renderer = figure.canvas.get_renderer()
     axes_box = ax.get_window_extent(renderer=renderer)
-    occupied_boxes = [
-        artist.get_window_extent(renderer=renderer).expanded(1.03, 1.08)
-        for artist in obstacles
-    ]
+    occupied_boxes = []
+    for artist in obstacles:
+        box = artist.get_window_extent(renderer=renderer)
+        if (artist.get_gid() or "").startswith("dice-guide-line:"):
+            # Horizontal line extents have zero height; include the stroke so
+            # direct model labels are not placed across the optional guides.
+            box = box.padded(0.75 * figure.dpi / 72.0)
+        occupied_boxes.append(box.expanded(1.03, 1.08))
     label_boxes = []
     connector_paths = []
     pixels_per_point = figure.dpi / 72.0
@@ -1703,6 +1704,115 @@ def _annotate_models(
             connector_paths.append(best_connector_path)
 
 
+def _draw_dice_guides(
+    ax: plt.Axes,
+    data: pd.DataFrame,
+    datasets: Sequence[str],
+    show_values: bool,
+    font_size: float,
+) -> List[object]:
+    """Draw guides and return their artists as obstacles for direct model labels."""
+
+    selected_models = data.loc[data["Model"].isin(("AD2Former", OURS_MODEL))]
+    points = [
+        (dataset, str(row["Model"]), float(row[THROUGHPUT_COLUMN]),
+         float(row[DATASET_COLUMNS[dataset]]))
+        for dataset in datasets
+        for _, row in selected_models.iterrows()
+    ]
+    if not points:
+        return []
+    figure = ax.figure
+    labels = []
+    if show_values:
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        pixels_per_point = figure.dpi / 72.0
+        ticks = ax.yaxis.get_major_ticks()
+        tick_offset = ticks[0].get_pad() + ticks[0].tick1line.get_markersize()
+        tick_boxes = [
+            tick.label1.get_window_extent(renderer) for tick in ticks
+            if tick.label1.get_visible() and tick.label1.get_text()
+        ]
+        original_label_left = min((box.x0 for box in tick_boxes), default=ax.bbox.x0)
+        for value in sorted({point[3] for point in points}, reverse=True):
+            label = ax.annotate(
+                "{:.2f}".format(value),
+                xy=(0.0, value), xycoords=ax.get_yaxis_transform(),
+                xytext=(-tick_offset, 0.0), textcoords="offset points",
+                ha="right", va="center", fontsize=font_size,
+                color=OURS_OUTLINE_COLOR, annotation_clip=False, zorder=6,
+            )
+            label.set_gid("dice-guide-value:{:.12g}".format(value))
+            labels.append(label)
+        figure.canvas.draw()
+        # Keep each value at its true y-coordinate. Close values (for example
+        # across datasets) occupy separate columns rather than being displaced.
+        column_width = max(label.get_window_extent(renderer).width for label in labels)
+        column_width = column_width / pixels_per_point + 3.0
+        occupied = []
+        for label in labels:
+            for column in range(len(labels)):
+                label.set_position((-tick_offset - column * column_width, 0.0))
+                box = label.get_window_extent(renderer).padded(pixels_per_point)
+                if not any(box.overlaps(other) for other in occupied):
+                    occupied.append(box)
+                    break
+        guide_left = min(label.get_window_extent(renderer).x0 for label in labels)
+        extra_pixels = max(0.0, original_label_left - guide_left)
+        if extra_pixels:
+            # Reserve label space within the existing publication width, keeping
+            # the right edge, bottom legends, and title's physical center fixed.
+            position = ax.get_position()
+            extra_fraction = extra_pixels / figure.bbox.width
+            if extra_fraction >= position.width:
+                raise ValueError(
+                    "Dice guide labels do not fit; reduce --axis_label_font_size."
+                )
+            title_center = position.x0 + ax.title.get_position()[0] * position.width
+            ax.set_position((
+                position.x0 + extra_fraction, position.y0,
+                position.width - extra_fraction, position.height,
+            ))
+            position = ax.get_position()
+            ax.title.set_x((title_center - position.x0) / position.width)
+            _pad_for_marker_extents(ax)
+        figure.canvas.draw()
+        guide_boxes = [label.get_window_extent(renderer) for label in labels]
+        # Avoid duplicate/overlapping ordinary tick labels; tick locations and
+        # the grid are untouched. Only the opt-in guide labels are red.
+        for tick in ax.yaxis.get_major_ticks():
+            box = tick.label1.get_window_extent(renderer)
+            if any(box.overlaps(other.padded(pixels_per_point)) for other in guide_boxes):
+                tick.label1.set_visible(False)
+        figure.canvas.draw()
+        visible_tick_boxes = [
+            tick.label1.get_window_extent(renderer) for tick in ax.yaxis.get_major_ticks()
+            if tick.label1.get_visible() and tick.label1.get_text()
+        ]
+        leftmost = min(box.x0 for box in guide_boxes + visible_tick_boxes)
+        ylabel = ax.yaxis.label
+        ylabel_box = ylabel.get_window_extent(renderer)
+        anchor_x = ylabel.get_transform().transform(ylabel.get_position())[0]
+        desired_right = leftmost - ax.yaxis.labelpad * pixels_per_point
+        anchor_x += desired_right - ylabel_box.x1
+        ax.yaxis.set_label_coords((anchor_x - ax.bbox.x0) / ax.bbox.width, 0.5)
+
+    # Reference-key placement and label space can expand the final limits.
+    # Resolve the y-axis endpoint only after those layout adjustments.
+    left = ax.get_xlim()[0]
+    guide_lines = []
+    for dataset, model, throughput, dice in points:
+        line = Line2D(
+            [left, throughput], [dice, dice], color=OURS_OUTLINE_COLOR,
+            linewidth=0.65, linestyle=(0, (3, 2)), marker="none", zorder=3.5,
+        )
+        line.set_gid("dice-guide-line:{}:{}".format(dataset, model))
+        ax.add_line(line)
+        guide_lines.append(line)
+    return labels + guide_lines
+
+
 def plot_dice_vs_throughput(
     data: pd.DataFrame,
     datasets: Sequence[str],
@@ -1735,8 +1845,14 @@ def plot_dice_vs_throughput(
     memory_legend_radius_annotation: float = 1.0,
     memory_legend_title: str = DEFAULT_MEMORY_LEGEND_TITLE,
     memory_legend_compact_label: bool = False,
+    dice_guide_lines: bool = False,
+    dice_guide_labels: bool = False,
 ) -> Figure:
-    """Create the requested figure without mutating the source dataframe."""
+    """Create the figure with a shared physical memory scale and unchanged data.
+
+    ``memory_legend_radius_annotation`` is retained for call compatibility only;
+    it cannot override the memory-to-area mapping of either legend or plot.
+    """
 
     memory_scaling = memory_scaling or add_memory_legende
     reference_scale_factor = (
@@ -1996,7 +2112,6 @@ def plot_dice_vs_throughput(
             right_side=right_memory_legend,
             scale_factor=memory_scale_factor if scaled_memorey_legened else None,
             title=memory_legend_title,
-            radius_annotation=memory_legend_radius_annotation,
         )
 
     all_y_values = np.concatenate(
@@ -2090,10 +2205,13 @@ def plot_dice_vs_throughput(
         legends.append(_create_reference_memory_legend(
             ax, radius, runtime_memory, memory_scale_factor, memory_legend_font_size, legends,
             title=memory_legend_title,
-            radius_annotation=memory_legend_radius_annotation,
             compact_label=memory_legend_compact_label,
         ))
 
+    guide_obstacles = (
+        _draw_dice_guides(ax, data, selected, dice_guide_labels, axis_tick_size)
+        if dice_guide_lines else []
+    )
     if display_model_names or highlight_ours:
         _annotate_models(
             ax,
@@ -2101,7 +2219,7 @@ def plot_dice_vs_throughput(
             selected,
             annotation_size,
             memory_areas,
-            legends,
+            legends + guide_obstacles,
             paper_style,
             highlight_ours=highlight_ours,
             display_all=display_model_names,
@@ -2231,6 +2349,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 memory_legend_radius_annotation=args.memory_legend_radius_annotation,
                 memory_legend_title=args.memory_legend_title,
                 memory_legend_compact_label=args.memory_legend_compact_label,
+                dice_guide_lines=args.dice_guide_lines,
+                dice_guide_labels=args.dice_guide_labels,
             )
             save_figure(figure, pdf_path, png_path, args.paper_style)
 
@@ -2251,3 +2371,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+"""
+    #### final plot command ####
+    python tools/plot_dice_vs_throughput.py \
+    --dataset Synapse \
+    --add_memory_legende \
+    --model_center_markers \
+    --model_center_colors \
+    --model_marker_legend 5 \
+    --add_memory_legende \
+    --memory_legend_title "Peak Runtime Memory" \
+    --memory_legend_font_size 5 \
+    --radius 2 \
+    --runtime_memory 2048 \
+    --axis_label_font_size 6 \
+    --remove_title \
+    --memory_legend_compac \
+    --paper_style \
+    --output_name dice_throughput_memory
+"""
