@@ -13,6 +13,7 @@ from datasets.dataset_acdc import ACDC_Dataset, RandomGenerator4ACDC
 from datasets.dataset_cataract import Cataract1kDataset, RandomGenerator4Cataract
 from datasets.dataset_endovis2018 import EndoVis2018Dataset, RandomGenerator4EndoVis2018
 from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
+from src.se_auxiliary import save_se_metadata
 
 
 def _fast_dice(pred, gt):
@@ -350,6 +351,7 @@ def _save_periodic_checkpoint(model, args, performance, epoch_index):
     )
     os.makedirs(args.ckpt_dir, exist_ok=True)
     torch.save(model.state_dict(), local_path)
+    save_se_metadata(model, local_path)
     logging.info("save model to {}".format(local_path))
 
 
@@ -368,6 +370,7 @@ def _save_last_epoch_checkpoint(model, args, epoch_index, performance):
         + ".pth",
     )
     torch.save(model.state_dict(), local_path)
+    save_se_metadata(model, local_path)
     logging.info("save model to {}".format(local_path))
 
 
@@ -420,4 +423,5 @@ def save_checkpoint(model, args, epoch_index, mean_dice):
         args.ckpt_filename + '_best_val_dice_' + str(mean_dice) + '_epoch_' + str(epoch_index) + '_' + str(timestamp) + '.pth',
     )
     torch.save(model.state_dict(), local_path)
+    save_se_metadata(model, local_path)
     logging.info("save model to {}".format(local_path))

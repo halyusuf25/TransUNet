@@ -4,8 +4,11 @@ from torch import nn
 
 
 class SELayer(nn.Module):
-    def __init__(self, channel, reduction=16, verbose=False): #input_type can be 'feature' or 'attention_map'
+    def __init__(self, channel, reduction=16, verbose=False, pooling_mode="mean"): #input_type can be 'feature' or 'attention_map'
         super(SELayer, self).__init__()
+        if pooling_mode not in ("mean", "rms"):
+            raise ValueError("SE pooling_mode must be 'mean' or 'rms'")
+        self.pooling_mode = pooling_mode
         self.avg_pool2d = nn.AdaptiveAvgPool2d(1)
         self.avg_pool1d = nn.AdaptiveAvgPool1d(1)  # expects (B, C, N) -> (B, C, 1)
         self.verbose = verbose
@@ -18,6 +21,17 @@ class SELayer(nn.Module):
         )
 
     def forward(self, x):
+        if self.pooling_mode == "rms":
+            if x.dim() != 3:
+                raise ValueError("RMS SE expects post-block features [B,N,C]")
+            # Only the predictor is trainable through this branch. Accumulate
+            # in float32, then respect the MLP weights and active autocast mode.
+            h_aux = x.detach().float()
+            descriptor = h_aux.square().mean(dim=1).sqrt()
+            descriptor = descriptor.to(dtype=self.fc[0].weight.dtype)
+            gates = self.fc(descriptor).unsqueeze(1)
+            return x, gates
+
         if x.dim() == 3: # for feature map with shape (B, C, N)
             if self.verbose:
                 print(f"SELayer input shape: {x.shape}, will process as 3D tensor (INPUT FEATURE)")

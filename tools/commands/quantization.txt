@@ -1,0 +1,10 @@
+.venv/bin/python train.py 
+    --dataset Synapse --vit_name R50-ViT-B_16 \
+  --use_se_block --se_aux_loss --se_aux_weight 0.1 --ckpt se_aux
+
+
+
+.venv/bin/python test.py --dataset Synapse --vit_name R50-ViT-B_16 \
+  --use_se_block --quantize --ckpt_dir ckpt --ckpt YOUR_CHECKPOINT.pth
+
+  

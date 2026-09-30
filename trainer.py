@@ -13,6 +13,7 @@ from datetime import datetime
 
 from networks.distillation import KDWeights, MGD, compute_kd_loss
 from src.loss_bu import BULoss
+from src.se_aux_training import compute_se_aux_loss, validate_se_aux_args, verify_se_optimizer
 from src.trainer_helpers import (
     _append_dataset_to_checkpoint_name,
     _build_datasets,
@@ -40,6 +41,8 @@ from utils import (
 
 
 def trainer(args, model, snapshot_path, teacher_model=None):
+    validate_se_aux_args(args)
+    se_aux_enabled = bool(getattr(args, "se_aux_loss", False))
     logging.basicConfig(
         filename=snapshot_path + "/log.txt",
         level=logging.INFO,
@@ -120,6 +123,8 @@ def trainer(args, model, snapshot_path, teacher_model=None):
         weight_decay=0.0001,
     )
 
+    se_aux_block_count = verify_se_optimizer(model, optimizer) if se_aux_enabled else None
+
     writer = SummaryWriter(args.tensorboard_run_dir)
     logging.info("TensorBoard run dir: %s", args.tensorboard_run_dir)
     logging.info("{} val iterations per validation".format(len(valloader)))
@@ -168,6 +173,9 @@ def trainer(args, model, snapshot_path, teacher_model=None):
         epoch_ce_loss = 0.0
         epoch_dice_loss = 0.0
         epoch_batch_count = 0
+        epoch_base_loss = 0.0
+        epoch_se_aux_loss = 0.0
+        epoch_se_aux_weighted = 0.0
 
         for i_batch, sampled_batch in enumerate(trainloader):
             case_names = _extract_case_names(sampled_batch)
@@ -192,7 +200,10 @@ def trainer(args, model, snapshot_path, teacher_model=None):
 
             image_batch, label_batch = sampled_batch["image"], sampled_batch["label"]
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
-            outputs, _, features, _ = model(image_batch)
+            if se_aux_enabled:
+                outputs, _, features, se_gates, se_targets = model(image_batch, return_se_aux=True)
+            else:
+                outputs, _, features, _ = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
             loss_dice = dice_loss(outputs, label_batch, softmax=True)
             details = None
@@ -228,6 +239,15 @@ def trainer(args, model, snapshot_path, teacher_model=None):
                 last_bu_details = details
             else:
                 loss = (1 - lambda_) * loss_dice + lambda_ * loss_ce
+
+            if se_aux_enabled:
+                loss_base = loss
+                loss_aux = compute_se_aux_loss(se_gates, se_targets, expected_blocks=se_aux_block_count)
+                loss_aux_weighted = args.se_aux_weight * loss_aux
+                loss = loss_base + loss_aux_weighted
+                epoch_base_loss += loss_base.item()
+                epoch_se_aux_loss += loss_aux.item()
+                epoch_se_aux_weighted += loss_aux_weighted.item()
 
             epoch_total_loss += loss.item()
             epoch_ce_loss += loss_ce.item()
@@ -268,6 +288,14 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar("info/total_loss", loss, iter_num)
             writer.add_scalar("info/loss_ce", loss_ce, iter_num)
             writer.add_scalar("info/loss_dice", loss_dice, iter_num)
+            if se_aux_enabled:
+                writer.add_scalar("info/base_loss", loss_base, iter_num)
+                writer.add_scalar("info/se_aux_loss", loss_aux, iter_num)
+                writer.add_scalar("info/se_aux_weighted", loss_aux_weighted, iter_num)
+                logging.info(
+                    "epoch %d iteration %d : base_loss: %f, se_aux_loss: %f, se_aux_weighted: %f, total_loss: %f",
+                    epoch_index, iter_num, loss_base.item(), loss_aux.item(), loss_aux_weighted.item(), loss.item(),
+                )
             
             if args.use_bu_loss:
                 tau_value = float(bu_loss.get_tau().detach().item())
@@ -304,6 +332,17 @@ def trainer(args, model, snapshot_path, teacher_model=None):
             writer.add_scalar("epoch/total_loss", mean_total_loss, epoch_index)
             writer.add_scalar("epoch/loss_ce", mean_ce_loss, epoch_index)
             writer.add_scalar("epoch/loss_dice", mean_dice_loss, epoch_index)
+            if se_aux_enabled:
+                mean_base_loss = epoch_base_loss / epoch_batch_count
+                mean_se_aux_loss = epoch_se_aux_loss / epoch_batch_count
+                mean_se_aux_weighted = epoch_se_aux_weighted / epoch_batch_count
+                writer.add_scalar("epoch/base_loss", mean_base_loss, epoch_index)
+                writer.add_scalar("epoch/se_aux_loss", mean_se_aux_loss, epoch_index)
+                writer.add_scalar("epoch/se_aux_weighted", mean_se_aux_weighted, epoch_index)
+                logging.info(
+                    "epoch %d : base_loss: %f, se_aux_loss: %f, se_aux_weighted: %f, total_loss: %f",
+                    epoch_index, mean_base_loss, mean_se_aux_loss, mean_se_aux_weighted, mean_total_loss,
+                )
             
             if args.use_bu_loss:
                 tau_value = float(bu_loss.get_tau().detach().item())

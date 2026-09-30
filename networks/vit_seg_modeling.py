@@ -27,6 +27,7 @@ import yaml
 from easydict import EasyDict as edict
 from .lib import topk_indices
 from .se_block import SELayer
+from src.se_auxiliary import DEFAULT_SE_AUX_CONFIG, build_quantization_targets
 
 logger = logging.getLogger(__name__)
 
@@ -266,13 +267,61 @@ class Block(nn.Module):
         else:
             self.attn = Attention(config, vis)    
 
-    def forward(self, x, return_indices=False):
+        self.se_aux_config = {
+            key: getattr(config, "se_aux_" + key, value)
+            for key, value in DEFAULT_SE_AUX_CONFIG.items()
+        }
+        if getattr(config, "se_aux_loss", False):
+            self._validate_se_aux_layout()
+
+    def _validate_se_aux_layout(self):
+        # These classes project the complete, post-attention_norm input before
+        # any token selection. SHSA has another norm and partial channels.
+        if isinstance(self.attn, Attention):
+            projections = [self.attn.query, self.attn.key, self.attn.value]
+        elif isinstance(self.attn, (TopkAttention, ATSAttention)):
+            projections = [self.attn.qkv]
+        else:
+            raise ValueError(
+                "--se_aux_loss does not support partial-channel SHSA or unknown "
+                "attention layouts; a full-channel QKV mapping is required"
+            )
+        for projection in projections + [self.ffn.fc1]:
+            if not isinstance(projection, nn.Linear) or projection.in_features != self.hidden_size:
+                raise ValueError("SE auxiliary targets require full-channel floating-point linear projections")
+        group_size = self.se_aux_config["group_size"]
+        if group_size > 0 and self.hidden_size % group_size:
+            raise ValueError("SE auxiliary quantization group size must divide the encoder channel count")
+
+    @torch.no_grad()
+    def _se_aux_qkv_weight(self):
+        if isinstance(self.attn, Attention):
+            return torch.cat([
+                self.attn.query.weight.detach(),
+                self.attn.key.weight.detach(),
+                self.attn.value.weight.detach(),
+            ], dim=0)
+        if isinstance(self.attn, (TopkAttention, ATSAttention)):
+            return self.attn.qkv.weight.detach()
+        raise ValueError("SE auxiliary targets require a supported full-channel QKV layout")
+
+    def forward(self, x, return_indices=False, return_se_aux=False):
         # Pre-norm
         if self.args.verbose:
             print(f"Block input x shape: {x.shape}")
         # Multi-head self-attention with residual
         h = x
         x = self.attention_norm(x)
+        collect_aux = return_se_aux and self.training
+        if collect_aux and not (
+            getattr(self.args, "se_aux_loss", False) and self.args.use_se_block
+        ):
+            raise ValueError("SE auxiliary targets require both --use_se_block and --se_aux_loss")
+        if collect_aux:
+            # Compute small targets here; never cache activations or graphs.
+            target_qkv = build_quantization_targets(
+                x, self._se_aux_qkv_weight(), **self.se_aux_config
+            )
         if self.args.topk_attn > 0.0:
             # x: [B, N, D] -> [B, k, D], weights: [B, H, k, N], topk_idx: [B, k]
             x, weights, topk_idx = self.attn(x, return_indices=True)
@@ -290,14 +339,23 @@ class Block(nn.Module):
         # FFN with residual
         h = x
         x = self.ffn_norm(x)
+        if collect_aux:
+            # FFN can have fewer tokens than QKV after Top-K/ATS selection.
+            target_fc1 = build_quantization_targets(x, self.ffn.fc1.weight, **self.se_aux_config)
+            if target_qkv.shape != target_fc1.shape:
+                raise RuntimeError("QKV and FC1 SE targets must have identical [B,1,C] shapes")
+            target_block = 0.5 * (target_qkv + target_fc1)
         x = self.ffn(x)
         x = x + h
         if self.args.verbose:
             print(f"Block output x shape after FFN and residual: {x.shape}")
         
+        result = (x, weights)
         if return_indices:
-            return x, weights, topk_idx if self.args.topk_attn > 0.0 else None
-        return x, weights
+            result += (topk_idx if self.args.topk_attn > 0.0 else None,)
+        if collect_aux:
+            result += (target_block,)
+        return result
 
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
@@ -345,6 +403,16 @@ class Encoder(nn.Module):
         self.vis = vis
         self.layer = nn.ModuleList()
         self.SELayer = nn.ModuleList() if self.args.use_se_block else None
+        self.se_aux_loss = bool(getattr(config, "se_aux_loss", False))
+        if self.se_aux_loss and self.SELayer is None:
+            raise ValueError("--se_aux_loss requires --use_se_block")
+        pooling_mode = self.args.se_pooling_mode if self.args.se_aux_loss else None
+        if self.se_aux_loss and pooling_mode != "rms":
+            raise ValueError("SE auxiliary training requires RMS pooling")
+        self.se_aux_config = {
+            key: getattr(config, "se_aux_" + key, value)
+            for key, value in DEFAULT_SE_AUX_CONFIG.items()
+        }
         self.encoder_norm = LayerNorm(config.hidden_size, eps=1e-6)
         for i in range(config.transformer["num_layers"]):
             if config.use_alternate_shsa:
@@ -358,12 +426,12 @@ class Encoder(nn.Module):
             self.layer.append(copy.deepcopy(layer))
             
             if self.SELayer is not None:
-                se = SELayer(config.hidden_size)
+                se = SELayer(config.hidden_size, pooling_mode=pooling_mode)
                 self.SELayer.append(copy.deepcopy(se))
 
     
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, return_se_aux=False):
         attn_weights = []
         kept_indices = None  # absolute indices into the original (pre-prune) sequence
         absolute_indices = None
@@ -387,14 +455,21 @@ class Encoder(nn.Module):
         if not use_se:
             se_layers = [None] * len(self.layer)
         se_scale = []
-        
+        collect_aux = return_se_aux and self.training
+        if collect_aux and (not self.se_aux_loss or not use_se):
+            raise ValueError("SE auxiliary output requires enabled auxiliary training and active SE predictors")
+        if use_se and len(se_layers) != len(self.layer):
+            raise RuntimeError("Expected exactly one SE predictor per encoder block")
+        se_targets = []
+
         # for layer_block in self.layer:
         for layer_block_id, (layer_block, se_layer) in enumerate(zip(self.layer, se_layers)):
             if self.args.verbose:
                 print(f"Encoder layer#{layer_block_id} input hidden_states shape: {hidden_states.shape}")
 
             if self.args.topk_attn > 0.0:
-                hidden_states, attn, local_idx = layer_block(hidden_states, return_indices=True)
+                block_result = layer_block(hidden_states, return_indices=True, return_se_aux=collect_aux)
+                hidden_states, attn, local_idx = block_result[:3]
                 local_idx = local_idx.to(device=absolute_indices.device, dtype=torch.long)
                 if self.args.verbose:
                     print(
@@ -415,8 +490,11 @@ class Encoder(nn.Module):
                 )
                 kept_indices = absolute_indices
             else:
-                hidden_states, attn = layer_block(hidden_states)
-            
+                block_result = layer_block(hidden_states, return_se_aux=collect_aux)
+                hidden_states, attn = block_result[:2]
+            if collect_aux:
+                se_targets.append(block_result[-1])
+
             if self.args.verbose:
                 print(f"Encoder layer#{layer_block_id} output hidden_states shape: {hidden_states.shape}")
                 print(f"Encoder layer#{layer_block_id} attention weights shape: {attn.shape}")
@@ -439,7 +517,10 @@ class Encoder(nn.Module):
                 se_scale.append(scale)
         
         encoded = self.encoder_norm(hidden_states)
-        return encoded, attn_weights, kept_indices, se_scale
+        result = (encoded, attn_weights, kept_indices, se_scale)
+        if collect_aux:
+            result += (se_targets,)
+        return result
     
 class Transformer(nn.Module):
     def __init__(self, config, img_size, vis):
@@ -449,7 +530,7 @@ class Transformer(nn.Module):
         # self.embeddings = SwinTransformer(get_swin_tiny_config(), img_size=img_size, vis=vis)
         self.encoder = Encoder(config, vis)
 
-    def forward(self, input_ids):
+    def forward(self, input_ids, return_se_aux=False):
         if self.config.verbose:
             print(f"Backbone input shape: {input_ids.shape}")
             #torch.Size([2, 3, 224, 224]) = [batch, channels, height, width] → batch size 2, RGB 3 channels, 224×224 input images.
@@ -463,7 +544,8 @@ class Transformer(nn.Module):
         if self.config.verbose:
             print(f"Embedding output and Input to encoder transformer layer(0) shape: {embedding_output.shape}")
             
-        encoded, attn_weights, kept_indices, se_scale = self.encoder(embedding_output)  # (B, n_patch, hidden)
+        encoder_result = self.encoder(embedding_output, return_se_aux=return_se_aux)
+        encoded, attn_weights, kept_indices, se_scale = encoder_result[:4]
         # output ={ # to be used instead of the current return statement
         #     "encoded": encoded,
         #     "attn_weights": attn_weights,
@@ -472,7 +554,10 @@ class Transformer(nn.Module):
         #     "orig_n_patches": orig_n_patches,
         #     "se_scale": se_scale,
         # }
-        return encoded, attn_weights, features, kept_indices, orig_n_patches, se_scale
+        result = (encoded, attn_weights, features, kept_indices, orig_n_patches, se_scale)
+        if len(encoder_result) == 5:
+            result += (encoder_result[4],)
+        return result
 
 class Conv2dReLU(nn.Sequential):
     def __init__(
@@ -668,11 +753,12 @@ class VisionTransformer(nn.Module):
         )
         self.config = config
 
-    def forward(self, x):
+    def forward(self, x, return_se_aux=False):
         if x.size()[1] == 1:
             x = x.repeat(1,3,1,1)
 
-        x, attn_weights, features, kept_indices, orig_n_patches, se_scale = self.transformer(x)  # (B, n_patch, hidden)
+        transformer_result = self.transformer(x, return_se_aux=return_se_aux)
+        x, attn_weights, features, kept_indices, orig_n_patches, se_scale = transformer_result[:6]
         # If pruning occurred, scatter tokens back to the original grid length
         if kept_indices is not None:
             if x.dim() != 3:
@@ -723,6 +809,11 @@ class VisionTransformer(nn.Module):
         #     "orig_n_patches": orig_n_patches,
         #     "se_scale": se_scale,
         # }
+        if len(transformer_result) == 7:
+            # ATS can select different token counts on different replicas.
+            # Training does not consume these attention maps, whose nonbatch
+            # dimensions cannot always be gathered by DataParallel.
+            return logits, [], features, se_scale, transformer_result[6]
         return logits, attn_weights, features, se_scale
 
     def load_from(self, weights):

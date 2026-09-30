@@ -33,6 +33,7 @@ from datasets.dataset_synapse import Synapse_dataset  # noqa: E402
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg  # noqa: E402
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg  # noqa: E402
 from src.test_helpers import build_test_arg_parser  # noqa: E402
+from src.se_auxiliary import load_se_metadata  # noqa: E402
 from utils import _make_json_safe, _sanitize_name  # noqa: E402
 
 
@@ -135,6 +136,7 @@ def build_test_model(args: Any, device: str = "cuda", map_location: str | None =
     config_vit.n_skip = args.n_skip
     config_vit.use_se_block = args.use_se_block
     config_vit.drop_se_block = args.drop_se_block
+    config_vit.se_aux_loss = False
 
     config_vit.patches.size = (args.vit_patches_size, args.vit_patches_size)
     if args.num_heads is not None:
@@ -173,7 +175,11 @@ def build_test_model(args: Any, device: str = "cuda", map_location: str | None =
     load_kwargs = {}
     if map_location is not None:
         load_kwargs["map_location"] = map_location
-    model.load_state_dict(torch.load(checkpoint_path, **load_kwargs))
+    checkpoint_state = torch.load(checkpoint_path, **load_kwargs)
+    if checkpoint_state and all(name.startswith("module.") for name in checkpoint_state):
+        torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(checkpoint_state, "module.")
+    model.load_state_dict(checkpoint_state)
+    load_se_metadata(model, checkpoint_path)
     return model
 
 

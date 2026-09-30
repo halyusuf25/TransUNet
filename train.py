@@ -8,6 +8,8 @@ import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from trainer import trainer
+from src.se_aux_training import validate_se_aux_args
+from src.se_auxiliary import DEFAULT_SE_AUX_CONFIG
 from datasets.dataset_cataract import  Cataract1kDataset
 from utils import _sanitize_name
 
@@ -72,6 +74,10 @@ parser.add_argument('--gumbel_sampling_mode', type=str, default='dist', choices=
 parser.add_argument('--use_ats', action='store_true', 
                     help='whether to use Adaptive Token Sampling (ATS) for attention')
 parser.add_argument('--use_se_block', action='store_true', help='whether to use SE block in the encoder')
+parser.add_argument('--se_aux_loss', action='store_true',
+                    help='jointly train RMS-pooled SE predictors; requires --use_se_block and cannot be used with KD')
+parser.add_argument('--se_aux_weight', type=float, default=0.1,
+                    help='positive auxiliary SE loss weight (0.1 is an initial tunable value, not an established optimum)')
 parser.add_argument('--tensorboard_logdir', type=str, default='tensorboard_logs', help='root directory for TensorBoard logs',)
 parser.add_argument('--description', type=str, default='No Description', help='additional description for the training run (optional)')
 ###Teacher Model Argument:#####
@@ -145,6 +151,10 @@ parser.add_argument('--verbose_iterations', type=int, default=2,
 ###################################################
 
 args = parser.parse_args()
+try:
+    validate_se_aux_args(args)
+except ValueError as error:
+    parser.error(str(error))
 
 
 if __name__ == "__main__":
@@ -284,6 +294,12 @@ if __name__ == "__main__":
     config_vit.use_efficientnet = args.use_efficientnet
     config_vit.use_swin = args.use_swin
     config_vit.use_se_block = args.use_se_block
+    config_vit.se_aux_loss = args.se_aux_loss
+    config_vit.se_pooling_mode = "rms" if args.se_aux_loss else "mean"
+    config_vit.se_aux_bits = DEFAULT_SE_AUX_CONFIG["bits"]
+    config_vit.se_aux_group_size = DEFAULT_SE_AUX_CONFIG["group_size"]
+    config_vit.se_aux_zero_point = DEFAULT_SE_AUX_CONFIG["zero_point"]
+    config_vit.se_aux_eps = DEFAULT_SE_AUX_CONFIG["eps"]
     if args.vit_name.find('R50') != -1:
         config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()

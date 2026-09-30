@@ -9,6 +9,11 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from src.benchmark import benchmark_segmentation_model, build_benchmark_loader
+from src.se_auxiliary import (
+    DEFAULT_SE_AUX_CONFIG,
+    load_se_metadata,
+    validate_se_calibration_config,
+)
 from tqdm import tqdm
 from datasets.dataset_synapse import Synapse_dataset
 from datasets.dataset_cataract import Cataract1kDataset
@@ -396,6 +401,7 @@ def main():
     config_vit.n_skip = args.n_skip
     config_vit.use_se_block = args.use_se_block
     config_vit.drop_se_block = args.drop_se_block
+    config_vit.se_aux_loss = False
     config_vit.gumbel_sampling_mode = args.gumbel_sampling_mode
     
     config_vit.patches.size = (args.vit_patches_size, args.vit_patches_size)
@@ -437,7 +443,11 @@ def main():
     
     #get checkpoint path
     ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
-    net.load_state_dict(torch.load(ckpt_path))
+    checkpoint_state = torch.load(ckpt_path)
+    if checkpoint_state and all(name.startswith("module.") for name in checkpoint_state):
+        torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(checkpoint_state, "module.")
+    net.load_state_dict(checkpoint_state)
+    se_metadata = load_se_metadata(net, ckpt_path)
 
     log_folder = './test_log/test_log_' + args.exp
     os.makedirs(log_folder, exist_ok=True)
@@ -445,9 +455,15 @@ def main():
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
     logging.info(args.ckpt)
+    if args.use_se_block:
+        logging.info("SE pooling: %s (auxiliary training disabled)",
+                     se_metadata["pooling_mode"] if se_metadata else "mean (legacy checkpoint)")
 
 
     if args.quantize:
+        validate_se_calibration_config(net, bits=DEFAULT_SE_AUX_CONFIG["bits"],
+                                       group_size=DEFAULT_SE_AUX_CONFIG["group_size"],
+                                       zero_point=DEFAULT_SE_AUX_CONFIG["zero_point"])
         from networks.quantizer import AWQViTSegQuantizer
         if args.dataset in ['Synapse', 'ACDC']:
             db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
@@ -459,8 +475,8 @@ def main():
         quantizer = AWQViTSegQuantizer(
             model = net,
             calib_loader = calib_loader,
-            w_bit=4,
-            q_group_size=128,
+            w_bit=DEFAULT_SE_AUX_CONFIG["bits"],
+            q_group_size=DEFAULT_SE_AUX_CONFIG["group_size"],
             n_calib_batches=args.quantize_calibrate_batch_size,
             device="cuda" if torch.cuda.is_available() else "cpu",
             args=args,
