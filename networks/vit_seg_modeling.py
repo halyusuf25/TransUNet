@@ -406,7 +406,7 @@ class Encoder(nn.Module):
         self.se_aux_loss = bool(getattr(config, "se_aux_loss", False))
         if self.se_aux_loss and self.SELayer is None:
             raise ValueError("--se_aux_loss requires --use_se_block")
-        pooling_mode = self.args.se_pooling_mode if self.args.se_aux_loss else None
+        pooling_mode = getattr(config, "se_pooling_mode", "rms" if self.se_aux_loss else "mean")
         if self.se_aux_loss and pooling_mode != "rms":
             raise ValueError("SE auxiliary training requires RMS pooling")
         self.se_aux_config = {

@@ -531,7 +531,10 @@ class AWQViTSegQuantizer:
 
     @torch.no_grad()
     def _search_best_se_scales_full_model(self, blocks: List[nn.Module]) -> List[torch.Tensor]:
-        """Select the SE scale set that minimizes full-model logits MSE."""
+        """Select one case's SE gates by mean logits MSE over all cached cases."""
+        if self.n_calib_batches <= 0:
+            raise ValueError("n_calib_batches must be positive for SE calibration.")
+
         def _extract_logits(output: Any) -> torch.Tensor:
             if isinstance(output, dict):
                 if "logits" in output:
@@ -541,17 +544,7 @@ class AWQViTSegQuantizer:
             return output
 
         def _get_se_scales(output: Any) -> List[torch.Tensor]:
-            # try:
-            #     return self._extract_se_scales_from_output(output, expected_len=len(blocks))
-            # except ValueError:
-            #     if hasattr(self.model, "get_se_scale"):
-            #         candidate = self.model.get_se_scale()
-            #         if isinstance(candidate, (list, tuple)) and len(candidate) == len(blocks):
-            #             if all(torch.is_tensor(t) for t in candidate):
-            #                 return [t.detach() for t in candidate]
-            #     raise
             return self._extract_se_scales_from_output(output, expected_len=len(blocks))
-
 
         def w_quantize_func(p: torch.Tensor) -> torch.Tensor:
             return pseudo_quantize_tensor(p, n_bit=self.w_bit, **self.q_config).detach()
@@ -559,37 +552,57 @@ class AWQViTSegQuantizer:
         best_error = float("inf")
         best_scales: Optional[List[torch.Tensor]] = None
 
-        org_sd = {k: v.detach().cpu() for k, v in self.model.state_dict().items()}
+        org_sd = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+        cases: List[Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]] = []
 
-        n_seen = 0
-        for batch in self.calib_loader:
-            image = batch["image"]
-            input = self._extract_input_tensor(image).to(self.device)
+        try:
+            # Collect original references and whole candidates before changing weights.
+            # quantize() has already put the model in evaluation mode.
+            for batch in self.calib_loader:
+                input = self._extract_input_tensor(batch["image"]).to(self.device)
+                output = self.model(input)
+                cases.append((
+                    input.detach().cpu().clone(),
+                    _extract_logits(output).detach().cpu().clone(),
+                    [t.detach().cpu().clone() for t in _get_se_scales(output)],
+                ))
+                del input, output
+                if len(cases) >= self.n_calib_batches:
+                    break
 
-            output = self.model(input)
-            fp_logits = _extract_logits(output)
-            se_scales = _get_se_scales(output)
+            if not cases:
+                raise RuntimeError("SE calibration subset is empty.")
 
-            self._quantize_full_model_with_se_scales(blocks, se_scales, w_quantize_func)
-            q_output = self.model(input)
-            q_logits = _extract_logits(q_output)
-
-            loss = (fp_logits - q_logits).float().pow(2).mean().item()
-            if loss < best_error:
-                best_error = loss
-                best_scales = [t.detach().cpu() for t in se_scales]
-
-            # Restore weights between candidates.
             self.model.load_state_dict(org_sd)
+            for _, _, se_scales in cases:
+                try:
+                    self._quantize_full_model_with_se_scales(blocks, se_scales, w_quantize_func)
+                    total_error = 0.0
+                    for cpu_input, fp_logits, _ in cases:
+                        input = cpu_input.to(self.device)
+                        q_output = self.model(input)
+                        q_logits = _extract_logits(q_output)
+                        # Average each case first so volumes of different lengths
+                        # receive equal weight. Nonfinite errors invalidate the score.
+                        total_error += (
+                            fp_logits.to(q_logits.device).float() - q_logits.float()
+                        ).square().mean().item()
+                        del input, q_output, q_logits
 
-            n_seen += 1
-            if n_seen >= self.n_calib_batches:
-                break
+                    loss = total_error / len(cases)
+                    if np.isfinite(loss) and loss < best_error:
+                        best_error = loss
+                        best_scales = se_scales
+                finally:
+                    # Also restore after partial quantization or a failed forward.
+                    self.model.load_state_dict(org_sd)
 
-        if best_scales is None:
-            raise RuntimeError("Failed to find any valid SE scales for full-model selection.")
+            if best_scales is None:
+                raise RuntimeError("No finite winning score found for SE calibration.")
 
-        return best_scales
+            return best_scales
+        finally:
+            self.model.load_state_dict(org_sd)
 
     @torch.no_grad()
     def _auto_se_scale(self, blocks: List[nn.Module]):
