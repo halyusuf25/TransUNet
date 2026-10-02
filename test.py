@@ -4,6 +4,7 @@ import json
 import random
 import sys
 import numpy as np
+import gc
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
@@ -443,10 +444,19 @@ def main():
     
     #get checkpoint path
     ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
-    checkpoint_state = torch.load(ckpt_path)
-    if checkpoint_state and all(name.startswith("module.") for name in checkpoint_state):
-        torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(checkpoint_state, "module.")
+
+    checkpoint_state = torch.load(ckpt_path, map_location="cpu")
+
+    if checkpoint_state and all(
+        name.startswith("module.") for name in checkpoint_state
+    ):
+        torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(
+            checkpoint_state, "module."
+        )
+
     net.load_state_dict(checkpoint_state)
+    del checkpoint_state
+
     se_metadata = load_se_metadata(net, ckpt_path)
 
     log_folder = './test_log/test_log_' + args.exp
@@ -483,15 +493,24 @@ def main():
         )
         
         logging.info(f"Calibrating model on {len(calib_loader)} batches from test set.")
-        net = quantizer.quantize()  
-        logging.info(f"Model quantized successfully.")
-        
-        #drop SE block after quantization
-        se_layers = getattr(net.transformer.encoder, "SELayer", None)
-        if se_layers is not None:
-            del net.transformer.encoder.SELayer
-            net.transformer.encoder.args.drop_se_block = True
+        net = quantizer.quantize()
+        logging.info("Model quantized successfully.")
+
+        # Quantization is complete; SE is no longer needed.
+        encoder = net.transformer.encoder
+
+        if getattr(encoder, "SELayer", None) is not None:
+            del encoder.SELayer
+            encoder.args.drop_se_block = True
             logging.info("Dropped SE-blocks after quantization.")
+
+        # Release calibration-only objects and unused cached memory.
+        del quantizer
+        gc.collect()
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
         
     performance = inference(args, net, test_save_path=None)
