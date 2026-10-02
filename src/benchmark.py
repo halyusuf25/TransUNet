@@ -685,7 +685,10 @@ def benchmark_segmentation_model(
                     
     percentile_runs: List[Dict[str, float]] = []
     single_lat_ms: List[float] = []
+
     for _ in range(n_repeated):
+        run_lat_ms: List[float] = []
+
         if single_image_latency_samples > 0:
             it = iter(test_loader)
             collected = 0
@@ -696,19 +699,36 @@ def benchmark_segmentation_model(
                     except StopIteration:
                         it = iter(test_loader)
                         batch = next(it)
+
                     imgs = _extract_images(batch)
                     for i in range(imgs.shape[0]):
-                        x = imgs[i : i + 1].to(device, non_blocking=device.startswith("cuda"))
-                        ms = _timed_forward_gpu(model, x) if device.startswith("cuda") else _timed_forward_cpu(model, x)
-                        single_lat_ms.append(ms)
+                        x = imgs[i : i + 1].to(
+                            device,
+                            non_blocking=device.startswith("cuda"),
+                        )
+                        ms = (
+                            _timed_forward_gpu(model, x)
+                            if device.startswith("cuda")
+                            else _timed_forward_cpu(model, x)
+                        )
+                        run_lat_ms.append(ms)
                         collected += 1
                         if collected >= single_image_latency_samples:
                             break
-        percentile_runs.append(_percentiles(single_lat_ms) if len(single_lat_ms) else {})
 
-    percentiles = percentile_runs[0]
+        single_lat_ms.extend(run_lat_ms)
+        percentile_runs.append(
+            _percentiles(run_lat_ms) if run_lat_ms else {}
+        )
+
+    mean_latency_single_image_summary = (
+        _run_summary(single_lat_ms)
+        if single_lat_ms
+        else {"runs": [], "mean": float("nan"), "std": float("nan")}
+    )
+
+    percentiles = dict(percentile_runs[0])
     if repeated_runs > 1:
-        mean_latency_single_image_summary = _run_summary(single_lat_ms)
         for q in (50, 90, 95, 99):
             percentile_key = f"p{q}"
             metric_key = f"latency_ms_p{q}"
@@ -726,8 +746,8 @@ def benchmark_segmentation_model(
     metrics = {
         "throughput_img_s_batch36": throughput_img_s,
         "latency_ms_mean_batch36": mean_latency_ms_per_image,
-        "latency_ms_mean_single": mean_latency_single_image_summary["mean"] if repeated_runs > 1 else mean_latency_ms_per_image,
-        "latency_ms_std_single": mean_latency_single_image_summary["std"] if repeated_runs > 1 else float("nan"),
+        "latency_ms_mean_single": mean_latency_single_image_summary["mean"],
+        "latency_ms_std_single": mean_latency_single_image_summary["std"],
         "latency_ms_p50": percentiles.get("p50", float("nan")),
         "latency_ms_p90": percentiles.get("p90", float("nan")),
         "latency_ms_p95": percentiles.get("p95", float("nan")),

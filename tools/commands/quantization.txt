@@ -60,13 +60,12 @@ CUDA_VISIBLE_DEVICES=5 .venv/bin/python test.py \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --repeated_runs 10 \
-       --
        --benchmark_dict benchmark_quantize/ \
        --use_se_block \
        --quantize \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_ACDC \
-       --ckpt SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth
+       --ckpt SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth \
        --description "evaluating Transunet on ACDC with SE-guided quantization using se_loss"
 
 
@@ -81,12 +80,12 @@ CUDA_VISIBLE_DEVICES=1 .venv/bin/python test.py \
        --quantize \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_Synapse \
-       --ckpt SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth
+       --ckpt SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth \
        --description "evaluating Transunet on Synapse with SE-guided quantization using se_loss"
 
 
 # Cataract1k
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python test.py \
+CUDA_VISIBLE_DEVICES=0 python test.py \
        --dataset Cataract1k \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
@@ -96,5 +95,5 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python test.py \
        --quantize \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_Cataract1k \
-       --ckpt SELoss_Cataract1k__best_val_dice_0.942674332857132_epoch_259_20260930_200930.pth
+       --ckpt SELoss_Cataract1k__best_val_dice_0.942674332857132_epoch_259_20260930_200930.pth \
        --description "Transunet SE-guided quantization using se_loss"
