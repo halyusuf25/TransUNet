@@ -73,8 +73,10 @@ def _fallback_acdc_voxelspacing_zyx(args, case_name):
 
 def add_quantization_args(parser):
     parser.add_argument('--quantize', action='store_true', help='whether to quantize the model')
+    parser.add_argument('--quantize_backend', choices=['legacy', 'inc_awq'], default='legacy',
+                        help='quantization backend (used only with --quantize)')
     parser.add_argument('--quantize_calibrate_batch_size', type=int, default=8,
-                        help='batch size for calibration (default: 8)')
+                        help='number of calibration loader batches (default: 8)')
     parser.add_argument('--drop_se_block', action='store_true', help='whether to drop SE block during quantization')
     return parser
 

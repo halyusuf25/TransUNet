@@ -471,10 +471,6 @@ def main():
 
 
     if args.quantize:
-        validate_se_calibration_config(net, bits=DEFAULT_SE_AUX_CONFIG["bits"],
-                                       group_size=DEFAULT_SE_AUX_CONFIG["group_size"],
-                                       zero_point=DEFAULT_SE_AUX_CONFIG["zero_point"])
-        from networks.quantizer import AWQViTSegQuantizer
         if args.dataset in ['Synapse', 'ACDC']:
             db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
         elif args.dataset in ['Cataract1k', 'EndoVis2018']:
@@ -482,18 +478,26 @@ def main():
 
         calib_loader = DataLoader(db_calib, batch_size=1, shuffle=False, num_workers=1)
  
-        quantizer = AWQViTSegQuantizer(
-            model = net,
-            calib_loader = calib_loader,
-            w_bit=DEFAULT_SE_AUX_CONFIG["bits"],
-            q_group_size=DEFAULT_SE_AUX_CONFIG["group_size"],
-            n_calib_batches=args.quantize_calibrate_batch_size,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            args=args,
-        )
-        
-        logging.info(f"Calibrating model on {len(calib_loader)} batches from test set.")
-        net = quantizer.quantize()
+        if args.quantize_backend == "inc_awq":
+            from src.inc_awq import quantize_inc_awq
+            net = quantize_inc_awq(net, calib_loader, args.quantize_calibrate_batch_size, args)
+        else:
+            validate_se_calibration_config(net, bits=DEFAULT_SE_AUX_CONFIG["bits"],
+                                           group_size=DEFAULT_SE_AUX_CONFIG["group_size"],
+                                           zero_point=DEFAULT_SE_AUX_CONFIG["zero_point"])
+            from networks.quantizer import AWQViTSegQuantizer
+            quantizer = AWQViTSegQuantizer(
+                model = net,
+                calib_loader = calib_loader,
+                w_bit=DEFAULT_SE_AUX_CONFIG["bits"],
+                q_group_size=DEFAULT_SE_AUX_CONFIG["group_size"],
+                n_calib_batches=args.quantize_calibrate_batch_size,
+                device="cuda" if torch.cuda.is_available() else "cpu",
+                args=args,
+            )
+            logging.info(f"Calibrating model on {len(calib_loader)} batches from test set.")
+            net = quantizer.quantize()
+            del quantizer
         logging.info("Model quantized successfully.")
 
         # Quantization is complete; SE is no longer needed.
@@ -505,7 +509,6 @@ def main():
             logging.info("Dropped SE-blocks after quantization.")
 
         # Release calibration-only objects and unused cached memory.
-        del quantizer
         gc.collect()
 
         if torch.cuda.is_available():
@@ -523,13 +526,13 @@ def main():
     results = benchmark_segmentation_model(
         model=net,
         test_loader=test_loader_bench,                 # real test samples
-        device="cuda" if args.quantize else ("cuda" if torch.cuda.is_available() else "cpu"),
+        device="cuda" if args.quantize and args.quantize_backend == "legacy" else str(next(net.parameters()).device),
         warmup_steps=20,                               # stabilize kernels
         measure_batches=50,                            # how many batches to time
         single_image_latency_samples=1000,              # B=1 latency percentiles
         enable_cudnn_benchmark=True,                   # True if fixed image size
         autocast=False,                                # set True to benchmark AMP
-        quantized_model=args.quantize,
+        quantized_model=args.quantize and args.quantize_backend == "legacy",  # WQLinear counting only; INC is QDQ
         args=args,
     )
 
