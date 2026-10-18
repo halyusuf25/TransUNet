@@ -12,3 +12,7 @@ pandas
 matplotlib
 timm
 easydict
+neural-compressor==3.10
+fvcore
+thop
+transformers

@@ -131,7 +131,8 @@ CUDA_VISIBLE_DEVICES=3 .venv/bin/python test.py \
        --ckpt SELoss_Synapse__best_val_dice_0.7756322622299194_epoch_52_20260930_170246.pth \
        --description "evaluating Transunet on Synapse with SE-guided quantization using se_loss"
 
-best ckpt SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth
+best ckpt     SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth
+              SELoss_Synapse__best_val_dice_0.773414134979248_epoch_49_20260930_170032.pth
 
 # Cataract1k
 CUDA_VISIBLE_DEVICES=0 python test.py \
@@ -144,16 +145,61 @@ CUDA_VISIBLE_DEVICES=0 python test.py \
        --quantize \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_Cataract1k \
-       --ckpt SELoss_Cataract1k__best_val_dice_0.9240760487814744_epoch_163_20260930_184630.pth \
+       --ckpt SELoss_Cataract1k__best_val_dice_0.9095662400126457_epoch_142_20260930_182827.pth \
        --description "Transunet on Cataract1k SE-guided quantization using se_loss"
 
 
-best ckpt SELoss_Cataract1k__best_val_dice_0.942674332857132_epoch_259_20260930_200930.pth
+best ckpt     SELoss_Cataract1k__best_val_dice_0.942674332857132_epoch_259_20260930_200930.pth
+              SELoss_Cataract1k__best_val_dice_0.9240760487814744_epoch_163_20260930_184630.pth
 
 
 
 
 
+
+
+# INC AWQ calibration followed by packed WQLinear INT4 CUDA inference.
+# Activate Python >=3.11 with neural-compressor==3.10 and the existing awq==0.1.0
+# checkout; rebuild awq/kernels for that interpreter/PyTorch/CUDA environment.
+# --use_se_block loads the SE checkpoint; calibration remains independent of SE gates.
+CUDA_VISIBLE_DEVICES=3 python test.py \
+       --dataset ACDC \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_inc_awq_packed/ \
+       --use_se_block \
+       --quantize --quantize_backend inc_awq_packed \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_ACDC \
+       --ckpt SELoss_ACDC__best_val_dice_0.8944082856178284_epoch_40_20260930_150207.pth \
+       --description "INC activation-aware AWQ calibration with packed WQLinear INT4 CUDA inference"
+
+CUDA_VISIBLE_DEVICES=4 python test.py \
+       --dataset Synapse \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_inc_awq_packed/ \
+       --use_se_block \
+       --quantize --quantize_backend inc_awq_packed \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Synapse \
+       --ckpt SELoss_Synapse__best_val_dice_0.773414134979248_epoch_49_20260930_170032.pth \
+       --description "INC activation-aware AWQ calibration with packed WQLinear INT4 CUDA inference"
+
+CUDA_VISIBLE_DEVICES=5 python test.py \
+       --dataset Cataract1k \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_inc_awq_packed/ \
+       --use_se_block \
+       --quantize --quantize_backend inc_awq_packed \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Cataract1k \
+       --ckpt SELoss_Cataract1k__best_val_dice_0.9095662400126457_epoch_142_20260930_182827.pth \
+       --description "INC activation-aware AWQ calibration with packed WQLinear INT4 CUDA inference"
 
 
 AWQ using intel library
@@ -204,3 +250,9 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
        --ckpt SELoss_Cataract1k__best_val_dice_0.9240760487814744_epoch_163_20260930_184630.pth \
        --description "Transunet on Cataract1k using AWQ"
 
+
+
+
+python tools/generate_quantization_table.py bench_qunat \
+  --output_directory latex \
+  --output performance_quantization.tex

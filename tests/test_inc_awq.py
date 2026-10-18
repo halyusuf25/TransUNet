@@ -83,15 +83,22 @@ class INCAWQTests(unittest.TestCase):
         # A fresh interpreter also catches accidental eager imports in test.py.
         script = """
 import importlib.abc
+import importlib.util
 import sys
-class RejectOptional(importlib.abc.MetaPathFinder):
+class RejectOptional(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.split('.')[0] in {'awq', 'neural_compressor'}:
-            raise AssertionError('Unexpected optional import: ' + fullname)
+            # Third-party availability probes may call find_spec without importing.
+            return importlib.util.spec_from_loader(fullname, self)
+    def create_module(self, spec):
+        return None
+    def exec_module(self, module):
+        raise AssertionError('Unexpected optional import: ' + module.__name__)
 sys.meta_path.insert(0, RejectOptional())
 import src.inc_awq
 import test
 assert 'networks.quantizer' not in sys.modules
+assert not {'awq', 'neural_compressor'} & sys.modules.keys()
 """
         result = subprocess.run(
             [sys.executable, "-c", script],

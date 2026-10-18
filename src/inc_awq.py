@@ -1,7 +1,8 @@
-"""Optional INC 3.10 activation-aware AWQ with INC-recovered floating-point QDQ."""
+"""INC AWQ calibration with floating QDQ or the existing packed WQLinear kernels."""
 
 import logging
 import re
+from importlib.metadata import version
 from itertools import islice
 
 import numpy as np
@@ -104,6 +105,150 @@ def _retain_inc_qdq(model, selected_dtypes):
             setattr(model.get_submodule(parent), child, linear)
 
 
+class _InputCastWQLinear(nn.Module):
+    """Keep the surrounding model dtype; the existing CUDA kernels consume FP16."""
+
+    def __init__(self, inner):
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, x):
+        device = self.inner.qweight.device
+        # The extension launches on the current device/default CUDA stream.
+        with torch.cuda.device(device):
+            if torch.cuda.current_stream(device) != torch.cuda.default_stream(device):
+                raise RuntimeError("inc_awq_packed WQLinear requires the default CUDA stream")
+            x = x.to(device=device, dtype=torch.float16).contiguous()
+            rows = x.numel() // x.shape[-1]
+            if rows >= 8:
+                # The installed GEMM leaves masked row tails uninitialized, and
+                # its <=32-row split-K path uses uninitialized semaphores. Full
+                # 64-row tiles avoid both while preserving original token order.
+                shape = x.shape[:-1]
+                x = x.reshape(rows, x.shape[-1])
+                padded_rows = ((rows + 63) // 64) * 64
+                # The 128-row branch prefetches three 128-wide K tiles. For
+                # K=256 use the 192-row branch, whose K tiles are only 64 wide.
+                if self.inner.in_features == 256 and padded_rows == 128:
+                    padded_rows = 192
+                x = torch.nn.functional.pad(x, (0, 0, 0, padded_rows - rows))
+                return self.inner(x)[:rows].reshape(*shape, self.inner.out_features)
+            return self.inner(x)
+
+
+def _load_packed_backend(model, selected):
+    """Fail before calibration for unsupported dependencies, devices or layouts."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("inc_awq_packed requires CUDA; use a CUDA-enabled PyTorch environment and visible NVIDIA GPU")
+    device = next(model.parameters()).device
+    if device.type != "cuda":
+        raise ValueError("inc_awq_packed requires the inference model on CUDA before calibration")
+    if torch.cuda.get_device_capability(device)[0] < 8:
+        raise ValueError("inc_awq_packed requires SM80+ (Ampere or newer) for the installed WQLinear CUDA kernels")
+    if torch.cuda.current_stream(device) != torch.cuda.default_stream(device):
+        raise RuntimeError("inc_awq_packed calibration/inference requires the default CUDA stream")
+    if version("neural-compressor") != "3.10":
+        raise RuntimeError("inc_awq_packed supports neural-compressor==3.10; install it in Python >=3.11")
+    for name in selected:
+        layer = model.get_submodule(name)
+        # GEMM uses 128-wide output tiles without tail masking; checking only
+        # WQLinear's Python constructor's out_features % 8 is insufficient.
+        # The 8..32-row GEMM path also splits K in two 128-wide tiles.
+        if layer.in_features % 256 or layer.out_features % 128:
+            raise ValueError(f"inc_awq_packed requires input width divisible by 256 and output width by 128: {name}")
+    try:
+        from awq.quantize import qmodule
+    except (ImportError, OSError) as exc:
+        raise ImportError(
+            "inc_awq_packed requires the existing llm-awq WQLinear backend (awq==0.1.0) "
+            "and awq_inference_engine built for this Python/PyTorch/CUDA environment. "
+            "Install the repository's AWQ checkout and build its awq/kernels extension; AutoAWQ is not compatible."
+        ) from exc
+    required = ("WQLinear", "pack_intweight", "calculate_zeros_width")
+    engine = getattr(qmodule, "awq_inference_engine", None)
+    if (not all(callable(getattr(qmodule, name, None)) for name in required)
+            or not all(callable(getattr(engine, name, None)) for name in
+                       ("gemv_forward_cuda_new", "gemm_forward_cuda_new"))):
+        raise RuntimeError("inc_awq_packed requires WQLinear's INT16 packing API and GEMV/GEMM *_cuda_new kernels; rebuild the supported AWQ backend")
+    try:
+        probe = qmodule.WQLinear(4, 128, 256, 128, False, device, dtype=torch.float16)
+        packed = qmodule.pack_intweight(torch.zeros(128, 256, dtype=torch.int32), interleave=4, kstride=64)
+        if (probe.qweight.dtype != torch.int16 or probe.qweight.shape != (32, 256)
+                or packed.dtype != torch.int16 or packed.shape != probe.qweight.shape
+                or probe.scales.shape != (8, 128) or probe.scaled_zeros.shape != probe.scales.shape):
+            raise ValueError("unexpected packing buffer layout")
+        # Check the loaded extension on the actual device before modifying the
+        # model, including both dispatch branches and build/architecture support.
+        with torch.cuda.device(device):
+            for rows in (1, 8):
+                output = _InputCastWQLinear(probe)(torch.zeros(rows, 256, device=device, dtype=torch.float16))
+                if output.shape != (rows, 128) or not torch.equal(output, torch.zeros_like(output)):
+                    raise ValueError("CUDA kernel probe did not return the expected zero output")
+        torch.cuda.synchronize(device)
+    except (TypeError, AttributeError, AssertionError, ValueError, RuntimeError) as exc:
+        raise RuntimeError("inc_awq_packed WQLinear layout/kernel check failed; rebuild the supported awq/kernels extension for this GPU and PyTorch") from exc
+    return qmodule
+
+
+@torch.no_grad()
+def _pack_inc_linear(module, qmodule):
+    """Repack INC integer codes verbatim; never quantize floating weights again."""
+    from neural_compressor.torch.algorithms.weight_only.modules import INCWeightOnlyLinear
+
+    if (not isinstance(module, INCWeightOnlyLinear) or module.bits != 4
+            or module.group_size != 128 or module.dtype != "int"
+            or getattr(module, "enable_w4a8", False)
+            or module.in_features % 256 or module.out_features % 128):
+        raise ValueError("inc_awq_packed expected an INC INT4/group-128 linear with aligned dimensions")
+    params = module.unpack()
+    codes, scales, zeros = params["int_weight"], params["scales"], params["zp"]
+    n, k = module.out_features, module.in_features
+    if codes.shape != (n, k) or scales.shape != (n, k // 128) or zeros is None or zeros.shape != scales.shape:
+        raise ValueError("inc_awq_packed received unsupported INC integer/scale/zero-point shapes")
+    group_index = params.get("g_idx")
+    if group_index is not None and not torch.equal(group_index, torch.arange(k, device=group_index.device) // 128):
+        raise ValueError("inc_awq_packed does not support reordered INC input-channel groups")
+    if (codes.is_floating_point() or zeros.is_floating_point()
+            or bool(((codes < 0) | (codes > 15)).any()) or bool(((zeros < 0) | (zeros > 15)).any())):
+        raise ValueError("inc_awq_packed requires unsigned 4-bit integer codes and actual zero points in [0, 15]")
+    if scales.dtype != torch.float16 or not bool(torch.isfinite(scales).all()) or bool((scales <= 0).any()):
+        raise ValueError("inc_awq_packed requires finite positive FP16 INC group scales without dtype conversion")
+    bias = params.get("bias")
+    packed = qmodule.WQLinear(4, 128, k, n, bias is not None, codes.device, dtype=torch.float16)
+    packed.qweight.copy_(qmodule.pack_intweight(codes.to(torch.int32).contiguous(), interleave=4, kstride=64))
+    # INC unpack() already undoes optimum-format's stored (zero_point - 1).
+    # WQLinear kernels reconstruct code * scale + scaled_zeros. Group metadata
+    # is transposed and zero-padded; these are NOT MulLinear's channel scales.
+    packed.scales[:k // 128].copy_(scales.T)
+    offsets = -(scales.float() * zeros.float()).to(torch.float16)
+    if not bool(torch.isfinite(offsets).all()):
+        raise ValueError("inc_awq_packed zero-point offsets overflow FP16")
+    packed.scaled_zeros[:k // 128].copy_(offsets.T)
+    if bias is not None:
+        if bias.dtype != torch.float16 or bias.shape != (n,) or not bool(torch.isfinite(bias).all()):
+            raise ValueError("inc_awq_packed requires finite FP16 INC bias")
+        packed.bias.copy_(bias)
+    return _InputCastWQLinear(packed).eval()
+
+
+def _retain_inc_packed(model, selected_dtypes, qmodule):
+    """Replace every selected INC linear; preserve folded norms and MulLinear."""
+    from neural_compressor.torch.algorithms.weight_only.modules import MulLinear
+
+    replacements = []
+    for name in selected_dtypes:
+        module = model.get_submodule(name)
+        if isinstance(module, MulLinear):
+            name += ".linear"
+            module = module.linear
+        replacements.append((name, _pack_inc_linear(module, qmodule)))
+    for name, packed in replacements:
+        parent, _, child = name.rpartition(".")
+        setattr(model.get_submodule(parent), child, packed)
+    logging.info("inc_awq_packed converted all %d selected layers to WQLinear INT4 buffers; "
+                 "FP16 CUDA compute, no floating weight matrices or INC weight caches retained", len(replacements))
+
+
 def _calibration_images(image, args):
     """Match existing order-3 volume/frame resizing without importing legacy AWQ.
 
@@ -138,6 +283,7 @@ def quantize_inc_awq(model, calib_loader, n_calib_batches, args):
     selected = select_inc_awq_layers(model)
     if n_calib_batches < 1:
         raise ValueError("--quantize_calibrate_batch_size must be a positive number of loader batches")
+    packed_backend = getattr(args, "quantize_backend", "inc_awq") == "inc_awq_packed"
     try:
         from neural_compressor.torch.quantization import AWQConfig, quantize
         from neural_compressor.torch.utils import get_accelerator
@@ -148,9 +294,11 @@ def quantize_inc_awq(model, calib_loader, n_calib_batches, args):
             "python -m pip install neural-compressor==3.10 prettytable psutil py-cpuinfo pydantic packaging"
         ) from exc
 
+    qmodule = _load_packed_backend(model, selected) if packed_backend else None
     logging.info("INC AWQ selected %d encoder layers:\n%s", len(selected), "\n".join(selected))
-    logging.info("INC AWQ uses activation calibration independent of SE gates; recovered W4 QDQ "
-                 "retains floating-point weights/compute, not packed INT4 storage or accelerated INT4 inference.")
+    logging.info("INC AWQ uses activation calibration independent of SE gates; %s",
+                 "inc_awq_packed: packed WQLinear INT4 weights with FP16 CUDA kernels" if packed_backend else
+                 "inc_awq: recovered W4 QDQ retains floating-point weights/compute, not packed INT4 inference")
     model.eval()
     device = next(model.parameters()).device
     # Cache only embeddings. INC will capture/replay every batch through the real
@@ -191,7 +339,10 @@ def quantize_inc_awq(model, calib_loader, n_calib_batches, args):
     try:
         adapter.to(inc_device)
         quantize(adapter, config, run_fn=calibrate, example_inputs=tokens[0][:1].to(inc_device), inplace=True)
-        _retain_inc_qdq(adapter, selected_dtypes)
+        if packed_backend:
+            _retain_inc_packed(adapter, selected_dtypes, qmodule)
+        else:
+            _retain_inc_qdq(adapter, selected_dtypes)
     finally:
         # INC temporarily replaces the first block's forward while capturing.
         # Remove its interception even if calibration/conversion raises.

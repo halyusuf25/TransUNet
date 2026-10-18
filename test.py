@@ -471,6 +471,7 @@ def main():
 
 
     if args.quantize:
+        logging.info("Quantization backend: %s", args.quantize_backend)
         if args.dataset in ['Synapse', 'ACDC']:
             db_calib = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
         elif args.dataset in ['Cataract1k', 'EndoVis2018']:
@@ -478,7 +479,7 @@ def main():
 
         calib_loader = DataLoader(db_calib, batch_size=1, shuffle=False, num_workers=1)
  
-        if args.quantize_backend == "inc_awq":
+        if args.quantize_backend in ("inc_awq", "inc_awq_packed"):
             from src.inc_awq import quantize_inc_awq
             net = quantize_inc_awq(net, calib_loader, args.quantize_calibrate_batch_size, args)
         else:
@@ -526,13 +527,13 @@ def main():
     results = benchmark_segmentation_model(
         model=net,
         test_loader=test_loader_bench,                 # real test samples
-        device="cuda" if args.quantize and args.quantize_backend == "legacy" else str(next(net.parameters()).device),
+        device=str(next(net.parameters()).device),
         warmup_steps=20,                               # stabilize kernels
         measure_batches=50,                            # how many batches to time
         single_image_latency_samples=1000,              # B=1 latency percentiles
         enable_cudnn_benchmark=True,                   # True if fixed image size
         autocast=False,                                # set True to benchmark AMP
-        quantized_model=args.quantize and args.quantize_backend == "legacy",  # WQLinear counting only; INC is QDQ
+        quantized_model=args.quantize and args.quantize_backend in ("legacy", "inc_awq_packed"),  # WQLinear kernels/counting
         args=args,
     )
 
