@@ -101,10 +101,11 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
 
 using SE-guided qunatization.
 # ACDC
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python test.py \
+CUDA_VISIBLE_DEVICES=4 python test.py \
        --dataset ACDC \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
+       --acdc_zspacing 5 \
        --repeated_runs 10 \
        --benchmark_dict benchmark_quantize_newSELoss/ \
        --use_se_block \
@@ -112,24 +113,13 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python test.py \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_ACDC \
        --ckpt SELoss_ACDC__best_val_dice_0.8944082856178284_epoch_40_20260930_150207.pth \
-       --description "evaluating Transunet on ACDC with SE-guided quantization using se_loss"
+       --description "evaluating Transunet on ACDC with SE-guided quantization using se_loss (legacy)"
 
 #best ckpt SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth
 
 
 # Synapse
-CUDA_VISIBLE_DEVICES=3 .venv/bin/python test.py \
-       --dataset Synapse \
-       --vit_name R50-ViT-B_16 \
-       --img_size 224 \
-       --repeated_runs 10 \
-       --benchmark_dict benchmark_quantize_newSELoss/ \
-       --use_se_block \
-       --quantize \
-       --quantize_calibrate_batch_size 8 \
-       --ckpt_dir ckpt/ckpt_Synapse \
-       --ckpt SELoss_Synapse__best_val_dice_0.7756322622299194_epoch_52_20260930_170246.pth \
-       --description "evaluating Transunet on Synapse with SE-guided quantization using se_loss"
+ 
 
 best ckpt     SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth
               SELoss_Synapse__best_val_dice_0.773414134979248_epoch_49_20260930_170032.pth
@@ -162,10 +152,11 @@ best ckpt     SELoss_Cataract1k__best_val_dice_0.942674332857132_epoch_259_20260
 # Activate Python >=3.11 with neural-compressor==3.10 and the existing awq==0.1.0
 # checkout; rebuild awq/kernels for that interpreter/PyTorch/CUDA environment.
 # --use_se_block loads the SE checkpoint; calibration remains independent of SE gates.
-CUDA_VISIBLE_DEVICES=3 python test.py \
+CUDA_VISIBLE_DEVICES=4 python test.py \
        --dataset ACDC \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
+       --acdc_zspacing 5 \
        --repeated_runs 10 \
        --benchmark_dict benchmark_inc_awq_packed/ \
        --use_se_block \
@@ -204,10 +195,11 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
 
 AWQ using intel library
 # ACDC
-CUDA_VISIBLE_DEVICES=3 .venv/bin/python test.py \
+CUDA_VISIBLE_DEVICES=5 python test.py \
        --dataset ACDC \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
+       --acdc_zspacing 5 \
        --repeated_runs 10 \
        --benchmark_dict benchmark_quantize_newSELoss/ \
        --use_se_block \
@@ -216,7 +208,7 @@ CUDA_VISIBLE_DEVICES=3 .venv/bin/python test.py \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_ACDC \
        --ckpt SELoss_ACDC__best_val_dice_0.8944082856178284_epoch_40_20260930_150207.pth \
-       --description "evaluating Transunet on ACDC with AWQ quantization"
+       --description "evaluating Transunet on ACDC with AWQ quantization (inc_awq)"
 
 
 # Synapse

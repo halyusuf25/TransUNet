@@ -111,6 +111,96 @@ target support for fused attention does not add deployment support for those
 variants. Its calibration input reader also does not currently support
 EndoVis2018. Real quantization still requires the existing AWQ/CUDA dependencies.
 
+### Optional Intel Neural Compressor AWQ
+
+`--quantize_backend` defaults to `legacy`; selecting `inc_awq` only takes effect
+with `--quantize`. INC uses standard activation-aware AWQ with automatic scaling
+and clipping, independent of SE gates. `--use_se_block` still loads SE checkpoint
+weights and pooling metadata; the existing inference path removes the predictors
+after quantization. The SE target normalization (`eps=1e-12`) is unchanged and is
+not passed to INC.
+
+Target version: **neural-compressor 3.10**, which requires **Python >=3.11**.
+Install in an environment containing the repository's PyTorch/model dependencies:
+
+```bash
+python -m pip install neural-compressor==3.10 prettytable psutil py-cpuinfo pydantic packaging
+```
+
+The optional dependency is imported only when this backend runs. No legacy
+`awq` package is required. The explicit support packages avoid the unrelated
+`torchao` dependency pulled in by INC's `[pt]` extra; no repository dependency
+versions are changed. On Python 3.12, the existing `thop` package also needs
+`setuptools` for its `distutils` import.
+
+The backend selects only `transformer.encoder.layer.*.attn.query/key/value/out`
+for standard attention, or `attn.qkv/proj` for Top-K/Gumbel/ATS, plus `ffn.fc1/fc2`.
+It reports every selected name and rejects SHSA, Swin, nonhybrid embeddings,
+unknown/replaced encoder layouts, and input widths not divisible by 128 before quantization. The tested
+model structure is the repository's ResNet/ViT hybrid with the original encoder,
+decoder and segmentation head. Pruning and the encoder's token-index composition
+remain active. A temporary adapter exposes the original blocks to INC, so its
+first-`ModuleList` discovery cannot select the backbone, SE predictors or decoder.
+
+Settings are asymmetric W4, `group_size=128`, `group_dim=1`, `dtype="int"`,
+`use_auto_scale=True`, `use_auto_clip=True`, and `folding=False`. The final
+**QDQ representation retains floating-point weights and computation**, including
+compensating input scales/`MulLinear` wrappers. INC 3.10's final conversion packs
+weights despite AWQ requesting `return_int=False`; the integration materializes
+INC's own `recover()` output in floating-point linears inside those wrappers.
+This preserves INC's quantized values without a second quantization algorithm.
+The resulting model is neither packed INT4 storage
+nor accelerated INT4 inference. Benchmarks use the existing floating-point/QDQ
+counting path; their `quantized_model` note refers specifically to legacy
+`WQLinear` counting. Saved arguments record `quantize_backend=inc_awq`.
+
+Calibration reuses the test split and order-3 image resizing, including optional
+frame normalization. `--quantize_calibrate_batch_size` counts **loader batches**
+(one whole volume with all slices, or one frame), not images or slices. Every
+requested batch is used under `eval()`/`no_grad()`; a short loader raises an error.
+For example, with the existing CUDA test pipeline and an SE checkpoint:
+
+```bash
+python test.py --dataset Synapse --vit_name R50-ViT-B_16 \
+  --volume_path /path/to/test_vol_h5 --list_dir lists/lists_Synapse \
+  --ckpt_dir ckpt --ckpt YOUR_CHECKPOINT.pth --use_se_block \
+  --quantize --quantize_backend inc_awq --quantize_calibrate_batch_size 8
+```
+
+Omit `--use_se_block` for a baseline checkpoint. The backend itself also supports
+CPU calibration/forward; `test.py` retains the repository's CUDA model-loading
+and volumetric-inference requirements.
+
+```bash
+python -m unittest discover -s tests -p test_inc_awq.py -v
+```
+
+These checks cover default arguments, lazy imports without either quantizer
+package, explicit layer selection/rejection, and real INC calibration followed
+by finite segmentation outputs and pruning-index checks. The real INC check
+reports a skip when the optional package is absent.
+
+Initial QDQ-only validation used Python 3.12.14, `neural-compressor==3.10`, PyTorch 2.3.0+cpu,
+torchvision 0.18.0+cpu and NumPy 1.26.4 in an isolated environment. Real INC
+calibration and segmentation forwards passed for standard, Top-K, Gumbel and
+ATS attention, including exact CPU agreement between INC's floating forward
+and the materialized QDQ projections. Those initial checks did not include CUDA,
+full-dataset accuracy or throughput. See the [INC documentation](https://intel.github.io/neural-compressor/latest/docs/source/Welcome.html)
+for the public PyTorch quantization API.
+
+`--quantize --quantize_backend inc_awq_packed` reuses the same INC calibration
+and repacks INC's existing integer codes/scales/zero points into the installed
+`awq.quantize.qmodule.WQLinear` layout. It preserves compensation wrappers and
+uses contiguous FP16 inputs to the INT4-weight CUDA kernels. This path requires
+INC 3.10, the existing llm-awq 0.1.0 packing API and a compatible compiled CUDA
+extension on SM80+ GPUs, with input widths divisible by 256 and output widths
+by 128. It validates dependencies before calibration and never falls back to
+QDQ. Both `legacy` and `inc_awq_packed` use the existing WQLinear benchmark
+handling; `inc_awq` remains floating QDQ. See
+[packed backend validation](docs/inc_awq_packed_validation.md) for dependency
+identities, numerical checks, benchmark commands/results and limitations, and
+[quantization commands](tools/commands/quantization.txt) for an ACDC example.
+
 Run the focused synthetic checks (no datasets or pretrained weights needed):
 
 ```bash
