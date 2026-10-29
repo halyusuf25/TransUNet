@@ -479,6 +479,13 @@ class AWQViTSegQuantizer:
 
         return scales_list
 
+    @staticmethod
+    def _attention_layout(blk: nn.Module) -> Tuple[Tuple[str, ...], str]:
+        """Return attention input and output projection names, relative to attn."""
+        if hasattr(blk.attn, "qkv") and hasattr(blk.attn, "proj"):
+            return ("qkv",), "proj"
+        return ("query", "key", "value"), "out"
+
     @torch.no_grad()
     def _quantize_full_model_with_se_scales(
         self,
@@ -503,7 +510,8 @@ class AWQViTSegQuantizer:
             se_vec = self._se_scale_to_vec(se_scale).detach()
 
             if hasattr(blk, "attn"):
-                for name in ["query", "key", "value"]:
+                input_names, output_name = self._attention_layout(blk)
+                for name in input_names:
                     if hasattr(blk.attn, name) and isinstance(getattr(blk.attn, name), nn.Linear):
                         fc = getattr(blk.attn, name)
                         if _should_quantize(fc):
@@ -511,8 +519,8 @@ class AWQViTSegQuantizer:
                             fc.weight.mul_(s)
                             fc.weight.data = w_quantize_func(fc.weight.data) / s
 
-                if hasattr(blk.attn, "out") and isinstance(blk.attn.out, nn.Linear):
-                    fc = blk.attn.out
+                if hasattr(blk.attn, output_name) and isinstance(getattr(blk.attn, output_name), nn.Linear):
+                    fc = getattr(blk.attn, output_name)
                     if _should_quantize(fc):
                         fc.weight.data = w_quantize_func(fc.weight.data)
 
@@ -554,12 +562,21 @@ class AWQViTSegQuantizer:
 
         org_sd = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
         cases: List[Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]] = []
+        cuda_devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+        rng_states: List[Tuple[torch.Tensor, List[torch.Tensor]]] = []
 
         try:
             # Collect original references and whole candidates before changing weights.
             # quantize() has already put the model in evaluation mode.
             for batch in self.calib_loader:
                 input = self._extract_input_tensor(batch["image"]).to(self.device)
+                # Both Gumbel samplers use PyTorch RNGs. Token counts depend on
+                # input shape/keep rate, so replay aligns noise across blocks
+                # while every forward still computes its own scores/indices.
+                rng_states.append((
+                    torch.get_rng_state(),
+                    [torch.cuda.get_rng_state(device) for device in cuda_devices],
+                ))
                 output = self.model(input)
                 cases.append((
                     input.detach().cpu().clone(),
@@ -574,28 +591,34 @@ class AWQViTSegQuantizer:
                 raise RuntimeError("SE calibration subset is empty.")
 
             self.model.load_state_dict(org_sd)
-            for _, _, se_scales in cases:
-                try:
-                    self._quantize_full_model_with_se_scales(blocks, se_scales, w_quantize_func)
-                    total_error = 0.0
-                    for cpu_input, fp_logits, _ in cases:
-                        input = cpu_input.to(self.device)
-                        q_output = self.model(input)
-                        q_logits = _extract_logits(q_output)
-                        # Average each case first so volumes of different lengths
-                        # receive equal weight. Nonfinite errors invalidate the score.
-                        total_error += (
-                            fp_logits.to(q_logits.device).float() - q_logits.float()
-                        ).square().mean().item()
-                        del input, q_output, q_logits
+            # Candidate evaluation must not advance/rewind the surrounding RNG
+            # stream, including when quantization or a forward raises.
+            with torch.random.fork_rng(devices=cuda_devices):
+                for _, _, se_scales in cases:
+                    try:
+                        self._quantize_full_model_with_se_scales(blocks, se_scales, w_quantize_func)
+                        total_error = 0.0
+                        for (cpu_input, fp_logits, _), (cpu_rng, cuda_rng) in zip(cases, rng_states):
+                            input = cpu_input.to(self.device)
+                            torch.set_rng_state(cpu_rng)
+                            for device, state in zip(cuda_devices, cuda_rng):
+                                torch.cuda.set_rng_state(state, device)
+                            q_output = self.model(input)
+                            q_logits = _extract_logits(q_output)
+                            # Average each case first so volumes of different lengths
+                            # receive equal weight. Nonfinite errors invalidate the score.
+                            total_error += (
+                                fp_logits.to(q_logits.device).float() - q_logits.float()
+                            ).square().mean().item()
+                            del input, q_output, q_logits
 
-                    loss = total_error / len(cases)
-                    if np.isfinite(loss) and loss < best_error:
-                        best_error = loss
-                        best_scales = se_scales
-                finally:
-                    # Also restore after partial quantization or a failed forward.
-                    self.model.load_state_dict(org_sd)
+                        loss = total_error / len(cases)
+                        if np.isfinite(loss) and loss < best_error:
+                            best_error = loss
+                            best_scales = se_scales
+                    finally:
+                        # Also restore after partial quantization or a failed forward.
+                        self.model.load_state_dict(org_sd)
 
             if best_scales is None:
                 raise RuntimeError("No finite winning score found for SE calibration.")
@@ -618,10 +641,11 @@ class AWQViTSegQuantizer:
             se_vec = self._se_scale_to_vec(se_scale).detach()
             scales_list = []
 
-            # 1) attention_norm -> q/k/v
+            # 1) attention_norm -> separate q/k/v or fused qkv
             if not (hasattr(blk, "attention_norm") and hasattr(blk, "attn")):
                 raise AttributeError("Expected ViT Block to have attention_norm and attn.")
-            scales_list.append(("attention_norm", ("attn.query", "attn.key", "attn.value"), se_vec.cpu()))
+            input_names, _ = self._attention_layout(blk)
+            scales_list.append(("attention_norm", tuple(f"attn.{name}" for name in input_names), se_vec.cpu()))
 
             # 2) ffn_norm -> fc1
             if not (hasattr(blk, "ffn_norm") and hasattr(blk, "ffn") and hasattr(blk.ffn, "fc1")):
@@ -761,7 +785,7 @@ class AWQViTSegQuantizer:
         """Replace relevant nn.Linear layers with WQLinear (weight-only 4-bit).
 
         We quantize:
-          - attention q/k/v/out projections
+          - attention q/k/v/out or fused qkv/proj projections
           - MLP fc1/fc2
 
         We do NOT quantize LayerNorm, Dropout, Softmax, matmuls, etc.
@@ -773,7 +797,8 @@ class AWQViTSegQuantizer:
 
         # Attention projections
         if hasattr(blk, "attn"):
-            for name in ["query", "key", "value", "out"]:
+            input_names, output_name = self._attention_layout(blk)
+            for name in (*input_names, output_name):
                 if hasattr(blk.attn, name) and isinstance(getattr(blk.attn, name), nn.Linear):
                     to_replace.append(f"attn.{name}")
 

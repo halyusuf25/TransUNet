@@ -248,3 +248,63 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
 python tools/generate_quantization_table.py bench_qunat \
   --output_directory latex \
   --output performance_quantization.tex
+
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 --img_size 224 \
+  --max_epochs 250 --batch_size 24 \
+  --use_gumbel_topk --topk_attn 0.50 --gumbel_sampling_mode dist \
+  --use_bu_loss --buloss_option B --learn_tau --tau_init 1.0\
+  --use_se_block --se_aux_loss --se_aux_weight 1.0 \
+  --ckpt_dir ckpt/gumbel_bu_se --ckpt gumbel50_bu_se
+
+
+.venv/bin/python test.py \
+  --dataset Synapse \
+  --volume_path /data/halyusuf/data/Synapse/test_vol_h5 \
+  --vit_name R50-ViT-B_16 --img_size 224 \
+  --use_gumbel_topk --topk_attn 0.5 --gumbel_sampling_mode manual \
+  --use_se_block \
+  --quantize --quantize_backend legacy \
+  --quantize_calibrate_batch_size 8 \
+  --ckpt_dir ckpt/gumbel_bu_se \
+  --ckpt ACTUAL_GENERATED_CHECKPOINT.pth
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+              --dataset Synapse \
+              --vit_name R50-ViT-B_16 \
+              --max_epoch 260 \
+              --batch_size 24 \
+              --img_size 224 \
+              --repeated_runs 10 \
+              --topk_attn 0.5 \
+              --use_gumbel_topk \
+              --gumbel_sampling_mode manual \
+              --use_se_block \
+              --quantize --quantize_backend legacy \
+              --quantize_calibrate_batch_size 8 \
+              --ckpt_dir ckpt/gumbel_bu_se \
+              --ckpt gumbel50_bu_se_Synapse__best_val_dice_0.7934578657150269_epoch_148_20261028_180059.pth \
+              --benchmark_dict benchmark_combined/ \
+              --description "TransUNet with Gumbel TopK (r=0.5) for Synapse - with se-quant + buloss"
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+              --dataset Synapse \
+              --vit_name R50-ViT-B_16 \
+              --max_epoch 260 \
+              --batch_size 24 \
+              --img_size 224 \
+              --repeated_runs 10 \
+              --topk_attn 0.5 \
+              --use_gumbel_topk \
+              --gumbel_sampling_mode manual \
+              --use_se_block \
+              --ckpt_dir ckpt/gumbel_bu_se \
+              --ckpt gumbel50_bu_se_Synapse__best_val_dice_0.7934578657150269_epoch_148_20261028_180059.pth \
+              --benchmark_dict benchmark_combined/ \
+              --description "TransUNet with Gumbel TopK (r=0.5) for Synapse and learnable tau"
+
+
