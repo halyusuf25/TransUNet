@@ -1206,6 +1206,15 @@ def _publication_dataset_label(dataset_name: str) -> str:
 
 def _publication_column_header(label: str) -> str:
     label = str(label)
+    publication_names = {
+        'TopK': r'Top-$K$',
+        'GumbelTopK': 'Gumbel\N{EN DASH}\n' + r'Top-$K$',
+        'GumbelTopK+BULoss': (
+            'Gumbel\N{EN DASH}\n' + r'Top-$K+$' + '\n' + r'$\mathcal{L}_{\mathrm{UB}}$'
+        ),
+    }
+    if label in publication_names:
+        return publication_names[label]
     if len(label) <= 9:
         return label
     if '+' in label:
