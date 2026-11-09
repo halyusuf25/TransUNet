@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Generate a LaTeX table from per-dataset evaluation JSON files (stdlib only).
+r"""Generate a LaTeX table from per-dataset evaluation JSON files (stdlib only).
 
 Run from the repository root::
 
-    python tools/generate_quantization_table.py benchmark_quantize_newSELoss \
-        --output_directory tables --output performance_quantization.tex
+    python tools/generate_quantization_table.py benchmark_baseline4quant \
+        --output_directory tables --output performance_quantization.tex \
+        --model_size --latency99
+
+Add --model_size for model storage in MiB and --latency99 for P99 latency.
+FP16 projection results appear after Non-quantized. If any dataset includes
+FP16, every dataset must include exactly one FP16 result; older inputs without
+FP16 retain the original three-method layout.
 
 The parent LaTeX document needs graphicx, array, makecell, and multirow.
 Classification follows test.py and networks/quantizer.py: INC backends use AWQ
@@ -27,7 +33,7 @@ import tempfile
 from typing import Any, NamedTuple
 
 
-METHODS = ("Non-quantized", "AWQ", "SE-AUX (ours)")
+METHODS = ("Non-quantized", "FP16", "AWQ", "SE-AUX (ours)")
 ARCHITECTURE_FIELDS = (
     "vit_name", "vit_patches_size", "n_skip", "num_heads", "num_layers",
     "num_classes", "use_swin", "use_efficientnet", "use_shsa",
@@ -40,22 +46,8 @@ TABLE_START = r"""\begin{table*}[!t]
 \setlength{\extrarowheight}{2pt}
 \renewcommand{\arraystretch}{1.15}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{clccccccc}
-\hline
-\multicolumn{1}{c}{\makecell[c]{Dataset}} &
-\multicolumn{1}{c}{\makecell[c]{Method}} &
-\makecell[c]{Dice (\%) $\uparrow$} &
-\makecell[c]{IoU (\%) $\uparrow$} &
-\makecell[c]{HD95 $\downarrow$} &
-\makecell[c]{Throughput\\(img/s) $\uparrow$} &
-\makecell[c]{Latency\\(ms) $\downarrow$} &
-\makecell[c]{Compression\\Ratio $\uparrow$} &
-\makecell[c]{Memory\\(MiB)$^{*}$ $\downarrow$} \\[2pt]
-\hline
-
 """
 TABLE_END = r"""
-\multicolumn{9}{l}{\scriptsize
 $^{*}$ Peak allocated runtime memory. Values in parentheses denote standard deviation.}
 \end{tabular}%
 }
@@ -89,6 +81,7 @@ def metadata(result: Result) -> str:
         "arguments.quantize", "arguments.quantize_backend",
         "arguments.use_se_block", "arguments.drop_se_block",
         "arguments.se_aux_loss", "notes.quantized_model",
+        "arguments.fp16_projections", "notes.precision_configuration.fp16_projections",
     )
     return json.dumps({key: result.get(key) for key in fields}, sort_keys=True)
 
@@ -103,6 +96,16 @@ def boolean(result: Result, field: str) -> bool | None:
 def identify_method(result: Result) -> str:
     quantize = boolean(result, "arguments.quantize")
     packed = boolean(result, "notes.quantized_model")
+    fp16_flags = [
+        boolean(result, "arguments.fp16_projections"),
+        boolean(result, "notes.precision_configuration.fp16_projections"),
+    ]
+    if True in fp16_flags and False in fp16_flags:
+        raise InputError("conflicting fp16_projections flags in arguments and notes.precision_configuration")
+    if True in fp16_flags:
+        if quantize is True or packed is True:
+            raise InputError("fp16_projections=true conflicts with quantize=true or quantized_model=true")
+        return "FP16"
     backend = result.get("arguments.quantize_backend")
     if quantize is False:
         if packed is True:
@@ -112,7 +115,7 @@ def identify_method(result: Result) -> str:
         raise InputError("missing quantization status; quantized_model=false alone "
                          "does not distinguish INC AWQ from a non-quantized model")
     if backend in ("inc_awq", "inc_awq_packed"):
-        return METHODS[1]
+        return "AWQ"
     if backend == "legacy":
         if packed is False:
             raise InputError("legacy quantization conflicts with quantized_model=false")
@@ -122,7 +125,7 @@ def identify_method(result: Result) -> str:
                 raise InputError("legacy SE guidance conflicts with arguments.drop_se_block=true")
             # se_aux_loss is a training flag, disabled at inference; it does
             # not select the quantizer's scaling method.
-            return METHODS[2] if use_se else METHODS[1]
+            return "SE-AUX (ours)" if use_se else "AWQ"
         raise InputError("legacy quantization requires arguments.use_se_block "
                          "to distinguish AWQ from SE-AUX")
     raise InputError(f"missing or unsupported arguments.quantize_backend={backend!r}")
@@ -154,8 +157,7 @@ def load_datasets(directory: Path) -> list[tuple[str, dict[str, Result]]]:
     folders = sorted((p for p in directory.iterdir() if p.is_dir()), key=dataset_order)
     if not folders:
         raise InputError(f"{directory}: no dataset subdirectories found")
-    datasets = []
-    errors = []
+    loaded = []
     for folder in folders:
         files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".json")
         grouped: dict[str, list[Result]] = {method: [] for method in METHODS}
@@ -171,7 +173,16 @@ def load_datasets(directory: Path) -> list[tuple[str, dict[str, Result]]]:
                 grouped[identify_method(result)].append(result)
             except (OSError, UnicodeError, ValueError) as exc:
                 problems.append(f"{path}: {exc}")
-        for method, records in grouped.items():
+        loaded.append((folder, grouped, inventory, problems))
+    # Preserve legacy inputs, but never silently omit FP16 from one dataset
+    # when it is part of the comparison for another dataset.
+    include_fp16 = any(grouped["FP16"] for _, grouped, _, _ in loaded)
+    required_methods = tuple(m for m in METHODS if m != "FP16" or include_fp16)
+    datasets = []
+    errors = []
+    for folder, grouped, inventory, problems in loaded:
+        for method in required_methods:
+            records = grouped[method]
             if len(records) != 1:
                 problems.append(f"{folder}: expected exactly one {method} result; "
                                 f"found {len(records)}" +
@@ -181,7 +192,7 @@ def load_datasets(directory: Path) -> list[tuple[str, dict[str, Result]]]:
             if inventory:
                 errors.append(f"{folder}: method metadata:\n" + "\n".join(inventory))
         else:
-            datasets.append((dataset_name(folder), {m: grouped[m][0] for m in METHODS}))
+            datasets.append((dataset_name(folder), {m: grouped[m][0] for m in required_methods}))
     if errors:
         raise InputError("\n".join(errors))
     return datasets
@@ -232,6 +243,26 @@ def throughput(result: Result) -> str:
         if len(candidates) == 1:
             mean_field = "metrics." + candidates[0]
     return format_statistic(result, mean_field, "metrics.throughput_img_s_std")
+
+
+def latency99(result: Result) -> str:
+    metrics = result.get("metrics")
+    mean_field = "metrics.latency_ms_p99_mean"
+    if isinstance(metrics, dict) and "latency_ms_p99_mean" not in metrics:
+        mean_field = "metrics.latency_ms_p99"
+    return format_statistic(result, mean_field, "metrics.latency_ms_p99_std")
+
+
+def model_size(result: Result) -> str:
+    raw = result.get("model_size.total_bytes")
+    if finite_number(raw) and raw > 0:
+        return f"{raw / 2**20:.1f}"
+    warn(result, f"model_size.total_bytes is missing or invalid ({raw!r})")
+    if result.get("model_size.unit") == "MiB":
+        value = number(result, "model_size.total_mb", positive=True)
+        return f"{value:.1f}" if value is not None else "--"
+    warn(result, "total_mb fallback requires model_size.unit='MiB'; displaying --")
+    return "--"
 
 
 def memory(result: Result) -> str:
@@ -316,11 +347,35 @@ def escape_latex(text: str) -> str:
     return "".join(replacements.get(char, char) for char in text)
 
 
-def render_table(datasets: list[tuple[str, dict[str, Result]]]) -> str:
+def render_table(
+    datasets: list[tuple[str, dict[str, Result]]], *,
+    include_model_size: bool = False, include_latency99: bool = False,
+) -> str:
+    headers = [
+        r"\multicolumn{1}{c}{\makecell[c]{Dataset}}",
+        r"\multicolumn{1}{c}{\makecell[c]{Method}}",
+        r"\makecell[c]{Dice (\%) $\uparrow$}",
+        r"\makecell[c]{IoU (\%) $\uparrow$}",
+        r"\makecell[c]{HD95 $\downarrow$}",
+        r"\makecell[c]{Throughput\\(img/s) $\uparrow$}",
+        r"\makecell[c]{Latency\\(ms) $\downarrow$}",
+    ]
+    if include_latency99:
+        headers.append(r"\makecell[c]{P99 Latency\\(ms) $\downarrow$}")
+    headers.append(r"\makecell[c]{Compression\\Ratio $\uparrow$}")
+    if include_model_size:
+        headers.append(r"\makecell[c]{Model Size\\(MiB) $\downarrow$}")
+    headers.append(r"\makecell[c]{Memory\\(MiB)$^{*}$ $\downarrow$}")
+    column_count = len(headers)
+    start = TABLE_START + r"\begin{tabular}{cl" + "c" * (column_count - 2) + "}\n"
+    start += "\\hline\n" + " &\n".join(headers) + r" \\[2pt]" + "\n\\hline\n\n"
+    end = "\n" + rf"\multicolumn{{{column_count}}}{{l}}{{\scriptsize" + TABLE_END
     rows = []
     for name, methods in datasets:
-        rows.append(r"\multirow{3}{*}{" + escape_latex(name) + "}")
+        rows.append(rf"\multirow{{{len(methods)}}}{{*}}{{" + escape_latex(name) + "}")
         for method in METHODS:
+            if method not in methods:
+                continue
             result = methods[method]
             cells = [
                 escape_latex(method),
@@ -329,12 +384,16 @@ def render_table(datasets: list[tuple[str, dict[str, Result]]]) -> str:
                 format_metric(result, "accuracy.mean_hd95", 3),
                 throughput(result),
                 format_statistic(result, "metrics.latency_ms_mean_single", "metrics.latency_ms_std_single"),
-                "--" if method == METHODS[0] else compression(methods[METHODS[0]], result),
-                memory(result),
             ]
+            if include_latency99:
+                cells.append(latency99(result))
+            cells.append("--" if method == METHODS[0] else compression(methods[METHODS[0]], result))
+            if include_model_size:
+                cells.append(model_size(result))
+            cells.append(memory(result))
             rows.append("& " + " & ".join(cells) + r" \\")
         rows.append(r"\hline")
-    return TABLE_START + "\n".join(rows) + "\n" + TABLE_END
+    return start + "\n".join(rows) + "\n" + end
 
 
 def write_table(output: Path, table: str, sources: list[Path]) -> None:
@@ -362,6 +421,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="output LaTeX fragment (default: %(default)s)")
     parser.add_argument("--output_directory", type=Path,
                         help="destination directory (created if needed); --output must be relative to it")
+    parser.add_argument("--model_size", action="store_true",
+                        help="include model storage size in MiB")
+    parser.add_argument("--latency99", action="store_true",
+                        help="include single-image P99 latency in ms (with reported standard deviation)")
     args = parser.parse_args(argv)
     output = args.output
     if args.output_directory is not None:
@@ -370,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         output = args.output_directory / output
     try:
         datasets = load_datasets(args.input_directory)
-        table = render_table(datasets)
+        table = render_table(datasets, include_model_size=args.model_size, include_latency99=args.latency99)
         if args.output_directory is not None:
             output.parent.mkdir(parents=True, exist_ok=True)
         write_table(output, table, [r.path for _, methods in datasets for r in methods.values()])

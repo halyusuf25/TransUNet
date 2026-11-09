@@ -23,10 +23,16 @@ import numpy as np
 from fvcore.nn import FlopCountAnalysis
 from thop import profile
 
-try:
-    from awq.quantize.qmodule import WQLinear
-except Exception:  # pragma: no cover - optional dependency for quantized benchmarks
-    WQLinear = None  # type: ignore[assignment]
+# Floating-point benchmarks must not import the optional quantization backend.
+WQLinear = None
+
+
+def _get_wqlinear_type():
+    global WQLinear
+    if WQLinear is None:
+        from awq.quantize.qmodule import WQLinear as wqlinear_type
+        WQLinear = wqlinear_type
+    return WQLinear
 
 # ============================= Safe collate =============================
 
@@ -160,7 +166,8 @@ def count_parameters_quantized(model: nn.Module) -> ParameterCounts:
     """Count logical parameters for quantized models, treating WQLinear as dense."""
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
-    if WQLinear is None:
+    wqlinear_type = _get_wqlinear_type()
+    if wqlinear_type is None:
         return ParameterCounts(trainable=int(trainable_params), total=int(total_params))
 
     def _logical_wqlinear_params(wq: nn.Module) -> int:
@@ -179,9 +186,9 @@ def count_parameters_quantized(model: nn.Module) -> ParameterCounts:
     seen: set[int] = set()
     for mod in model.modules():
         wq = None
-        if isinstance(mod, WQLinear):
+        if isinstance(mod, wqlinear_type):
             wq = mod
-        elif hasattr(mod, "inner") and isinstance(getattr(mod, "inner"), WQLinear):
+        elif hasattr(mod, "inner") and isinstance(getattr(mod, "inner"), wqlinear_type):
             wq = getattr(mod, "inner")
         if wq is None or id(wq) in seen:
             continue
@@ -278,6 +285,15 @@ def _build_thop_custom_ops_for_vit(model: nn.Module):
     return custom_ops
 
 
+def _cpu_profile_copy(model: nn.Module) -> nn.Module:
+    model_cpu = copy.deepcopy(model).to("cpu").eval()
+    # Some CPU operators cannot execute half precision. FP16Projection follows
+    # its inner Linear's dtype, so only this disposable profiling copy uses FP32.
+    if any(mod.__class__.__name__ == "FP16Projection" for mod in model_cpu.modules()):
+        model_cpu.float()
+    return model_cpu
+
+
 def _try_count_macs_and_params_with_thop(
     model: nn.Module,
     example: torch.Tensor,
@@ -288,7 +304,7 @@ def _try_count_macs_and_params_with_thop(
     """
     try:
         # Work on a copy to avoid altering the caller's model device
-        model_cpu = copy.deepcopy(model).to("cpu").eval()
+        model_cpu = _cpu_profile_copy(model)
         custom_ops = _build_thop_custom_ops_for_vit(model_cpu)
         with torch.no_grad():
             macs, _ = profile(
@@ -312,7 +328,7 @@ def _try_count_macs_with_fvcore(
     """
     try:
         # Work on a copy to avoid altering the caller's model device
-        model_cpu = copy.deepcopy(model).to("cpu").eval()
+        model_cpu = _cpu_profile_copy(model)
         with torch.no_grad():
             macs = FlopCountAnalysis(model_cpu, example.to("cpu")).total()
         params = count_parameters(model_cpu)
@@ -340,6 +356,7 @@ def _fallback_hook_macs_vit(
     """
     macs_total = 0
     handles: List[Any] = []
+    wqlinear_type = _get_wqlinear_type() if quantized_model else None
 
     def conv_hook(m: nn.Conv2d, inp, out):
         nonlocal macs_total
@@ -401,7 +418,8 @@ def _fallback_hook_macs_vit(
     # Register hooks on a copy to avoid mutating the original model. Quantized
     # WQLinear kernels are CUDA-only, so keep that path on the example device.
     target_device = example.device if quantized_model else torch.device("cpu")
-    model_copy = copy.deepcopy(model).to(target_device).eval()
+    model_copy = (copy.deepcopy(model).to(target_device).eval()
+                  if quantized_model else _cpu_profile_copy(model))
     for mod in model_copy.modules():
         cname = mod.__class__.__name__
         if isinstance(mod, nn.Conv2d):
@@ -410,7 +428,7 @@ def _fallback_hook_macs_vit(
             handles.append(mod.register_forward_hook(linear_hook))
         elif isinstance(mod, nn.ConvTranspose2d):
             handles.append(mod.register_forward_hook(convt_hook))
-        elif quantized_model and WQLinear is not None and isinstance(mod, WQLinear):
+        elif wqlinear_type is not None and isinstance(mod, wqlinear_type):
             handles.append(mod.register_forward_hook(wqlinear_hook))
         elif cname == "Attention":
             handles.append(mod.register_forward_hook(mha_hook))

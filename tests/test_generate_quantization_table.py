@@ -59,6 +59,13 @@ def result(method):
     }
 
 
+def fp16_result():
+    document = result("baseline")
+    document["arguments"]["fp16_projections"] = True
+    document["model_size"]["total_bytes"] = 600
+    return document
+
+
 class GenerateQuantizationTableTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -97,10 +104,11 @@ class GenerateQuantizationTableTests(unittest.TestCase):
     def rewrite(path, document):
         path.write_text(json.dumps(document), encoding="utf-8")
 
-    def invoke(self, source=None, default_output=False):
+    def invoke(self, source=None, default_output=False, extra_args=()):
         command = [sys.executable, str(SCRIPT), str(source or self.source)]
         if not default_output:
             command.extend(["--output", str(self.output)])
+        command.extend(extra_args)
         return subprocess.run(
             command,
             cwd=self.work,
@@ -109,8 +117,8 @@ class GenerateQuantizationTableTests(unittest.TestCase):
             check=False,
         )
 
-    def generate(self):
-        completed = self.invoke()
+    def generate(self, extra_args=()):
+        completed = self.invoke(extra_args=extra_args)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return self.output.read_text(encoding="utf-8"), completed
 
@@ -384,6 +392,187 @@ $^{*}$ Peak allocated runtime memory. Values in parentheses denote standard devi
         table, _ = self.generate()
         escaped = r"A\&B\_\%\$\#\{\}\textasciitilde{}\textasciicircum{}\textbackslash{}"
         self.assertIn(r"\multirow{3}{*}{" + escaped + "}", table)
+
+    def test_fp16_uses_metadata_method_order_and_actual_compression(self):
+        self.dataset()
+        self.write("ACDC", "another_awq.json", fp16_result())
+        for flags in ((), ("--model_size", "--latency99")):
+            with self.subTest(flags=flags):
+                table, _ = self.generate(extra_args=flags)
+                self.assertIn(r"\multirow{4}{*}{ACDC}", table)
+                methods = [
+                    line.split("&")[1].strip()
+                    for line in table.splitlines() if line.startswith("& ")
+                ]
+                self.assertEqual(methods, ["Non-quantized", "FP16", "AWQ", "SE-AUX (ours)"])
+                row = self.row(table, "FP16")
+                self.assertIn(r"1.667$\times$", row)
+                self.assertEqual(len(row), 8 + len(flags))
+
+    def test_fp16_accepts_either_metadata_location_or_matching_flags(self):
+        self.dataset()
+        for argument, note in ((True, None), (None, True), (True, True)):
+            with self.subTest(argument=argument, note=note):
+                document = fp16_result()
+                if argument is None:
+                    del document["arguments"]["fp16_projections"]
+                if note is not None:
+                    document["notes"]["precision_configuration"] = {"fp16_projections": note}
+                self.write("ACDC", "precision.json", document)
+                table, _ = self.generate()
+                self.assertIn(r"1.667$\times$", self.row(table, "FP16"))
+
+    def test_fp16_false_flags_leave_non_quantized_classification_unchanged(self):
+        documents, paths = self.dataset()
+        documents["baseline"]["arguments"]["fp16_projections"] = False
+        documents["baseline"]["notes"]["precision_configuration"] = {"fp16_projections": False}
+        self.rewrite(paths["baseline"], documents["baseline"])
+        table, _ = self.generate()
+        self.assertIn(r"\multirow{3}{*}{ACDC}", table)
+        self.assertNotIn("& FP16 &", table)
+
+    def test_fp16_conflicts_and_invalid_flags_are_reported(self):
+        self.dataset()
+        configurations = (
+            (True, False, False, False),
+            (False, True, False, False),
+            (True, None, True, False),
+            (True, None, False, True),
+            ("true", None, False, False),
+            (None, "true", False, False),
+        )
+        for argument, note, quantize, packed in configurations:
+            with self.subTest(argument=argument, note=note, quantize=quantize, packed=packed):
+                document = fp16_result()
+                if argument is None:
+                    del document["arguments"]["fp16_projections"]
+                else:
+                    document["arguments"]["fp16_projections"] = argument
+                if note is not None:
+                    document["notes"]["precision_configuration"] = {"fp16_projections": note}
+                document["arguments"]["quantize"] = quantize
+                document["notes"]["quantized_model"] = packed
+                path = self.write("ACDC", "conflicting_precision.json", document)
+                completed = self.invoke()
+                self.assert_failure(completed)
+                self.assertIn(path.name, completed.stderr)
+                self.assertIn("fp16_projections", completed.stderr)
+
+    def test_duplicate_fp16_results_and_missing_fp16_dataset_are_rejected(self):
+        self.dataset()
+        first = self.write("ACDC", "precision_one.json", fp16_result())
+        second = self.write("ACDC", "precision_two.json", fp16_result())
+        completed = self.invoke()
+        self.assert_failure(completed)
+        for path in (first, second):
+            self.assertIn(path.name, completed.stderr)
+        self.assertIn("fp16_projections", completed.stderr)
+        second.unlink()
+        self.dataset("Synapse")
+        completed = self.invoke()
+        self.assert_failure(completed)
+        self.assertIn("Synapse", completed.stderr)
+        self.assertIn("FP16", completed.stderr)
+        self.write("Synapse", "precision.json", fp16_result())
+        table, _ = self.generate()
+        self.assertEqual(table.count(r"\multirow{4}{*}"), 2)
+
+    def test_optional_columns_preserve_values_order_and_column_counts(self):
+        documents, paths = self.dataset()
+        documents["baseline"]["model_size"]["total_bytes"] = 10 * 2**20
+        documents["se"]["model_size"]["total_bytes"] = 2.5 * 2**20
+        documents["se"]["metrics"].update(
+            latency_ms_p99_mean=12.80316930961609,
+            latency_ms_p99_std=0.20257313053375128,
+        )
+        for method in ("baseline", "se"):
+            self.rewrite(paths[method], documents[method])
+        for flags in ((), ("--model_size",), ("--latency99",), ("--model_size", "--latency99")):
+            with self.subTest(flags=flags):
+                table, _ = self.generate(extra_args=flags)
+                expected = [
+                    "SE-AUX (ours)", "89.59", "81.82", "3.173",
+                    "367.954 (1.288)", "10.717 (0.495)",
+                ]
+                if "--latency99" in flags:
+                    expected.append("12.803 (0.203)")
+                expected.append(r"4.000$\times$")
+                if "--model_size" in flags:
+                    expected.append("2.5")
+                expected.append("1775.0")
+                self.assertEqual(self.row(table, "SE-AUX (ours)"), expected)
+                self.assertIn(r"\begin{tabular}{cl" + "c" * (7 + len(flags)) + "}", table)
+                self.assertIn(r"\multicolumn{" + str(9 + len(flags)) + r"}{l}{\scriptsize", table)
+                for method in ("Non-quantized", "AWQ", "SE-AUX (ours)"):
+                    self.assertEqual(len(self.row(table, method)), 8 + len(flags))
+
+    def test_model_size_mib_fallback_and_invalid_values(self):
+        documents, paths = self.dataset()
+        cases = (
+            ({"total_bytes": 2.5 * 2**20, "total_mb": 999, "unit": "MB"}, "2.5"),
+            ({"total_mb": 3.25, "unit": "MiB"}, "3.2"),
+            ({"total_mb": 3.25, "unit": "MB"}, "--"),
+            ({"total_mb": 3.25}, "--"),
+            ({"total_bytes": None}, "--"),
+            ({"total_bytes": float("nan")}, "--"),
+            ({"total_bytes": float("inf")}, "--"),
+            ({"total_bytes": -1}, "--"),
+            ({"total_bytes": 0}, "--"),
+            ({}, "--"),
+        )
+        for size, expected in cases:
+            with self.subTest(size=size):
+                documents["se"]["model_size"] = size
+                self.rewrite(paths["se"], documents["se"])
+                table, completed = self.generate(extra_args=("--model_size",))
+                self.assertEqual(self.row(table, "SE-AUX (ours)")[7], expected)
+                if expected == "--":
+                    self.assertTrue(completed.stderr.strip())
+
+    def test_p99_uses_reported_summary_or_scalar_fallback(self):
+        documents, paths = self.dataset()
+        original = copy.deepcopy(documents["se"]["metrics"])
+        cases = (
+            ({"latency_ms_p99_mean": 12.80316, "latency_ms_p99_std": 0.20257,
+              "latency_ms_p99": 999}, "12.803 (0.203)"),
+            ({"latency_ms_p99": 13.4567, "latency_ms_p99_std": 0.1234}, "13.457 (0.123)"),
+            ({"latency_ms_p99_mean": 12.80316}, "12.803"),
+            ({"latency_ms_p99": 13.4567}, "13.457"),
+            ({"latency_ms_p99_mean": 12.80316, "latency_ms_p99_std": None}, "12.803"),
+            ({"latency_ms_p99_mean": 12.80316, "latency_ms_p99_std": float("inf")}, "12.803"),
+        )
+        for p99, expected in cases:
+            with self.subTest(p99=p99):
+                documents["se"]["metrics"] = dict(original, **p99)
+                documents["se"]["metrics"]["latency_ms_p99_runs"] = [1, 10000]
+                self.rewrite(paths["se"], documents["se"])
+                table, completed = self.generate(extra_args=("--latency99",))
+                self.assertEqual(self.row(table, "SE-AUX (ours)")[6], expected)
+                if "(" not in expected:
+                    self.assertTrue(completed.stderr.strip())
+
+    def test_p99_missing_or_invalid_mean_never_uses_runs_or_batch_values(self):
+        documents, paths = self.dataset()
+        original = copy.deepcopy(documents["se"]["metrics"])
+        cases = (
+            {},
+            {"latency_ms_p99_mean": None, "latency_ms_p99": 99},
+            {"latency_ms_p99_mean": float("nan"), "latency_ms_p99": 99},
+            {"latency_ms_p99_mean": float("inf")},
+            {"latency_ms_p99": None},
+            {"latency_ms_p99": float("inf")},
+        )
+        for p99 in cases:
+            with self.subTest(p99=p99):
+                documents["se"]["metrics"] = dict(original, **p99)
+                documents["se"]["metrics"].update(
+                    latency_ms_p99_runs=[1, 10000], latency_ms_p99_batch36=999,
+                    latency_ms_p99_std=0.25,
+                )
+                self.rewrite(paths["se"], documents["se"])
+                table, completed = self.generate(extra_args=("--latency99",))
+                self.assertEqual(self.row(table, "SE-AUX (ours)")[6], "--")
+                self.assertTrue(completed.stderr.strip())
 
 
 if __name__ == "__main__":

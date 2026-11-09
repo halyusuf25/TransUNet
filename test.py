@@ -516,7 +516,25 @@ def main():
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
-        
+    if not args.quantize and args.drop_se_block:
+        encoder = net.transformer.encoder
+        if getattr(encoder, "SELayer", None) is not None:
+            del encoder.SELayer
+            encoder.args.drop_se_block = True
+            logging.info("Dropped auxiliary SE modules after checkpoint loading.")
+
+    precision_config = {"fp16_projections": args.fp16_projections}
+    if args.fp16_projections:
+        from src.fp16_projections import convert_fp16_projections
+        precision_config.update(convert_fp16_projections(net))
+    dtype_numel = {}
+    for parameter in net.parameters():
+        dtype = str(parameter.dtype)
+        dtype_numel[dtype] = dtype_numel.get(dtype, 0) + parameter.numel()
+    precision_config["parameter_dtype_numel"] = dtype_numel
+    precision_config["se_modules_present"] = getattr(net.transformer.encoder, "SELayer", None) is not None
+    logging.info("Inference precision configuration: %s", precision_config)
+
     performance = inference(args, net, test_save_path=None)
     
     # ---------------- Benchmark (runs AFTER inference is done) ----------------
@@ -537,6 +555,7 @@ def main():
         args=args,
     )
 
+    results.notes["precision_configuration"] = precision_config
     pretty = "\n" + results.pretty()
     # print(pretty)
     logging.info(pretty)

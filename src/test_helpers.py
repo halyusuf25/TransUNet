@@ -73,11 +73,14 @@ def _fallback_acdc_voxelspacing_zyx(args, case_name):
 
 def add_quantization_args(parser):
     parser.add_argument('--quantize', action='store_true', help='whether to quantize the model')
+    parser.add_argument('--fp16_projections', action='store_true',
+                        help='store and run eligible Transformer projections in FP16 without quantization')
     parser.add_argument('--quantize_backend', choices=['legacy', 'inc_awq', 'inc_awq_packed'], default='legacy',
                         help='quantization backend (used only with --quantize)')
     parser.add_argument('--quantize_calibrate_batch_size', type=int, default=8,
                         help='number of calibration loader batches (default: 8)')
-    parser.add_argument('--drop_se_block', action='store_true', help='whether to drop SE block during quantization')
+    parser.add_argument('--drop_se_block', action='store_true',
+                        help='remove auxiliary SE modules after checkpoint loading (after calibration when quantizing)')
     return parser
 
 
@@ -166,10 +169,13 @@ def build_test_arg_parser(include_visualization_args=False, include_quantization
 
 
 def parse_test_args(include_visualization_args=False, include_quantization_args=True):
-    args = build_test_arg_parser(
+    parser = build_test_arg_parser(
         include_visualization_args=include_visualization_args,
         include_quantization_args=include_quantization_args,
-    ).parse_args()
+    )
+    args = parser.parse_args()
+    if getattr(args, 'fp16_projections', False) and getattr(args, 'quantize', False):
+        parser.error('--fp16_projections cannot be combined with --quantize')
     args.normalize_endovis_eval = args.normalize_present_class_eval
     return args
 
