@@ -101,45 +101,58 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
 
 using SE-guided qunatization.
 # ACDC
-CUDA_VISIBLE_DEVICES=4 python test.py \
+CUDA_VISIBLE_DEVICES=3 python test.py \
        --dataset ACDC \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --acdc_zspacing 5 \
        --repeated_runs 10 \
-       --benchmark_dict benchmark_quantize_newSELoss/ \
+       --benchmark_dict benchmark_baseline4quant/ \
        --use_se_block \
        --quantize \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_ACDC \
-       --ckpt SELoss_ACDC__best_val_dice_0.8944082856178284_epoch_40_20260930_150207.pth \
-       --description "evaluating Transunet on ACDC with SE-guided quantization using se_loss (legacy)"
+       --ckpt SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth \
+       --description "evaluating Transunet on ACDC with SE-guided quantization using se_loss - no token reduction"
 
 #best ckpt SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth
 
 
 # Synapse
- 
+CUDA_VISIBLE_DEVICES=0 python test.py \
+       --dataset Synapse \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_inc_awq_packed2/ \
+       --use_se_block \
+       --quantize \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Synapse \
+       --ckpt SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth \
+       --description "evaluating Transunet on Synapse with SE-guided quantization using se_loss - no token reduction"
+
 
 best ckpt     SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth
               SELoss_Synapse__best_val_dice_0.773414134979248_epoch_49_20260930_170032.pth
 
 # Cataract1k
-CUDA_VISIBLE_DEVICES=0 python test.py \
+CUDA_VISIBLE_DEVICES=3 python test.py \
        --dataset Cataract1k \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --repeated_runs 10 \
-       --benchmark_dict benchmark_quantize_newSELoss/ \
+       --benchmark_dict benchmark_inc_awq_packed2/ \
        --use_se_block \
        --quantize \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_Cataract1k \
-       --ckpt SELoss_Cataract1k__best_val_dice_0.9095662400126457_epoch_142_20260930_182827.pth \
-       --description "Transunet on Cataract1k SE-guided quantization using se_loss"
+       --ckpt SELoss_Cataract1k__best_val_dice_0.9352729377647241_epoch_214_20260930_193032.pth \
+       --description "Transunet on Cataract1k SE-guided quantization using se_loss - no token reduction"
 
 
 best ckpt     SELoss_Cataract1k__best_val_dice_0.942674332857132_epoch_259_20260930_200930.pth
+              SELoss_Cataract1k__best_val_dice_0.9352729377647241_epoch_214_20260930_193032.pth
               SELoss_Cataract1k__best_val_dice_0.9240760487814744_epoch_163_20260930_184630.pth
 
 
@@ -152,13 +165,13 @@ best ckpt     SELoss_Cataract1k__best_val_dice_0.942674332857132_epoch_259_20260
 # Activate Python >=3.11 with neural-compressor==3.10 and the existing awq==0.1.0
 # checkout; rebuild awq/kernels for that interpreter/PyTorch/CUDA environment.
 # --use_se_block loads the SE checkpoint; calibration remains independent of SE gates.
-CUDA_VISIBLE_DEVICES=4 python test.py \
+CUDA_VISIBLE_DEVICES=0 python test.py \
        --dataset ACDC \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --acdc_zspacing 5 \
        --repeated_runs 10 \
-       --benchmark_dict benchmark_inc_awq_packed/ \
+       --benchmark_dict benchmark_inc_awq_packed2/ \
        --use_se_block \
        --quantize --quantize_backend inc_awq_packed \
        --quantize_calibrate_batch_size 8 \
@@ -166,12 +179,12 @@ CUDA_VISIBLE_DEVICES=4 python test.py \
        --ckpt SELoss_ACDC__best_val_dice_0.8944082856178284_epoch_40_20260930_150207.pth \
        --description "INC activation-aware AWQ calibration with packed WQLinear INT4 CUDA inference"
 
-CUDA_VISIBLE_DEVICES=4 python test.py \
+CUDA_VISIBLE_DEVICES=1 python test.py \
        --dataset Synapse \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --repeated_runs 10 \
-       --benchmark_dict benchmark_inc_awq_packed/ \
+       --benchmark_dict benchmark_inc_awq_packed2/ \
        --use_se_block \
        --quantize --quantize_backend inc_awq_packed \
        --quantize_calibrate_batch_size 8 \
@@ -179,29 +192,29 @@ CUDA_VISIBLE_DEVICES=4 python test.py \
        --ckpt SELoss_Synapse__best_val_dice_0.773414134979248_epoch_49_20260930_170032.pth \
        --description "INC activation-aware AWQ calibration with packed WQLinear INT4 CUDA inference"
 
-CUDA_VISIBLE_DEVICES=5 python test.py \
+CUDA_VISIBLE_DEVICES=1 python test.py \
        --dataset Cataract1k \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --repeated_runs 10 \
-       --benchmark_dict benchmark_inc_awq_packed/ \
+       --benchmark_dict benchmark_quantize_awq_legacy3/ \
        --use_se_block \
        --quantize --quantize_backend inc_awq_packed \
        --quantize_calibrate_batch_size 8 \
        --ckpt_dir ckpt/ckpt_Cataract1k \
-       --ckpt SELoss_Cataract1k__best_val_dice_0.9095662400126457_epoch_142_20260930_182827.pth \
-       --description "INC activation-aware AWQ calibration with packed WQLinear INT4 CUDA inference"
+       --ckpt SELoss_Cataract1k__best_val_dice_0.9240760487814744_epoch_163_20260930_184630.pth \
+       --description "INC activation-aware AWQ calibration with packed WQLinear INT4 CUDA inference 163"
 
 
 AWQ using intel library
 # ACDC
-CUDA_VISIBLE_DEVICES=5 python test.py \
+CUDA_VISIBLE_DEVICES=0 python test.py \
        --dataset ACDC \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --acdc_zspacing 5 \
        --repeated_runs 10 \
-       --benchmark_dict benchmark_quantize_newSELoss/ \
+       --benchmark_dict benchmark_quantize_newSELoss2/ \
        --use_se_block \
        --quantize \
        --quantize_backend inc_awq \
@@ -212,12 +225,12 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
 
 
 # Synapse
-CUDA_VISIBLE_DEVICES=4 .venv/bin/python test.py \
+CUDA_VISIBLE_DEVICES=1 .venv/bin/python test.py \
        --dataset Synapse \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --repeated_runs 10 \
-       --benchmark_dict benchmark_quantize_newSELoss/ \
+       --benchmark_dict benchmark_quantize_newSELoss2/ \
        --use_se_block \
        --quantize \
        --quantize_backend inc_awq \
@@ -228,12 +241,12 @@ CUDA_VISIBLE_DEVICES=4 .venv/bin/python test.py \
 
 
 # Cataract1k
-CUDA_VISIBLE_DEVICES=5 python test.py \
+CUDA_VISIBLE_DEVICES=2 python test.py \
        --dataset Cataract1k \
        --vit_name R50-ViT-B_16 \
        --img_size 224 \
        --repeated_runs 10 \
-       --benchmark_dict benchmark_quantize_newSELoss/ \
+       --benchmark_dict benchmark_quantize_newSELoss2/ \
        --use_se_block \
        --quantize \
        --quantize_backend inc_awq \
@@ -243,12 +256,60 @@ CUDA_VISIBLE_DEVICES=5 python test.py \
        --description "Transunet on Cataract1k using AWQ"
 
 
+AWQ using legacey method without SE-branch
+# ACDC
+CUDA_VISIBLE_DEVICES=3 python test.py \
+       --dataset ACDC \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --acdc_zspacing 5 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_quantize_awq_legacy3/ \
+       --quantize --quantize_backend legacy \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_ACDC \
+       --ckpt BaselineFinal_ACDC__best_val_dice_0.8894063830375671_epoch_41_20260627_154006.pth \
+       --description "evaluating Transunet on ACDC with AWQ quantization (legacy) 41"
 
 
-python tools/generate_quantization_table.py bench_qunat \
+# Synapse
+CUDA_VISIBLE_DEVICES=1 .venv/bin/python test.py \
+       --dataset Synapse \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_quantize_awq_legacy3/ \
+       --quantize --quantize_backend legacy \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Synapse \
+       --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
+       --description "evaluating Transunet on Synapse with AWQ"
+
+
+# Cataract1k
+CUDA_VISIBLE_DEVICES=2 python test.py \
+       --dataset Cataract1k \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_quantize_awq_legacy3/ \
+       --quantize --quantize_backend legacy \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Cataract1k \
+       --ckpt BaselineFinal_Cataract1k__best_val_dice_0.9001339312642812_epoch_115_20260702_081719.pth \
+       --description "Transunet on Cataract1k using AWQ"
+
+
+
+python tools/generate_quantization_table.py benchmark_baseline4quant \
   --output_directory latex \
-  --output performance_quantization.tex
+  --output performance_quantization_same4.tex
 
+
+python tools/generate_quantization_table.py benchmark_baseline4quant \
+  --output_directory latex \
+  --output performance_quantization_fp16.tex \
+  --model_size --latency99
 
 
 CUDA_VISIBLE_DEVICES=2 python train.py \
@@ -260,6 +321,25 @@ CUDA_VISIBLE_DEVICES=2 python train.py \
   --use_se_block --se_aux_loss --se_aux_weight 1.0 \
   --ckpt_dir ckpt/gumbel_bu_se --ckpt gumbel50_bu_se
 
+CUDA_VISIBLE_DEVICES=2 python train.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 --img_size 224 \
+  --max_epochs 250 --batch_size 24 \
+  --use_gumbel_topk --topk_attn 0.50 --gumbel_sampling_mode dist \
+  --use_bu_loss --buloss_option B --learn_tau --tau_init 1.0\
+  --use_se_block --se_aux_loss --se_aux_weight 1.0 \
+  --ckpt_dir ckpt/gumbel_bu_se/Cataract1k/ \
+  --ckpt gumbel50_bu_se
+
+CUDA_VISIBLE_DEVICES=3 python train.py \
+  --dataset ACDC \
+  --vit_name R50-ViT-B_16 --img_size 224 \
+  --max_epochs 250 --batch_size 24 \
+  --use_gumbel_topk --topk_attn 0.50 --gumbel_sampling_mode dist \
+  --use_bu_loss --buloss_option B --learn_tau --tau_init 1.0\
+  --use_se_block --se_aux_loss --se_aux_weight 1.0 \
+  --ckpt_dir ckpt/gumbel_bu_se/ACDC/ \
+  --ckpt gumbel50_bu_se
 
 .venv/bin/python test.py \
   --dataset Synapse \
@@ -272,10 +352,10 @@ CUDA_VISIBLE_DEVICES=2 python train.py \
   --ckpt_dir ckpt/gumbel_bu_se \
   --ckpt ACTUAL_GENERATED_CHECKPOINT.pth
 
-CUDA_VISIBLE_DEVICES=2 python test.py \
+Synapse
+CUDA_VISIBLE_DEVICES=3 python test.py \
               --dataset Synapse \
               --vit_name R50-ViT-B_16 \
-              --max_epoch 260 \
               --batch_size 24 \
               --img_size 224 \
               --repeated_runs 10 \
@@ -286,12 +366,12 @@ CUDA_VISIBLE_DEVICES=2 python test.py \
               --quantize --quantize_backend legacy \
               --quantize_calibrate_batch_size 8 \
               --ckpt_dir ckpt/gumbel_bu_se \
-              --ckpt gumbel50_bu_se_Synapse__best_val_dice_0.7934578657150269_epoch_148_20261028_180059.pth \
-              --benchmark_dict benchmark_combined/ \
-              --description "TransUNet with Gumbel TopK (r=0.5) for Synapse - with se-quant + buloss"
+              --ckpt gumbel50_bu_se_Synapse__best_val_dice_0.7900688648223877_epoch_118_20261028_174221.pth \
+              --benchmark_dict benchmark_combined_hd95/ \
+              --description "TransUNet with Gumbel TopK (r=0.5) for Synapse - with se-quant + buloss 118"
 
 
-CUDA_VISIBLE_DEVICES=3 python test.py \
+CUDA_VISIBLE_DEVICES=0 python test.py \
               --dataset Synapse \
               --vit_name R50-ViT-B_16 \
               --max_epoch 260 \
@@ -302,9 +382,279 @@ CUDA_VISIBLE_DEVICES=3 python test.py \
               --use_gumbel_topk \
               --gumbel_sampling_mode manual \
               --use_se_block \
+              --drop_se_block \
               --ckpt_dir ckpt/gumbel_bu_se \
               --ckpt gumbel50_bu_se_Synapse__best_val_dice_0.7934578657150269_epoch_148_20261028_180059.pth \
               --benchmark_dict benchmark_combined/ \
-              --description "TransUNet with Gumbel TopK (r=0.5) for Synapse and learnable tau"
+              --description "TransUNet with Gumbel TopK (r=0.5) for Synapse and learnable tau (dropped se block)"
 
 
+ACDC
+CUDA_VISIBLE_DEVICES=3 python test.py \
+              --dataset ACDC \
+              --vit_name R50-ViT-B_16 \
+              --batch_size 24 \
+              --img_size 224 \
+              --repeated_runs 10 \
+              --topk_attn 0.5 \
+              --use_gumbel_topk \
+              --gumbel_sampling_mode manual \
+              --use_se_block \
+              --quantize --quantize_backend legacy \
+              --quantize_calibrate_batch_size 8 \
+              --ckpt_dir ckpt/gumbel_bu_se/ACDC/ \
+              --ckpt gumbel50_bu_se_ACDC__best_val_dice_0.9011034965515137_epoch_82_20261029_011047.pth \
+              --benchmark_dict benchmark_combined_hd95/ \
+              --description "TransUNet with Gumbel TopK (r=0.5) for ACDC - with se-quant + buloss (82)"
+
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+              --dataset ACDC \
+              --vit_name R50-ViT-B_16 \
+              --max_epoch 260 \
+              --batch_size 24 \
+              --img_size 224 \
+              --acdc_zspacing 5 \
+              --repeated_runs 10 \
+              --topk_attn 0.5 \
+              --use_gumbel_topk \
+              --gumbel_sampling_mode manual \
+              --use_se_block \
+              --drop_se_block \
+              --ckpt_dir ckpt/gumbel_bu_se/ACDC/ \
+              --ckpt gumbel50_bu_se_ACDC__best_val_dice_0.9022502303123474_epoch_187_20261029_015631.pth \
+              --benchmark_dict benchmark_combined/ \
+              --description "TransUNet with Gumbel TopK (r=0.5) for ACDC and learnable tau (dropped se)"
+
+
+
+Cataract1k
+CUDA_VISIBLE_DEVICES=0 python test.py \
+              --dataset Cataract1k \
+              --vit_name R50-ViT-B_16 \
+              --max_epoch 260 \
+              --batch_size 24 \
+              --img_size 224 \
+              --acdc_zspacing 5 \
+              --repeated_runs 10 \
+              --topk_attn 0.5 \
+              --use_gumbel_topk \
+              --gumbel_sampling_mode manual \
+              --use_se_block \
+              --quantize --quantize_backend legacy \
+              --quantize_calibrate_batch_size 8 \
+              --ckpt_dir ckpt/gumbel_bu_se/Cataract1k/ \
+              --ckpt gumbel50_bu_se_Cataract1k__best_val_dice_0.9428745191544294_epoch_235_20261029_044244.pth \
+              --benchmark_dict benchmark_combined_hd95/ \
+              --description "TransUNet with Gumbel TopK (r=0.5) for Cataract1k - with se-quant + buloss 235"
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+              --dataset Cataract1k \
+              --vit_name R50-ViT-B_16 \
+              --max_epoch 260 \
+              --batch_size 24 \
+              --img_size 224 \
+              --acdc_zspacing 5 \
+              --repeated_runs 10 \
+              --topk_attn 0.5 \
+              --use_gumbel_topk \
+              --gumbel_sampling_mode manual \
+              --use_se_block \
+              --drop_se_block \
+              --ckpt_dir ckpt/gumbel_bu_se/Cataract1k/ \
+              --ckpt gumbel50_bu_se_Cataract1k__best_val_dice_0.9381635708113512_epoch_220_20261029_042921.pth \
+              --benchmark_dict benchmark_combined/ \
+              --description "TransUNet with Gumbel TopK (r=0.5) for Cataract1k and learnable tau (dropped se)"
+
+
+
+
+Baseline with SE trained checkpoints
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+       --dataset ACDC \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --acdc_zspacing 5 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --drop_se_block \
+       --ckpt_dir ckpt/ckpt_ACDC \
+       --ckpt SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth \
+       --description "Evaluating Transunet+SE on ACDC - baseline (non-quantized)"
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+       --dataset Cataract1k \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --drop_se_block \
+       --ckpt_dir ckpt/ckpt_Cataract1k \
+       --ckpt SELoss_Cataract1k__best_val_dice_0.9352729377647241_epoch_214_20260930_193032.pth \
+       --description "Evaluating Transunet+SE on Cataract1k - baseline (non-quantized)"
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+       --dataset Synapse \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --drop_se_block \
+       --ckpt_dir ckpt/ckpt_Synapse \
+       --ckpt SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth \
+       --description "Evaluating Transunet+SE on Synapse - baseline (non-quantized)"
+
+
+
+awq legacy with se-branch dropped
+
+CUDA_VISIBLE_DEVICES=0 python test.py \
+       --dataset ACDC \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --acdc_zspacing 5 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --quantize --quantize_backend inc_awq_packed \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_ACDC \
+       --ckpt SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth \
+       --description "Standard AWQ packed INT4 on SE-loss-trained checkpoint; SE removed before evaluation"
+
+CUDA_VISIBLE_DEVICES=2 python test.py \
+       --dataset Cataract1k \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --quantize --quantize_backend inc_awq_packed \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Cataract1k \
+       --ckpt SELoss_Cataract1k__best_val_dice_0.9352729377647241_epoch_214_20260930_193032.pth \
+       --description "Standard AWQ packed INT4 on Cataract1k - SE-loss-trained checkpoint; SE removed before evaluation"
+
+
+
+CUDA_VISIBLE_DEVICES=3 python test.py \
+       --dataset Synapse \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --quantize --quantize_backend inc_awq_packed \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Synapse \
+       --ckpt SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth \
+       --description "Standard AWQ packed INT4 on Synapse - SE-loss-trained checkpoint; SE removed before evaluation"
+
+
+SE-AUX 
+CUDA_VISIBLE_DEVICES=3 python test.py \
+       --dataset ACDC \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --acdc_zspacing 5 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --quantize \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_ACDC \
+       --ckpt SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth \
+       --description "evaluating Transunet on ACDC with SE-guided quantization using se_loss - no token reduction"
+
+
+# Synapse
+CUDA_VISIBLE_DEVICES=0 python test.py \
+       --dataset Synapse \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --quantize \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Synapse \
+       --ckpt SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth \
+       --description "evaluating Transunet on Synapse with SE-guided quantization using se_loss - no token reduction"
+
+
+# Cataract1k
+CUDA_VISIBLE_DEVICES=3 python test.py \
+       --dataset Cataract1k \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_baseline4quant/ \
+       --use_se_block \
+       --quantize \
+       --quantize_calibrate_batch_size 8 \
+       --ckpt_dir ckpt/ckpt_Cataract1k \
+       --ckpt SELoss_Cataract1k__best_val_dice_0.9352729377647241_epoch_214_20260930_193032.pth \
+       --description "Transunet on Cataract1k SE-guided quantization using se_loss - no token reduction"
+
+
+FP16
+CUDA_VISIBLE_DEVICES=0 python test.py \
+       --dataset ACDC \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --use_se_block \
+       --drop_se_block \
+       --fp16_projections \
+       --benchmark_dict benchmark_fp16/ \
+       --ckpt_dir ckpt/ckpt_ACDC \
+       --ckpt BaselineFinal_ACDC__best_val_dice_0.8894063830375671_epoch_41_20260627_154006.pth \
+       --description "Transunet on ACDC - FP16 Transformer projections - like fp"
+
+# Synapse
+CUDA_VISIBLE_DEVICES=0 python test.py \
+       --dataset Synapse \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_fp16/ \
+       --use_se_block \
+       --drop_se_block \
+       --fp16_projections \
+       --ckpt_dir ckpt/ckpt_Synapse \
+       --ckpt BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth \
+       --description "Transunet on Synapse - FP16 Transformer projections - like fp"
+
+
+# Cataract1k
+CUDA_VISIBLE_DEVICES=3 python test.py \
+       --dataset Cataract1k \
+       --vit_name R50-ViT-B_16 \
+       --img_size 224 \
+       --repeated_runs 10 \
+       --benchmark_dict benchmark_fp16/ \
+       --use_se_block \
+       --drop_se_block \
+       --fp16_projections \
+       --ckpt_dir ckpt/ckpt_Cataract1k \
+       --ckpt BaselineFinal_Cataract1k__best_val_dice_0.9001339312642812_epoch_115_20260702_081719.pth \
+       --description "Transunet on Cataract1k - FP16 Transformer projections - like fp"
+
+
+
+
+
+
+
+BaselineFinal_ACDC__best_val_dice_0.8894063830375671_epoch_41_20260627_154006.pth
+
+BaselineFinal_Cataract1k__best_val_dice_0.9001339312642812_epoch_115_20260702_081719.pth
+
+
+BaselineFinal_Synapse__best_val_dice_0.7723371982574463_epoch_103_20260702_080336.pth

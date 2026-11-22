@@ -189,3 +189,6 @@ label_check_reports/
 test_log/
 
 log.txt
+
+*.tex
+*.pdf

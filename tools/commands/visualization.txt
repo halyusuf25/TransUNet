@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=2 python tools/visualize.py \
+CUDA_VISIBLE_DEVICES=5 python tools/visualize.py \
   --viz_view multiple_datasets \
   --vit_name R50-ViT-B_16 \
   --img_size 224 \
@@ -14,11 +14,11 @@ CUDA_VISIBLE_DEVICES=2 python tools/visualize.py \
   --viz_prediction_alpha 0.8 \
   --viz_dpi 1800 \
   --viz_boundary_linewidth 0.2 \
-  --viz_dataset_label_fontsize 11 \
+  --viz_dataset_label_fontsize 9 \
   --viz_dataset_label_orientation vertical \
   --viz_header_fontsize 8 \
   --viz_legend_fontsize 7 \
-  --viz_out multiple_datasets/model_comparison_inset \
+  --viz_out multiple_datasets/model_comparison_inset_6111 \
   --viz_title "Comparing Models Across Datasets" \
   --multi_datasets Synapse ACDC Cataract1k \
   --multi_model_names MHSA TopK ATS GumbelTopK GumbelTopK+BULoss \
