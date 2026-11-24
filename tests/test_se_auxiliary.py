@@ -406,6 +406,24 @@ class AuxiliarySETests(unittest.TestCase):
         after = encoder(x, return_se_aux=True)[4][0]
         self.assertFalse(torch.equal(before, after))
 
+    @torch.no_grad()
+    def test_explicit_eval_proxies_match_training_targets_on_fixed_input(self):
+        model = small_model().eval()
+        encoder = model.transformer.encoder
+        images = torch.randn(1, 3, 32, 32)
+        # Keep the CNN in eval mode for identical encoder inputs. This test
+        # encoder has zero dropout, even when exercising the training path.
+        encoder.train()
+        training = model(images, return_se_aux=True)
+        encoder.eval()
+        encoder.se_aux_loss = False  # load_se_metadata disables training loss
+        evaluation = model(images, return_se_targets=True)
+        self.assertEqual(len(evaluation[-1]), len(encoder.layer))
+        for actual, expected in zip(evaluation[-1], training[-1]):
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        ordinary = model(images)
+        torch.testing.assert_close(ordinary[0], evaluation[0], rtol=0, atol=0)
+
     def test_checkpoint_metadata_restores_rms_predictions_without_enabling_loss(self):
         model = small_model().eval()
         images = torch.randn(2, 3, 32, 32)

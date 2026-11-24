@@ -1,3 +1,4 @@
+from copy import deepcopy
 import logging
 import os
 import json
@@ -297,21 +298,8 @@ def inference(args, model, test_save_path=None):
     }
 
 
-def main():
-    args = parse_test_args()
-
-    if not args.deterministic:
-        cudnn.benchmark = True
-        cudnn.deterministic = False
-    else:
-        cudnn.benchmark = False
-        cudnn.deterministic = True
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-
-    dataset_config = {
+def get_test_dataset_config():
+    return {
         'Synapse': {
             'Dataset': Synapse_dataset,
             'volume_path': '/data/halyusuf/data/Synapse/test_vol_h5',
@@ -380,23 +368,10 @@ def main():
             ],
         },
     }
-    
-    dataset_name = args.dataset
-    if args.volume_path is None:
-        args.volume_path = dataset_config[dataset_name]['volume_path']
-    args.num_classes = dataset_config[dataset_name]['num_classes']
-    args.Dataset = dataset_config[dataset_name]['Dataset']
-    args.z_spacing = dataset_config[dataset_name]['z_spacing']
-    args.class_names = dataset_config[dataset_name].get('class_names')
-    args.list_dir = dataset_config[dataset_name]['list_dir']
-    args.is_pretrain = True
 
-    if args.fold_id < 0 or args.fold_id >= 5:
-        raise ValueError("fold_id must be between 0 and 4")
-    
-    # name the same snapshot defined in train script!
-    args.exp = 'TU_' + dataset_name + str(args.img_size)
-    config_vit = CONFIGS_ViT_seg[args.vit_name]
+
+def build_test_model(args):
+    config_vit = deepcopy(CONFIGS_ViT_seg[args.vit_name])
     config_vit.verbose = args.verbose
     config_vit.n_classes = args.num_classes
     config_vit.n_skip = args.n_skip
@@ -427,9 +402,6 @@ def main():
     if args.use_ats and args.use_gumbel_topk:
         raise ValueError("--use_ats and --use_gumbel_topk are mutually exclusive.")
 
-    if not isinstance(args.repeated_runs, int) or args.repeated_runs < 1 or args.repeated_runs > 10:
-        raise ValueError("The --repeated_runs argument must be an integer between 1 and 10.")
-
     config_vit.topk_attn = args.topk_attn
     config_vit.use_ats = args.use_ats
     config_vit.use_gumbel_topk = args.use_gumbel_topk
@@ -440,12 +412,12 @@ def main():
     
     if args.vit_name.find('R50') !=-1:
         config_vit.patches.grid = (int(args.img_size/args.vit_patches_size), int(args.img_size/args.vit_patches_size))
-    net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
-    
-    #get checkpoint path
-    ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
+    return ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes)
 
-    checkpoint_state = torch.load(ckpt_path, map_location="cpu")
+
+def load_test_checkpoint(net, ckpt_path, require_fp32=False):
+    load_options = {"weights_only": True} if require_fp32 else {}
+    checkpoint_state = torch.load(ckpt_path, map_location="cpu", **load_options)
 
     if checkpoint_state and all(
         name.startswith("module.") for name in checkpoint_state
@@ -454,10 +426,65 @@ def main():
             checkpoint_state, "module."
         )
 
+    if require_fp32:
+        # load_state_dict copies into FP32 parameters and would silently cast.
+        for name, parameter in net.named_parameters():
+            if parameter.is_floating_point() and name in checkpoint_state:
+                weight = checkpoint_state[name]
+                if not torch.is_tensor(weight) or weight.dtype != torch.float32:
+                    raise ValueError(f"Expected full-precision (FP32) checkpoint parameter {name!r}.")
+
     net.load_state_dict(checkpoint_state)
     del checkpoint_state
 
-    se_metadata = load_se_metadata(net, ckpt_path)
+    return load_se_metadata(net, ckpt_path)
+
+
+def drop_se_blocks(net):
+    encoder = net.transformer.encoder
+    if getattr(encoder, "SELayer", None) is not None:
+        del encoder.SELayer
+        encoder.args.drop_se_block = True
+        return True
+    return False
+
+
+def main():
+    args = parse_test_args()
+
+    if not args.deterministic:
+        cudnn.benchmark = True
+        cudnn.deterministic = False
+    else:
+        cudnn.benchmark = False
+        cudnn.deterministic = True
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+
+    dataset_config = get_test_dataset_config()
+    dataset_name = args.dataset
+    if args.volume_path is None:
+        args.volume_path = dataset_config[dataset_name]['volume_path']
+    args.num_classes = dataset_config[dataset_name]['num_classes']
+    args.Dataset = dataset_config[dataset_name]['Dataset']
+    args.z_spacing = dataset_config[dataset_name]['z_spacing']
+    args.class_names = dataset_config[dataset_name].get('class_names')
+    args.list_dir = dataset_config[dataset_name]['list_dir']
+    args.is_pretrain = True
+
+    if args.fold_id < 0 or args.fold_id >= 5:
+        raise ValueError("fold_id must be between 0 and 4")
+
+    # name the same snapshot defined in train script!
+    args.exp = 'TU_' + dataset_name + str(args.img_size)
+    if not isinstance(args.repeated_runs, int) or args.repeated_runs < 1 or args.repeated_runs > 10:
+        raise ValueError("The --repeated_runs argument must be an integer between 1 and 10.")
+
+    net = build_test_model(args).cuda()
+    ckpt_path = os.path.join(args.ckpt_dir, args.ckpt)
+    se_metadata = load_test_checkpoint(net, ckpt_path)
 
     log_folder = './test_log/test_log_' + args.exp
     os.makedirs(log_folder, exist_ok=True)
@@ -502,11 +529,7 @@ def main():
         logging.info("Model quantized successfully.")
 
         # Quantization is complete; SE is no longer needed.
-        encoder = net.transformer.encoder
-
-        if getattr(encoder, "SELayer", None) is not None:
-            del encoder.SELayer
-            encoder.args.drop_se_block = True
+        if drop_se_blocks(net):
             logging.info("Dropped SE-blocks after quantization.")
 
         # Release calibration-only objects and unused cached memory.
@@ -517,10 +540,7 @@ def main():
             torch.cuda.empty_cache()
 
     if not args.quantize and args.drop_se_block:
-        encoder = net.transformer.encoder
-        if getattr(encoder, "SELayer", None) is not None:
-            del encoder.SELayer
-            encoder.args.drop_se_block = True
+        if drop_se_blocks(net):
             logging.info("Dropped auxiliary SE modules after checkpoint loading.")
 
     precision_config = {"fp16_projections": args.fp16_projections}

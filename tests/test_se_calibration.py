@@ -79,11 +79,13 @@ class _SegmentationModel(nn.Module):
         self.fail_quantized_forward = None
         self.fail_reference_forward = None
 
-    def forward(self, image):
+    def forward(self, image, return_se_targets=False):
         assert not self.training, "calibration must preserve evaluation mode"
         assert not torch.is_grad_enabled(), "calibration must disable gradients"
         case = int(image.flatten()[0].item())
         candidate = int(self.candidate.item())
+        if return_se_targets:
+            assert candidate < 0, "direct proxies must come from the original FP forward"
         if candidate < 0:
             self.events.append(("fp", case))
             if self.fail_reference_forward == case:
@@ -95,6 +97,11 @@ class _SegmentationModel(nn.Module):
             logits = self.weight[0].expand_as(image)
             gates = _gates(case, image.shape[0])
             self.fp_gates.append(gates)
+            if return_se_targets:
+                # Exchange which case produces each candidate to force a
+                # different winning index without changing logits or gates.
+                targets = _gates((case + 1) % len(self.mse), image.shape[0])
+                return logits, [], None, gates, targets
         else:
             self.events.append(("q", candidate, case))
             if self.fail_quantized_forward == (candidate, case):
@@ -108,14 +115,15 @@ class _SegmentationModel(nn.Module):
 
 
 class SECalibrationTests(unittest.TestCase):
-    def fixture(self, mse, sizes=None, limit=None):
+    def fixture(self, mse, sizes=None, limit=None, candidate_source="se"):
         sizes = tuple(sizes if sizes is not None else [1] * len(mse))
         events = []
         model = _SegmentationModel(mse, events).eval()
         loader = _Cases(sizes)
         quantizer = quantizer_module.AWQViTSegQuantizer(
             model, loader, n_calib_batches=limit if limit is not None else len(sizes),
-            device=torch.device("cpu"), args=SimpleNamespace(dataset="Synapse", img_size=2),
+            device=torch.device("cpu"), args=SimpleNamespace(dataset="Synapse", img_size=2, use_se_block=True),
+            candidate_source=candidate_source,
         )
         original = {name: tensor.detach().clone() for name, tensor in model.state_dict().items()}
         fixture = SimpleNamespace(
@@ -197,6 +205,65 @@ class SECalibrationTests(unittest.TestCase):
         self.assertEqual(fixture.install.call_count, 2)
         self.assertEqual(sum(event[0] == "q" for event in fixture.events), 4)
         self.assert_restored(fixture)
+
+    def test_both_sources_consume_identical_prepared_inputs_and_select_own_winner(self):
+        inputs = [torch.full((1, 1, 2, 2), float(i)) for i in range(2)]
+        for source, winner in [("se", 1), ("direct_proxy", 0)]:
+            with self.subTest(source=source):
+                fixture = self.fixture([[1.0, 2.0], [0.0, 0.5]], candidate_source=source)
+                fixture.quantizer.calib_loader = inputs
+                with mock.patch.object(fixture.model, "forward", wraps=fixture.model.forward) as forward:
+                    self.search(fixture)
+                for call, prepared in zip(forward.call_args_list[:2], inputs):
+                    self.assertIs(call.args[0], prepared)
+                for call, prepared in zip(forward.call_args_list[2:], inputs * 2):
+                    torch.testing.assert_close(call.args[0], prepared, rtol=0, atol=0)
+                self.assertEqual(forward.call_count, 6)
+                self.assertEqual(fixture.quantizer.winning_candidate_index, winner)
+                self.assertAlmostEqual(fixture.quantizer.winning_calibration_mse, 0.25, places=6)
+
+    def test_score_candidates_keeps_input_order_and_every_case_in_each_mean(self):
+        mse = [[1.0, 4.0], [0.0, 1.0]]
+        for source, candidate_ids in [("se", (0, 1)), ("direct_proxy", (1, 0))]:
+            with self.subTest(source=source):
+                fixture = self.fixture(mse, candidate_source=source)
+                quantizer = fixture.quantizer
+                with mock.patch.object(quantizer, "_get_vit_blocks", return_value=fixture.model.blocks):
+                    with mock.patch.object(quantizer_module, "pseudo_quantize_tensor", return_value=fixture.model.weight):
+                        candidates = quantizer.score_candidates()
+                self.assertEqual(len(candidates), 2)
+                for candidate, index in zip(candidates, candidate_ids):
+                    self.assert_gates(candidate.scales, index, slices=1)
+                    self.assertEqual(candidate.mean_mse, sum(mse[index]) / len(mse[index]))
+                self.assertEqual((fixture.loader.iterations, fixture.loader.consumed), (1, 2))
+                self.assertEqual(sum(event[0] == "q" for event in fixture.events), 4)
+                self.assert_restored(fixture)
+
+    def test_explicit_candidate_is_folded_and_packed_without_calibration(self):
+        block = nn.Module()
+        block.attention_norm = nn.LayerNorm(2)
+        block.ffn_norm = nn.LayerNorm(2)
+        block.attn = nn.Module()
+        for name in ("query", "key", "value"):
+            setattr(block.attn, name, nn.Linear(2, 2))
+        block.ffn = nn.Module()
+        block.ffn.fc1 = nn.Linear(2, 4)
+        model = nn.Module()
+        model.encoder = nn.Module()
+        model.encoder.blocks = nn.ModuleList([block])
+        loader = _Cases((1, 1))
+        quantizer = quantizer_module.AWQViTSegQuantizer(
+            model, loader, device="cpu", args=SimpleNamespace(use_se_block=True),
+        )
+        scales = torch.tensor([[[0.5, 2.0]]])
+        before = block.ffn.fc1.weight.detach().clone()
+        with mock.patch.object(quantizer, "_convert_selected_linears_in_block") as pack:
+            self.assertIs(quantizer.quantize(candidate_scales=[scales]), model)
+        pack.assert_called_once_with(block)
+        self.assertEqual(loader.iterations, 0)
+        torch.testing.assert_close(block.ffn.fc1.weight, before * scales.flatten())
+        torch.testing.assert_close(block.attention_norm.weight, scales.flatten().reciprocal())
+        torch.testing.assert_close(block.ffn_norm.weight, scales.flatten().reciprocal())
 
     def test_single_case_and_loader_shorter_than_limit(self):
         fixture = self.fixture([[0.3]], sizes=(4,), limit=8)

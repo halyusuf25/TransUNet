@@ -8,6 +8,7 @@ import logging
 import math
 
 from os.path import join as pjoin
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -149,7 +150,7 @@ class Embeddings(nn.Module):
         self.hybrid = None
         self.config = config
         img_size = _pair(img_size)
-        with open("networks/swin_large_patch4_window7_224_22k.yaml", "r") as f:
+        with Path(__file__).with_name("swin_large_patch4_window7_224_22k.yaml").open() as f:
             self.swin_config = edict(yaml.safe_load(f))
 
         if config.patches.get("grid") is not None:   # ResNet
@@ -305,7 +306,7 @@ class Block(nn.Module):
             return self.attn.qkv.weight.detach()
         raise ValueError("SE auxiliary targets require a supported full-channel QKV layout")
 
-    def forward(self, x, return_indices=False, return_se_aux=False):
+    def forward(self, x, return_indices=False, return_se_aux=False, return_se_targets=False):
         # Pre-norm
         if self.args.verbose:
             print(f"Block input x shape: {x.shape}")
@@ -317,7 +318,8 @@ class Block(nn.Module):
             getattr(self.args, "se_aux_loss", False) and self.args.use_se_block
         ):
             raise ValueError("SE auxiliary targets require both --use_se_block and --se_aux_loss")
-        if collect_aux:
+        collect_targets = collect_aux or return_se_targets
+        if collect_targets:
             # Compute small targets here; never cache activations or graphs.
             target_qkv = build_quantization_targets(
                 x, self._se_aux_qkv_weight(), **self.se_aux_config
@@ -339,7 +341,7 @@ class Block(nn.Module):
         # FFN with residual
         h = x
         x = self.ffn_norm(x)
-        if collect_aux:
+        if collect_targets:
             # FFN can have fewer tokens than QKV after Top-K/ATS selection.
             target_fc1 = build_quantization_targets(x, self.ffn.fc1.weight, **self.se_aux_config)
             if target_qkv.shape != target_fc1.shape:
@@ -353,7 +355,7 @@ class Block(nn.Module):
         result = (x, weights)
         if return_indices:
             result += (topk_idx if self.args.topk_attn > 0.0 else None,)
-        if collect_aux:
+        if collect_targets:
             result += (target_block,)
         return result
 
@@ -431,7 +433,7 @@ class Encoder(nn.Module):
 
     
 
-    def forward(self, hidden_states, return_se_aux=False):
+    def forward(self, hidden_states, return_se_aux=False, return_se_targets=False):
         attn_weights = []
         kept_indices = None  # absolute indices into the original (pre-prune) sequence
         absolute_indices = None
@@ -458,6 +460,7 @@ class Encoder(nn.Module):
         collect_aux = return_se_aux and self.training
         if collect_aux and (not self.se_aux_loss or not use_se):
             raise ValueError("SE auxiliary output requires enabled auxiliary training and active SE predictors")
+        collect_targets = collect_aux or return_se_targets
         if use_se and len(se_layers) != len(self.layer):
             raise RuntimeError("Expected exactly one SE predictor per encoder block")
         se_targets = []
@@ -467,9 +470,14 @@ class Encoder(nn.Module):
             if self.args.verbose:
                 print(f"Encoder layer#{layer_block_id} input hidden_states shape: {hidden_states.shape}")
 
-            if self.args.topk_attn > 0.0:
-                block_result = layer_block(hidden_states, return_indices=True, return_se_aux=collect_aux)
-                hidden_states, attn, local_idx = block_result[:3]
+            prune_tokens = self.args.topk_attn > 0.0
+            block_result = layer_block(
+                hidden_states, return_indices=prune_tokens,
+                return_se_aux=collect_aux, return_se_targets=return_se_targets,
+            )
+            hidden_states, attn = block_result[:2]
+            if prune_tokens:
+                local_idx = block_result[2]
                 local_idx = local_idx.to(device=absolute_indices.device, dtype=torch.long)
                 if self.args.verbose:
                     print(
@@ -489,10 +497,7 @@ class Encoder(nn.Module):
                         f"within original patch range [0, {N0 - 1}]"
                 )
                 kept_indices = absolute_indices
-            else:
-                block_result = layer_block(hidden_states, return_se_aux=collect_aux)
-                hidden_states, attn = block_result[:2]
-            if collect_aux:
+            if collect_targets:
                 se_targets.append(block_result[-1])
 
             if self.args.verbose:
@@ -518,7 +523,7 @@ class Encoder(nn.Module):
         
         encoded = self.encoder_norm(hidden_states)
         result = (encoded, attn_weights, kept_indices, se_scale)
-        if collect_aux:
+        if collect_targets:
             result += (se_targets,)
         return result
     
@@ -530,7 +535,7 @@ class Transformer(nn.Module):
         # self.embeddings = SwinTransformer(get_swin_tiny_config(), img_size=img_size, vis=vis)
         self.encoder = Encoder(config, vis)
 
-    def forward(self, input_ids, return_se_aux=False):
+    def forward(self, input_ids, return_se_aux=False, return_se_targets=False):
         if self.config.verbose:
             print(f"Backbone input shape: {input_ids.shape}")
             #torch.Size([2, 3, 224, 224]) = [batch, channels, height, width] → batch size 2, RGB 3 channels, 224×224 input images.
@@ -544,7 +549,9 @@ class Transformer(nn.Module):
         if self.config.verbose:
             print(f"Embedding output and Input to encoder transformer layer(0) shape: {embedding_output.shape}")
             
-        encoder_result = self.encoder(embedding_output, return_se_aux=return_se_aux)
+        encoder_result = self.encoder(
+            embedding_output, return_se_aux=return_se_aux, return_se_targets=return_se_targets
+        )
         encoded, attn_weights, kept_indices, se_scale = encoder_result[:4]
         # output ={ # to be used instead of the current return statement
         #     "encoded": encoded,
@@ -753,11 +760,14 @@ class VisionTransformer(nn.Module):
         )
         self.config = config
 
-    def forward(self, x, return_se_aux=False):
+    def forward(self, x, return_se_aux=False, return_se_targets=False):
+        """Append per-block training targets on an explicit calibration request."""
         if x.size()[1] == 1:
             x = x.repeat(1,3,1,1)
 
-        transformer_result = self.transformer(x, return_se_aux=return_se_aux)
+        transformer_result = self.transformer(
+            x, return_se_aux=return_se_aux, return_se_targets=return_se_targets
+        )
         x, attn_weights, features, kept_indices, orig_n_patches, se_scale = transformer_result[:6]
         # If pruning occurred, scatter tokens back to the original grid length
         if kept_indices is not None:

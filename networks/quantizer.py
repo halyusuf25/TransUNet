@@ -84,6 +84,14 @@ class BlockCalibInputs:
     ffn_in: torch.Tensor   # input to fc1 (post ffn_norm)
 
 
+@dataclass
+class CalibrationCandidate:
+    """One image's network-wide scales and the QDQ logit MSE over all calibration images."""
+
+    scales: List[torch.Tensor]
+    mean_mse: float
+
+
 class AWQViTSegQuantizer:
     """Quantize a ViT-based segmentation model (vit_seg_modeling.py) with AWQ-style scaling.
 
@@ -106,6 +114,7 @@ class AWQViTSegQuantizer:
         n_calib_batches: int = 8,
         device: Optional[torch.device] = None,
         args: Any = None,
+        candidate_source: str = "se",
     ):
         self.model = model
         self.calib_loader = calib_loader
@@ -113,6 +122,13 @@ class AWQViTSegQuantizer:
         self.q_group_size = int(q_group_size)
         self.n_calib_batches = int(n_calib_batches)
         self.args = args
+        if candidate_source not in {"se", "direct_proxy"}:
+            raise ValueError(f"Unsupported channel-scale candidate source: {candidate_source!r}")
+        if candidate_source == "direct_proxy" and not getattr(args, "use_se_block", False):
+            raise ValueError("Direct-proxy candidates require the full-model SE scale search.")
+        self.candidate_source = candidate_source
+        self.winning_candidate_index: Optional[int] = None
+        self.winning_calibration_mse: Optional[float] = None
 
         if device is None:
             device = next(model.parameters()).device
@@ -126,18 +142,23 @@ class AWQViTSegQuantizer:
     # -------------------------------------------------------------------------
 
     @torch.no_grad()
-    def quantize(self) -> nn.Module:
-        """Return a quantized model (in-place modification of self.model)."""
+    def score_candidates(self) -> List[CalibrationCandidate]:
+        """Score every candidate in input order, returning the model to its original FP weights."""
+        if not getattr(self.args, "use_se_block", False):
+            raise ValueError("Scoring network-wide candidates requires the full-model SE scale search.")
+        self.model.eval()
+        return self._score_candidates_full_model(self._get_vit_blocks(self.model))
+
+    @torch.no_grad()
+    def quantize(self, candidate_scales: Optional[Sequence[torch.Tensor]] = None) -> nn.Module:
+        """Pack self.model in place using an explicit candidate or a fresh calibration search."""
 
         self.model.eval()
 
         # 1) Find encoder blocks (tries to match common TransUNet/ViT naming)
         blocks = self._get_vit_blocks(self.model)
-        if not blocks:
-            raise RuntimeError(
-                "Could not find ViT transformer blocks. "
-                "Please adapt _get_vit_blocks() to your model structure."
-            )
+        if candidate_scales is not None and not self.args.use_se_block:
+            raise ValueError("Explicit candidate scales require the full-model SE scale path.")
 
         # 2) Collect calibration inputs for each block.
         #    For AWQ-style scaling we need the inputs to:
@@ -149,7 +170,7 @@ class AWQViTSegQuantizer:
             block_inputs = self._collect_block_inputs(blocks)
         scales_list_by_block = None
         if self.args.use_se_block:
-            scales_list_by_block = self._auto_se_scale(blocks)
+            scales_list_by_block = self._auto_se_scale(blocks, candidate_scales)
                 
         # 3) For each block:
         #    (a) auto-scale (AWQ)
@@ -214,7 +235,10 @@ class AWQViTSegQuantizer:
             except Exception:
                 pass
 
-        return []
+        raise RuntimeError(
+            "Could not find ViT transformer blocks. "
+            "Please adapt _get_vit_blocks() to your model structure."
+        )
 
     # -------------------------------------------------------------------------
     # Calibration input collection
@@ -539,7 +563,20 @@ class AWQViTSegQuantizer:
 
     @torch.no_grad()
     def _search_best_se_scales_full_model(self, blocks: List[nn.Module]) -> List[torch.Tensor]:
-        """Select one case's SE gates by mean logits MSE over all cached cases."""
+        """Select a network-wide scale candidate by mean logit MSE over all cases."""
+        self.winning_candidate_index = self.winning_calibration_mse = None
+        candidates = self._score_candidates_full_model(blocks)
+        finite = (i for i, candidate in enumerate(candidates) if np.isfinite(candidate.mean_mse))
+        best_index = min(finite, key=lambda i: candidates[i].mean_mse, default=None)
+        if best_index is None:
+            raise RuntimeError("No finite winning score found for SE calibration.")
+        best = candidates[best_index]
+        self.winning_candidate_index = best_index
+        self.winning_calibration_mse = best.mean_mse
+        return best.scales
+
+    @torch.no_grad()
+    def _score_candidates_full_model(self, blocks: List[nn.Module]) -> List[CalibrationCandidate]:
         if self.n_calib_batches <= 0:
             raise ValueError("n_calib_batches must be positive for SE calibration.")
 
@@ -551,14 +588,8 @@ class AWQViTSegQuantizer:
                 return output[0]
             return output
 
-        def _get_se_scales(output: Any) -> List[torch.Tensor]:
-            return self._extract_se_scales_from_output(output, expected_len=len(blocks))
-
         def w_quantize_func(p: torch.Tensor) -> torch.Tensor:
             return pseudo_quantize_tensor(p, n_bit=self.w_bit, **self.q_config).detach()
-
-        best_error = float("inf")
-        best_scales: Optional[List[torch.Tensor]] = None
 
         org_sd = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
         cases: List[Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]] = []
@@ -567,9 +598,10 @@ class AWQViTSegQuantizer:
 
         try:
             # Collect original references and whole candidates before changing weights.
-            # quantize() has already put the model in evaluation mode.
             for batch in self.calib_loader:
-                input = self._extract_input_tensor(batch["image"]).to(self.device)
+                # Tensor entries are already preprocessed model inputs [B,C,H,W].
+                input = batch if torch.is_tensor(batch) else self._extract_input_tensor(batch["image"])
+                input = input.to(self.device)
                 # Both Gumbel samplers use PyTorch RNGs. Token counts depend on
                 # input shape/keep rate, so replay aligns noise across blocks
                 # while every forward still computes its own scores/indices.
@@ -577,13 +609,18 @@ class AWQViTSegQuantizer:
                     torch.get_rng_state(),
                     [torch.cuda.get_rng_state(device) for device in cuda_devices],
                 ))
-                output = self.model(input)
+                if self.candidate_source == "direct_proxy":
+                    output = self.model(input, return_se_targets=True)
+                    scales = output[4]  # (logits, attention, features, gates, targets)
+                else:
+                    output = self.model(input)
+                    scales = self._extract_se_scales_from_output(output, expected_len=len(blocks))
                 cases.append((
                     input.detach().cpu().clone(),
                     _extract_logits(output).detach().cpu().clone(),
-                    [t.detach().cpu().clone() for t in _get_se_scales(output)],
+                    [t.detach().cpu().clone() for t in scales],
                 ))
-                del input, output
+                del input, output, scales
                 if len(cases) >= self.n_calib_batches:
                     break
 
@@ -591,6 +628,7 @@ class AWQViTSegQuantizer:
                 raise RuntimeError("SE calibration subset is empty.")
 
             self.model.load_state_dict(org_sd)
+            candidates = []
             # Candidate evaluation must not advance/rewind the surrounding RNG
             # stream, including when quantization or a forward raises.
             with torch.random.fork_rng(devices=cuda_devices):
@@ -612,32 +650,27 @@ class AWQViTSegQuantizer:
                             ).square().mean().item()
                             del input, q_output, q_logits
 
-                        loss = total_error / len(cases)
-                        if np.isfinite(loss) and loss < best_error:
-                            best_error = loss
-                            best_scales = se_scales
+                        candidates.append(CalibrationCandidate(se_scales, total_error / len(cases)))
                     finally:
                         # Also restore after partial quantization or a failed forward.
                         self.model.load_state_dict(org_sd)
 
-            if best_scales is None:
-                raise RuntimeError("No finite winning score found for SE calibration.")
-
-            return best_scales
+            return candidates
         finally:
             self.model.load_state_dict(org_sd)
 
     @torch.no_grad()
-    def _auto_se_scale(self, blocks: List[nn.Module]):
-        """Build per-block `scales_list` using full-model SE-derived scales."""
-        best_se_scales = self._search_best_se_scales_full_model(blocks)
-        if len(best_se_scales) != len(blocks):
+    def _auto_se_scale(self, blocks: List[nn.Module], candidate_scales: Optional[Sequence[torch.Tensor]] = None):
+        """Build per-block `scales_list` for the supplied or winning candidate."""
+        if candidate_scales is None:
+            candidate_scales = self._search_best_se_scales_full_model(blocks)
+        if len(candidate_scales) != len(blocks):
             raise RuntimeError(
-                f"SE scales length {len(best_se_scales)} does not match number of blocks {len(blocks)}."
+                f"SE scales length {len(candidate_scales)} does not match number of blocks {len(blocks)}."
             )
 
         scales_list_by_block = []
-        for blk, se_scale in zip(blocks, best_se_scales):
+        for blk, se_scale in zip(blocks, candidate_scales):
             se_vec = self._se_scale_to_vec(se_scale).detach()
             scales_list = []
 
