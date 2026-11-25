@@ -7,10 +7,10 @@ command line examples:
 CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 .venv/bin/python tools/compare_se_proxy.py \
   --dataset ACDC \
   --checkpoint ckpt/ckpt_ACDC/SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth \
-  --multiple_seeds \
+  --multiple_seeds --case_by_case \
   --calibration-seeds 1234 1235 1236 1237 1238 \
   --calibration-size 8 \
-  --output-dir benchmark/ACDC/compare_se_proxy/multiple_seeds
+  --output-dir benchmark/ACDC/compare_se_proxy/multiple_seeds/case_by_case
   
 CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 .venv/bin/python tools/compare_se_proxy.py \
   --dataset Cataract1k \
@@ -28,6 +28,31 @@ CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 .venv/bin/python tools/compare_se_proxy
   --calibration-seeds 1234 1235 1236 1237 1238 \
   --calibration-size 8 \
   --output-dir benchmark/Synapse/compare_se_proxy/multiple_seeds
+  
+CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 .venv/bin/python tools/compare_se_proxy.py \
+  --dataset ACDC \
+  --checkpoint ckpt/ckpt_ACDC/SELoss_ACDC__best_val_dice_0.8992649912834167_epoch_76_20260930_153247.pth \
+  --multiple_seeds --case_by_case \
+  --calibration-seeds 1234 1235 1236 1237 1238 \
+  --calibration-size 8 \
+  --output-dir benchmark/ACDC/compare_se_proxy/multiple_seeds/case_by_case
+  
+CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 .venv/bin/python tools/compare_se_proxy.py \
+  --dataset Cataract1k \
+  --checkpoint ckpt/ckpt_Cataract1k/SELoss_Cataract1k__best_val_dice_0.942674332857132_epoch_259_20260930_200930.pth \
+  --multiple_seeds --case_by_case \
+  --calibration-seeds 1234 1235 1236 1237 1238 \
+  --calibration-size 8 \
+  --normalize-present-class-eval \
+  --output-dir benchmark/Cataract1k/compare_se_proxy/multiple_seeds/case_by_case
+  
+CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 .venv/bin/python tools/compare_se_proxy.py \
+  --dataset Synapse \
+  --checkpoint ckpt/ckpt_Synapse/SELoss_Synapse__best_val_dice_0.7899280190467834_epoch_100_20260930_173838.pth \
+  --multiple_seeds --case_by_case \
+  --calibration-seeds 1234 1235 1236 1237 1238 \
+  --calibration-size 8 \
+  --output-dir benchmark/Synapse/compare_se_proxy/multiple_seeds/case_by_case
 """
 
 
@@ -53,13 +78,12 @@ def parse_args(argv=None):
     parser.add_argument("--calibration-seeds", type=int, nargs="+", metavar="SEED",
                         default=[1234, 1235, 1236, 1237, 1238],
                         help="Ordered sampling seeds for --multiple_seeds (default: %(default)s)")
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--case_by_case", action="store_true",
-                      help="Evaluate both packed models for every scale-generating calibration image")
-    mode.add_argument("--multiple_seeds", action="store_true",
-                      help="Evaluate each method's minimum-MSE candidate for each calibration draw")
+    parser.add_argument("--case_by_case", action="store_true",
+                        help="Also evaluate and compare both packed models for every matched calibration image")
+    parser.add_argument("--multiple_seeds", action="store_true",
+                        help="Repeat the comparison for each seed in --calibration-seeds")
     parser.add_argument("--output-dir", type=Path, help="Report directory (default benchmark/<dataset>/compare_se_proxy, "
-                        "with a case_by_case or multiple_seeds subdirectory for those modes)")
+                        "with multiple_seeds and/or case_by_case subdirectories for those options)")
     parser.add_argument("--train-root", help="Training data root (Synapse train_npz, ACDC or Cataract1k data root)")
     parser.add_argument("--volume-path", help="Test volume or frame root")
     parser.add_argument("--list-dir", help="Directory with train.txt and test_vol.txt for Synapse or ACDC, "
@@ -126,10 +150,10 @@ def experiment_args(options):
         args.Dataset = listed_acdc_dataset
     if args.output_dir is None:
         args.output_dir = ROOT / args.benchmark_dict / args.dataset / "compare_se_proxy"
+        if args.multiple_seeds:
+            args.output_dir /= "multiple_seeds"
         if args.case_by_case:
             args.output_dir /= "case_by_case"
-        elif args.multiple_seeds:
-            args.output_dir /= "multiple_seeds"
     args.use_se_block = True
     return args
 
@@ -218,9 +242,12 @@ def run_method(args, source, calibration_inputs, model):
 
 
 def run_paired_method(args, source, calibration_inputs, model):
-    """Score the K candidates once, then fold and pack a fresh FP copy for each one."""
+    """Evaluate every scored candidate once and return the winner's row alongside all rows."""
+    from src.se_auxiliary import lowest_mse_index
+
     settings = model.transformer.encoder.se_aux_config
     candidates = make_quantizer(args, source, calibration_inputs, model).score_candidates()
+    winner = lowest_mse_index(candidate.mean_mse for candidate in candidates)
     results = []
     for index, candidate in enumerate(candidates):
         print(f"Evaluating {source} candidate {index + 1}/{len(candidates)}", flush=True)
@@ -228,7 +255,7 @@ def run_paired_method(args, source, calibration_inputs, model):
         packed = quantizer.quantize(candidate_scales=candidate.scales)
         results.append((index, candidate.mean_mse, evaluate_packed(args, packed), settings))
         del packed, quantizer
-    return results
+    return results[winner], results
 
 
 def report_header(args, ids, settings):
@@ -326,24 +353,97 @@ def format_seed_summary(args, runs):
     return "\n".join(lines) + "\n"
 
 
+def format_matched_seed_summary(args, runs):
+    """Summarize matched-image differences with the calibration seed as the sampling unit."""
+    import numpy as np
+
+    if not runs:
+        raise ValueError("At least one calibration draw is required for a matched-image summary")
+
+    def format_values(values, signed):
+        formats = (".8g", ".4f", ".4f", ".4f")
+        return [format(value, ("+" if signed else "") + fmt) if np.isfinite(value) else "N/A"
+                for value, fmt in zip(values, formats)]
+
+    lines = [
+        "# Matched calibration images across seeds",
+        "",
+        f"Each seed pairs the two methods on {args.calibration_size} scale-generating training images. "
+        f"Each packed candidate is evaluated on the full {args.dataset} test split.",
+        "Each Δ is SE-AUX minus direct proxy. Each row averages the matched-image differences within "
+        "one seed. The last row gives the mean and sample SD of those seed means, weighting seeds equally. "
+        "Sample SD requires at least two seeds. HD95 uses the evaluator's native units.",
+        "",
+        "| Calibration seed | Δ logit MSE | Δ Dice (pp) | Δ IoU (pp) | Δ HD95 |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    image_deltas = []
+    seed_deltas = []
+    for seed, se_results, proxy_results in runs:
+        rows = matched_metric_rows(se_results, proxy_results, args.calibration_size)
+        deltas = [delta for _, _, delta in rows]
+        seed_mean = mean_metric_values(deltas)
+        lines.append(f"| {seed} | " + " | ".join(format_values(seed_mean, signed=True)) + " |")
+        image_deltas.extend(deltas)
+        seed_deltas.append(seed_mean)
+
+    with np.errstate(invalid="ignore"):
+        mean = np.mean(seed_deltas, axis=0)
+        sd = np.std(seed_deltas, axis=0, ddof=1) if len(runs) > 1 else np.full_like(mean, np.nan)
+    cells = [f"{m} ± {s}" for m, s in zip(format_values(mean, signed=True), format_values(sd, signed=False))]
+    lines.extend([
+        "| **Mean ± sample SD** | " + " | ".join(cells) + " |",
+        "",
+        "Win counts are SE-AUX / direct proxy / ties. Higher Dice and IoU and lower MSE and HD95 win. "
+        "Matched images count each image within each draw. Seed means count each draw once. "
+        "Counts include finite differences only.",
+        "",
+        "| Comparison unit | Logit MSE | Dice | IoU | HD95 |",
+        "|---|---:|---:|---:|---:|",
+    ])
+    for label, deltas in (("Matched images", image_deltas), ("Seed means", seed_deltas)):
+        counts = [f"{se} / {proxy} / {ties}" for se, proxy, ties in metric_win_counts(deltas)]
+        lines.append(f"| {label} | " + " | ".join(counts) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def matched_metric_rows(se_results, proxy_results, expected_count):
+    """Pair SE-AUX values, proxy values and differences by scale-generating image index."""
+    def ordered_values(results):
+        by_index = sorted(results, key=lambda r: r[0])
+        if not expected_count or [r[0] for r in by_index] != list(range(expected_count)):
+            raise ValueError("Expected one result per calibration image for each method")
+        return [(mse, 100 * metrics["mean_dice"], 100 * metrics["mean_iou"], metrics["mean_hd95"])
+                for _, mse, metrics, _ in by_index]
+
+    return [(se, proxy, tuple(a - b for a, b in zip(se, proxy)))
+            for se, proxy in zip(ordered_values(se_results), ordered_values(proxy_results))]
+
+
+def mean_metric_values(rows):
+    from math import isfinite, nan
+    from statistics import fmean
+
+    return tuple(fmean(column) if all(map(isfinite, column)) else nan for column in zip(*rows))
+
+
+def metric_win_counts(delta_rows):
+    """Count SE wins, proxy wins and ties from unrounded SE-minus-proxy differences."""
+    from math import isfinite
+
+    counts = []
+    # In column order, lower MSE, higher Dice, higher IoU and lower HD95 win.
+    for deltas, direction in zip(zip(*delta_rows), (-1, 1, 1, -1)):
+        margins = [delta * direction for delta in deltas if isfinite(delta)]
+        counts.append((sum(v > 0 for v in margins), sum(v < 0 for v in margins), margins.count(0)))
+    return counts
+
+
 def format_paired_report(args, ids, se_results, proxy_results):
     """Show test metrics for each scale-generating image, paired across methods."""
     from math import isfinite
-    from statistics import fmean
 
-    def ordered(results):
-        by_index = sorted(results, key=lambda r: r[0])
-        if not ids or [r[0] for r in by_index] != list(range(len(ids))):
-            raise ValueError("Expected one result per calibration image for each method")
-        return by_index
-
-    def metric_rows(results):
-        rows = [(mse, 100 * metrics["mean_dice"], 100 * metrics["mean_iou"], metrics["mean_hd95"])
-                for _, mse, metrics, _ in results]
-        return rows + [tuple(fmean(column) for column in zip(*rows))]
-
-    se_results = ordered(se_results)
-    proxy_results = ordered(proxy_results)
+    rows = matched_metric_rows(se_results, proxy_results, len(ids))
     lines = report_header(args, ids, se_results[0][3])
     lines.extend([
         "## Matched calibration images",
@@ -352,34 +452,37 @@ def format_paired_report(args, ids, se_results, proxy_results):
         f"is averaged over all {len(ids)} calibration images. Dice, IoU, and HD95 use the full test split.",
         "Each Δ is SE-AUX minus direct proxy. The mean gives each calibration image equal weight.",
         "",
-        "| Scale-generating training image | SE-AUX MSE | Proxy MSE | SE-AUX Dice (%) | Proxy Dice (%) | "
+        "| Scale-generating training image | SE-AUX MSE | Proxy MSE | Δ MSE | SE-AUX Dice (%) | Proxy Dice (%) | "
         "Δ Dice (pp) | SE-AUX IoU (%) | Proxy IoU (%) | Δ IoU (pp) | SE-AUX HD95 | Proxy HD95 | Δ HD95 |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ])
     labels = [f"`{name}`" for name in ids] + ["**Paired mean**"]
-    for label, se, proxy in zip(labels, metric_rows(se_results), metric_rows(proxy_results)):
-        se_mse, se_dice, se_iou, se_hd95 = se
-        proxy_mse, proxy_dice, proxy_iou, proxy_hd95 = proxy
-        lines.append(f"| {label} | {se_mse:.8g} | {proxy_mse:.8g} | {se_dice:.4f} | {proxy_dice:.4f} | "
-                     f"{se_dice - proxy_dice:+.4f} | {se_iou:.4f} | {proxy_iou:.4f} | "
-                     f"{se_iou - proxy_iou:+.4f} | {se_hd95:.4f} | {proxy_hd95:.4f} | "
-                     f"{se_hd95 - proxy_hd95:+.4f} |")
+    mean_row = tuple(mean_metric_values(group) for group in zip(*rows))
+    for label, row in zip(labels, [*rows, mean_row]):
+        cells = [label]
+        for precision, (se, proxy, delta) in zip((".8g", ".4f", ".4f", ".4f"), zip(*row)):
+            for value, fmt in ((se, precision), (proxy, precision), (delta, "+" + precision)):
+                cells.append(format(value, fmt) if isfinite(value) else "N/A")
+        lines.append("| " + " | ".join(cells) + " |")
 
-    winners = []
-    for name, results in (("SE-AUX", se_results), ("direct proxy", proxy_results)):
-        best = min((r for r in results if isfinite(r[1])), key=lambda r: r[1], default=None)
-        if best is None:
-            lines.extend(["", f"All {name} calibration MSEs were nonfinite."])
-        else:
-            index, mse, _, _ = best
-            winners.append(f"{name} with `{ids[index]}` ({mse:.8g})")
-    if winners:
-        lines.extend(["", "The lowest calibration MSE for each method was attained by " + " and ".join(winners) + "."])
+    lines.extend([
+        "", "### Matched-image win counts", "",
+        "Lower calibration MSE and HD95 win. Higher Dice and IoU win. Counts use finite, unrounded differences.",
+        "", "| Metric | SE-AUX wins | Direct proxy wins | Ties |", "|---|---:|---:|---:|",
+    ])
+    counts = metric_win_counts([delta for _, _, delta in rows])
+    for metric, (se_wins, proxy_wins, ties) in zip(("Calibration logit MSE", "Test Dice", "Test IoU", "HD95"), counts):
+        lines.append(f"| {metric} | {se_wins} | {proxy_wins} | {ties} |")
     return "\n".join(lines) + "\n"
 
 
+def write_report(path, report):
+    print(report, end="")
+    path.write_text(report, encoding="utf-8")
+
+
 def run_seed(args):
-    """Run both methods on one shared calibration draw and save its report."""
+    """Compare the selected models and optionally retain all matched-image evaluations."""
     import torch
 
     model = load_rms_model(args)
@@ -387,18 +490,22 @@ def run_seed(args):
         raise RuntimeError("Packed W4A16 evaluation requires a visible CUDA GPU.")
     ids, inputs = prepare_calibration(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    evaluate = run_paired_method if args.case_by_case else run_method
+
+    def evaluate(source, model):
+        if args.case_by_case:
+            return run_paired_method(args, source, inputs, model)
+        return run_method(args, source, inputs, model), None
+
     print(f"Calibrating SE-AUX on {len(ids)} training images", flush=True)
-    se = evaluate(args, "se", inputs, model)
+    se, se_cases = evaluate("se", model)
     del model
     print(f"Calibrating direct proxy on the same {len(ids)} training images", flush=True)
-    proxy = evaluate(args, "direct_proxy", inputs, load_rms_model(args))
+    proxy, proxy_cases = evaluate("direct_proxy", load_rms_model(args))
 
-    formatter = format_paired_report if args.case_by_case else format_report
-    report = formatter(args, ids, se, proxy)
-    print(report, end="")
-    (args.output_dir / "results.md").write_text(report, encoding="utf-8")
-    return se, proxy
+    write_report(args.output_dir / "results.md", format_report(args, ids, se, proxy))
+    if args.case_by_case:
+        write_report(args.output_dir / "case_by_case_results.md", format_paired_report(args, ids, se_cases, proxy_cases))
+    return se, proxy, se_cases, proxy_cases
 
 
 def main(argv=None):
@@ -412,18 +519,21 @@ def main(argv=None):
         run_seed(args)
         return
 
-    runs = []
+    selected_runs = []
+    matched_runs = []
     for seed in args.calibration_seeds:
         draw = copy(args)
         draw.calibration_seed = seed
         draw.output_dir = args.output_dir / f"seed_{seed}"
         print(f"Running calibration seed {seed}", flush=True)
-        se, proxy = run_seed(draw)
-        runs.append((seed, se, proxy))
+        se, proxy, se_cases, proxy_cases = run_seed(draw)
+        selected_runs.append((seed, se, proxy))
+        if args.case_by_case:
+            matched_runs.append((seed, se_cases, proxy_cases))
 
-    summary = format_seed_summary(args, runs)
-    print(summary, end="")
-    (args.output_dir / "summary.md").write_text(summary, encoding="utf-8")
+    write_report(args.output_dir / "summary.md", format_seed_summary(args, selected_runs))
+    if args.case_by_case:
+        write_report(args.output_dir / "case_by_case_summary.md", format_matched_seed_summary(args, matched_runs))
 
 
 if __name__ == "__main__":

@@ -20,6 +20,14 @@ DEFAULT_SE_AUX_CONFIG = {
 }
 
 
+def lowest_mse_index(scores):
+    """Select the first candidate with the lowest finite calibration logit MSE."""
+    finite = [(mse, index) for index, mse in enumerate(scores) if math.isfinite(mse)]
+    if not finite:
+        raise RuntimeError("No finite winning score found for SE calibration.")
+    return min(finite)[1]
+
+
 def _validate_target_config(bits, group_size, zero_point, eps):
     if isinstance(bits, bool) or not isinstance(bits, int) or not 1 <= bits <= 16:
         raise ValueError("SE target bits must be an integer between 1 and 16.")

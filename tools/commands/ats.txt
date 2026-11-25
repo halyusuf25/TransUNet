@@ -1,0 +1,246 @@
+
+
+CUDA_VISIBLE_DEVICES=1 python train.py \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --max_epochs 250 \
+  --batch_size 24 \
+  --base_lr 0.01 \
+  --seed 1234 \
+  --dataloader_num_workers 8 \
+  --use_ats \
+  --topk_attn 0.5 \
+  --use_bu_loss \
+  --buloss_option B \
+  --lambda_ 0.5 \
+  --learn_tau \
+  --tau_init 1.0 \
+  --tau_min 0.001 \
+  --alpha 1.0 \
+  --boundary_radius 1 \
+  --ckpt_dir ckpt/Synapse/ \
+  --ckpt ATS_UB_s1234 \
+  --description "ATS + UB loss on Synapse (seed_1234)"
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+  --dataset ACDC \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --max_epochs 250 \
+  --batch_size 24 \
+  --base_lr 0.01 \
+  --seed 1234 \
+  --dataloader_num_workers 8 \
+  --use_ats \
+  --topk_attn 0.5 \
+  --use_bu_loss \
+  --buloss_option B \
+  --lambda_ 0.5 \
+  --learn_tau \
+  --tau_init 1.0 \
+  --tau_min 0.001 \
+  --alpha 1.0 \
+  --boundary_radius 1 \
+  --ckpt_dir ckpt/ACDC/ \
+  --ckpt ATS_UB_s1234 \
+  --description "ATS + UB loss on ACDC seed_1234"
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --max_epochs 250 \
+  --batch_size 24 \
+  --base_lr 0.01 \
+  --seed 1234 \
+  --dataloader_num_workers 8 \
+  --use_ats \
+  --topk_attn 0.5 \
+  --use_bu_loss \
+  --buloss_option B \
+  --lambda_ 0.5 \
+  --learn_tau \
+  --tau_init 1.0 \
+  --tau_min 0.001 \
+  --alpha 1.0 \
+  --boundary_radius 1 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt ATS_UB_s1234 \
+  --description "ATS + UB loss on Cataract-1K seed_1234"
+
+
+
+
+Gumbel
+CUDA_VISIBLE_DEVICES=0 python train.py \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --max_epochs 250 \
+  --batch_size 24 \
+  --base_lr 0.01 \
+  --seed 1234 \
+  --dataloader_num_workers 8 \
+  --use_gumbel_topk \
+  --topk_attn 0.5 \
+  --use_bu_loss \
+  --buloss_option B \
+  --lambda_ 0.5 \
+  --learn_tau \
+  --tau_init 1.0 \
+  --tau_min 0.001 \
+  --alpha 1.0 \
+  --boundary_radius 1 \
+  --ckpt_dir ckpt/Synapse/ \
+  --ckpt GUMBEL_UB_s1234 \
+  --description "GUMBEL + UB loss on Synapse (seed_1234)"
+
+
+CUDA_VISIBLE_DEVICES=4 python train.py \
+  --dataset ACDC \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --max_epochs 250 \
+  --batch_size 24 \
+  --base_lr 0.01 \
+  --seed 1234 \
+  --dataloader_num_workers 8 \
+  --use_gumbel_topk \
+  --topk_attn 0.5 \
+  --use_bu_loss \
+  --buloss_option B \
+  --lambda_ 0.5 \
+  --learn_tau \
+  --tau_init 1.0 \
+  --tau_min 0.001 \
+  --alpha 1.0 \
+  --boundary_radius 1 \
+  --ckpt_dir ckpt/ACDC/ \
+  --ckpt GUMBEL_UB_s1234 \
+  --description "GUMBEL + UB loss on ACDC seed_1234"
+
+
+CUDA_VISIBLE_DEVICES=2 python train.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --max_epochs 250 \
+  --batch_size 24 \
+  --base_lr 0.01 \
+  --seed 1234 \
+  --dataloader_num_workers 8 \
+  --use_gumbel_topk \
+  --topk_attn 0.5 \
+  --use_bu_loss \
+  --buloss_option B \
+  --lambda_ 0.5 \
+  --learn_tau \
+  --tau_init 1.0 \
+  --tau_min 0.001 \
+  --alpha 1.0 \
+  --boundary_radius 1 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt GUMBEL_UB_s1234 \
+  --description "GUMBEL + UB loss on Cataract-1K seed_1234"
+
+
+
+Testing commands
+
+# Synapse — ATS
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_ats \
+  --seed 3234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Synapse/ \
+  --ckpt ATS_UB_s3234_Synapse__best_val_dice_0.7997726202011108_epoch_79_20261122_112524.pth \
+  --benchmark_dict benchmark_seed/ \
+  --description "Synapse | ATS + L_UB | r=0.5 | test seed 3234"
+
+# Synapse — Gumbel-Top-K
+CUDA_VISIBLE_DEVICES=3 python test.py \
+  --dataset Synapse \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_gumbel_topk \
+  --gumbel_sampling_mode manual \
+  --seed 3234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Synapse/ \
+  --ckpt GUMBEL_UB_s3234_Synapse__best_val_dice_0.7972315549850464_epoch_139_20261122_150553.pth \
+  --benchmark_dict benchmark_seed/ \
+  --description "Synapse | Gumbel-Top-K + L_UB | manual sampling | r=0.5 | test seed 3234"
+
+# ACDC — ATS
+CUDA_VISIBLE_DEVICES=1 python test.py \
+  --dataset ACDC \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_ats \
+  --seed 3234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/ACDC/ \
+  --ckpt ATS_UB_s3234_ACDC__best_val_dice_0.9049830436706543_epoch_97_20261122_105329.pth \
+  --benchmark_dict benchmark_seed/ \
+  --description "ACDC | ATS + L_UB | r=0.5 | test seed 3234 2nd"
+
+# ACDC — Gumbel-Top-K
+CUDA_VISIBLE_DEVICES=5 python test.py \
+  --dataset ACDC \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_gumbel_topk \
+  --gumbel_sampling_mode manual \
+  --seed 3234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/ACDC/ \
+  --ckpt GUMBEL_UB_s3234_ACDC__best_val_dice_0.9023473858833313_epoch_130_20261122_141312.pth \
+  --benchmark_dict benchmark_seed/ \
+  --description "ACDC | Gumbel-Top-K + L_UB | manual sampling | r=0.5 | test seed 3234"
+
+# Cataract-1K — ATS
+CUDA_VISIBLE_DEVICES=1 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_ats \
+  --normalize_present_class_eval \
+  --seed 1234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt "YOUR_CATARACT1K_ATS_CHECKPOINT.pth" \
+  --benchmark_dict benchmark_seed/ \
+  --description "Cataract-1K | ATS + L_UB | r=0.5 | test seed 1234"
+
+# Cataract-1K — Gumbel-Top-K
+CUDA_VISIBLE_DEVICES=4 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_gumbel_topk \
+  --gumbel_sampling_mode manual \
+  --normalize_present_class_eval \
+  --seed 1234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt "YOUR_CATARACT1K_GUMBEL_CHECKPOINT.pth" \
+  --benchmark_dict benchmark_seed \
+  --description "Cataract-1K | Gumbel-Top-K + L_UB | manual sampling | r=0.5 | test seed 1234"

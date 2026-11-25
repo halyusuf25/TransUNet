@@ -1,0 +1,121 @@
+# ============================================================
+# Cataract-1K — ATS — Seed 1234
+# Best validation Dice: 94.2199% | Epoch: 250
+# ============================================================
+CUDA_VISIBLE_DEVICES=0 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_ats \
+  --normalize_present_class_eval \
+  --seed 1234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt ATS_UB_s1234_Cataract1k__best_val_dice_0.935773492231965_epoch_223_20261122_095304.pth \
+  --benchmark_dict benchmark_seed/ \
+  --description "Cataract-1K | ATS + L_UB | r=0.5 | test seed 1234"
+
+
+# ============================================================
+# Cataract-1K — ATS — Seed 2234
+# Best validation Dice: 94.6378% | Epoch: 229
+# ============================================================
+CUDA_VISIBLE_DEVICES=1 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_ats \
+  --normalize_present_class_eval \
+  --seed 2234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt ATS_UB_s2234_Cataract1k__best_val_dice_0.9409989780435959_epoch_205_20261122_120007.pth \
+  --benchmark_dict benchmark_seed/ \
+  --description "Cataract-1K | ATS + L_UB | r=0.5 | test seed 2234"
+
+
+# ============================================================
+# Cataract-1K — ATS — Seed 3234
+# Best validation Dice: 94.5665% | Epoch: 250
+# ============================================================
+CUDA_VISIBLE_DEVICES=2 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_ats \
+  --normalize_present_class_eval \
+  --seed 3234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt ATS_UB_s3234_Cataract1k__best_val_dice_0.9396695354332526_epoch_223_20261122_134400.pth \
+  --benchmark_dict benchmark_seed/ \
+  --description "Cataract-1K | ATS + L_UB | r=0.5 | test seed 3234"
+
+
+# ============================================================
+# Cataract-1K — Gumbel-Top-K — Seed 1234
+# Best validation Dice: 93.5615% | Epoch: 250
+# ============================================================
+CUDA_VISIBLE_DEVICES=1 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_gumbel_topk \
+  --gumbel_sampling_mode manual \
+  --normalize_present_class_eval \
+  --seed 1234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt "GUMBEL_UB_s1234_Cataract1k__best_val_dice_0.9356150638312102_epoch_250_20261123_032435.pth" \
+  --benchmark_dict benchmark_seed/ \
+  --description "Cataract-1K | Gumbel-Top-K + L_UB | manual sampling | r=0.5 | test seed 1234"
+
+
+# ============================================================
+# Cataract-1K — Gumbel-Top-K — Seed 2234
+# Best validation Dice: 93.8121% | Epoch: 232
+# ============================================================
+CUDA_VISIBLE_DEVICES=2 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_gumbel_topk \
+  --gumbel_sampling_mode manual \
+  --normalize_present_class_eval \
+  --seed 2234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt "GUMBEL_UB_s2234_Cataract1k__best_val_dice_0.9381206641594569_epoch_232_20261122_184137.pth" \
+  --benchmark_dict benchmark_seed/ \
+  --description "Cataract-1K | Gumbel-Top-K + L_UB | manual sampling | r=0.5 | test seed 2234"
+
+
+# ============================================================
+# Cataract-1K — Gumbel-Top-K — Seed 3234
+# Best validation Dice: 93.7982% | Epoch: 229
+# ============================================================
+CUDA_VISIBLE_DEVICES=5 python test.py \
+  --dataset Cataract1k \
+  --vit_name R50-ViT-B_16 \
+  --img_size 224 \
+  --topk_attn 0.5 \
+  --use_gumbel_topk \
+  --gumbel_sampling_mode manual \
+  --normalize_present_class_eval \
+  --seed 3234 \
+  --deterministic 1 \
+  --repeated_runs 10 \
+  --ckpt_dir ckpt/Cataract1k/ \
+  --ckpt "GUMBEL_UB_s3234_Cataract1k__best_val_dice_0.9379815808186928_epoch_229_20261122_170546.pth" \
+  --benchmark_dict benchmark_seed/ \
+  --description "Cataract-1K | Gumbel-Top-K + L_UB | manual sampling | r=0.5 | test seed 3234"

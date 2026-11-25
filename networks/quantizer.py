@@ -26,6 +26,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from scipy.ndimage import zoom
+from src.se_auxiliary import lowest_mse_index
 
 # -----------------------------------------------------------------------------
 # Imports from the AWQ code you attached.
@@ -566,10 +567,7 @@ class AWQViTSegQuantizer:
         """Select a network-wide scale candidate by mean logit MSE over all cases."""
         self.winning_candidate_index = self.winning_calibration_mse = None
         candidates = self._score_candidates_full_model(blocks)
-        finite = (i for i, candidate in enumerate(candidates) if np.isfinite(candidate.mean_mse))
-        best_index = min(finite, key=lambda i: candidates[i].mean_mse, default=None)
-        if best_index is None:
-            raise RuntimeError("No finite winning score found for SE calibration.")
+        best_index = lowest_mse_index(candidate.mean_mse for candidate in candidates)
         best = candidates[best_index]
         self.winning_candidate_index = best_index
         self.winning_calibration_mse = best.mean_mse

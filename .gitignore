@@ -176,6 +176,7 @@ ckpt_/
 ckpt__/
 myckpt/
 checkpoints/
+benchmark/
 *.json
 *.png
 

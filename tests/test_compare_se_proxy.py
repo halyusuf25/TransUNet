@@ -15,6 +15,15 @@ from src.se_auxiliary import DEFAULT_SE_AUX_CONFIG
 from tools import compare_se_proxy
 
 
+def markdown_rows(report):
+    rows = {}
+    for line in report.splitlines():
+        if line.startswith("| "):
+            label, *cells = (cell.strip() for cell in line.strip("|").split("|"))
+            rows[label] = cells
+    return rows
+
+
 class CompareSEProxyTest(unittest.TestCase):
     def test_multiple_seed_cli_repeats_winner_search_with_matched_draws(self):
         seeds = (31, 17)
@@ -68,8 +77,7 @@ class CompareSEProxyTest(unittest.TestCase):
 
             summary = (output_dir / "summary.md").read_text()
             self.assertIn(summary, stdout.getvalue())
-            lines = [line.strip("|").split("|") for line in summary.splitlines() if line.startswith("| ")]
-            rows = {cells[0].strip(): [cell.strip() for cell in cells[1:]] for cells in lines}
+            rows = markdown_rows(summary)
             expected_rows = {
                 "[31](seed_31/results.md)": [90, 78, 12, 60, 65, -5, 4, 5, -1],
                 "[17](seed_17/results.md)": [80, 82, -2, 50, 45, 5, 8, 5, 3],
@@ -83,11 +91,11 @@ class CompareSEProxyTest(unittest.TestCase):
 
     def test_multiple_seed_defaults_and_sample_sd_for_one_draw(self):
         required = ["--dataset", "Synapse", "--checkpoint", "weights.pth"]
-        options = compare_se_proxy.parse_args(required + ["--multiple_seeds"])
+        options = compare_se_proxy.parse_args(required + ["--multiple_seeds", "--case_by_case"])
         self.assertEqual(list(options.calibration_seeds), [1234, 1235, 1236, 1237, 1238])
-        for extra in (["--case_by_case"], ["--calibration-seeds", "7", "7"]):
-            with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                compare_se_proxy.parse_args(required + ["--multiple_seeds"] + extra)
+        self.assertTrue(options.case_by_case)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            compare_se_proxy.parse_args(required + ["--multiple_seeds", "--calibration-seeds", "7", "7"])
         args = compare_se_proxy.experiment_args(options)
         result = (0, 0.2, dict(mean_dice=0.75, mean_iou=0.5, mean_hd95=1), DEFAULT_SE_AUX_CONFIG)
         summary = compare_se_proxy.format_seed_summary(args, [(7, result, result)])
@@ -106,15 +114,42 @@ class CompareSEProxyTest(unittest.TestCase):
         se = [result(0, 0.25, 0.75, 0.55, 3), result(1, 0.5, 0.65, 0.45, 5)]
         proxy = [result(1, 0.125, 0.70, 0.40, 7), result(0, 0.375, 0.70, 0.60, 2)]
         report = compare_se_proxy.format_paired_report(args, ids, se, proxy)
-        self.assertIn("| `slice_b` | 0.25 | 0.375 | 75.0000 | 70.0000 | +5.0000 | "
-                      "55.0000 | 60.0000 | -5.0000 | 3.0000 | 2.0000 | +1.0000 |", report)
-        self.assertIn("| `slice_a` | 0.5 | 0.125 | 65.0000 | 70.0000 | -5.0000 | "
-                      "45.0000 | 40.0000 | +5.0000 | 5.0000 | 7.0000 | -2.0000 |", report)
-        self.assertIn("| **Paired mean** | 0.375 | 0.25 | 70.0000 | 70.0000 | +0.0000 | "
-                      "50.0000 | 50.0000 | +0.0000 | 4.0000 | 4.5000 | -0.5000 |", report)
-        self.assertIn("SE-AUX with `slice_b` (0.25) and direct proxy with `slice_a` (0.125)", report)
+        rows = markdown_rows(report)
+        np.testing.assert_allclose([float(v) for v in rows["`slice_b`"]],
+                                   [.25, .375, -.125, 75, 70, 5, 55, 60, -5, 3, 2, 1])
+        np.testing.assert_allclose([float(v) for v in rows["`slice_a`"]],
+                                   [.5, .125, .375, 65, 70, -5, 45, 40, 5, 5, 7, -2])
+        mean = rows["**Paired mean**"]
+        np.testing.assert_allclose([float(v) for v in mean], [.375, .25, .125, 70, 70, 0, 50, 50, 0, 4, 4.5, -.5])
+        for metric in ("Calibration logit MSE", "Test Dice", "Test IoU", "HD95"):
+            self.assertEqual(rows[metric], ["1", "1", "0"])
         with self.assertRaisesRegex(ValueError, "one result per calibration image"):
             compare_se_proxy.format_paired_report(args, ids, se, [proxy[0], proxy[0]])
+
+    def test_matched_summary_averages_within_seeds_before_sample_sd_and_win_counts(self):
+        args = compare_se_proxy.experiment_args(compare_se_proxy.parse_args([
+            "--dataset", "Synapse", "--checkpoint", "weights.pth", "--calibration-size", "2",
+        ]))
+
+        def result(index, mse, dice, iou, hd95):
+            metrics = dict(mean_dice=dice, mean_iou=iou, mean_hd95=hd95)
+            return index, mse, metrics, DEFAULT_SE_AUX_CONFIG
+
+        proxy = [result(i, .125, .5, .5, 4) for i in range(2)]
+        se_first = [result(0, .0625, .625, .5, 3), result(1, .125, .375, .625, 5)]
+        se_second = [result(i, .25, .75, .375, 2) for i in range(2)]
+        runs = [(31, se_first, proxy), (17, se_second, proxy)]
+        rows = markdown_rows(compare_se_proxy.format_matched_seed_summary(args, runs))
+        seed_means = [[-.03125, 0, 6.25, 0], [.125, 25, -12.5, -2]]
+        for seed, expected in zip((31, 17), seed_means):
+            np.testing.assert_allclose([float(v) for v in rows[str(seed)]], expected)
+        stats = [[float(v) for v in cell.split("±")] for cell in rows["**Mean ± sample SD**"]]
+        np.testing.assert_allclose(np.asarray(stats)[:, 0], np.mean(seed_means, axis=0), atol=.0001)
+        np.testing.assert_allclose(np.asarray(stats)[:, 1], np.std(seed_means, axis=0, ddof=1), atol=.0001)
+        self.assertEqual(rows["Matched images"], ["1 / 2 / 1", "3 / 1 / 0", "1 / 2 / 1", "3 / 1 / 0"])
+        self.assertEqual(rows["Seed means"], ["1 / 1 / 0", "1 / 0 / 1", "1 / 1 / 0", "1 / 0 / 1"])
+        single = markdown_rows(compare_se_proxy.format_matched_seed_summary(args, runs[:1]))
+        self.assertTrue(all(cell.endswith("± N/A") for cell in single["**Mean ± sample SD**"]))
 
     def test_acdc_lists_select_only_members_of_each_patient_split(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -182,7 +217,7 @@ class CompareSEProxyTest(unittest.TestCase):
             self.assertIn(f"| Direct proxy | `{expected[1]}` |", report)
             self.assertIn("| SE-AUX minus direct proxy | — | +0.375 | +12.5000 pp | -5.0000 pp | -1.0000 |", report)
 
-    def test_paired_cli_scores_once_then_packs_fresh_models_for_every_image(self):
+    def test_case_by_case_reuses_each_winner_and_supports_one_or_multiple_draws(self):
         import torch
         import test as evaluator
         from src.se_auxiliary import save_se_metadata
@@ -190,48 +225,55 @@ class CompareSEProxyTest(unittest.TestCase):
 
         self.addCleanup(torch.set_num_threads, torch.get_num_threads())
         torch.set_num_threads(1)
-        collections = []
-        packed_models = []
-        scored_models = []
+        scored = []
+        packed = []
         evaluated = []
 
         def make_quantizer(args, source, inputs, model):
-            collections.append(inputs)
             marker = model.transformer.encoder.layer[0].ffn_norm.weight.data
             self.assertEqual(marker[0].item(), 0.125)
             self.assertTrue(hasattr(model.transformer.encoder, "SELayer"))
             self.assertFalse(model.training)
 
             def score():
-                scored_models.append((source, model))
+                scored.append((args.calibration_seed, source, inputs))
                 candidates = []
                 for image in inputs:
-                    code = int(image[0, 0, 0, 0]) + (2 if source == "direct_proxy" else 0)
+                    value = int(image[0, 0, 0, 0])
+                    code = value if source == "se" else 9 - value
                     candidates.append(SimpleNamespace(scales=code, mean_mse=code / 100))
                 return candidates
 
-            def pack(*, candidate_scales):
-                packed_models.append(model)
+            def pack(*, candidate_scales=None):
+                if candidate_scales is None:
+                    candidates = score()
+                    index = min(range(len(candidates)), key=lambda i: candidates[i].mean_mse)
+                    winner = candidates[index]
+                    quantizer.winning_candidate_index = index
+                    quantizer.winning_calibration_mse = winner.mean_mse
+                    candidate_scales = winner.scales
+                packed.append((args.calibration_seed, source, candidate_scales))
                 marker.fill_(candidate_scales)
                 return model
 
-            return SimpleNamespace(score_candidates=score, quantize=pack)
+            quantizer = SimpleNamespace(score_candidates=score, quantize=pack)
+            return quantizer
 
         def inference(args, model):
             self.assertFalse(hasattr(model.transformer.encoder, "SELayer"))
             code = model.transformer.encoder.layer[0].ffn_norm.weight[0].item()
-            evaluated.append(code)
+            evaluated.append((args.calibration_seed, code))
             return dict(mean_dice=code / 10, mean_iou=code / 20, mean_hd95=code)
 
         with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as mocks:
             root = Path(tmp)
-            ids = ["slice_a", "slice_b"]
+            ids = ["slice_a", "slice_b", "slice_c"]
             (root / "train.txt").write_text("\n".join(ids))
             for index, name in enumerate(ids, start=1):
                 image = np.full((32, 32), index, dtype=np.float32)
                 np.savez(root / (name + ".npz"), image=image, label=np.zeros_like(image))
             checkpoint = root / "weights.pth"
-            argv = ["--dataset", "Synapse", "--case_by_case", "--checkpoint", str(checkpoint),
+            argv = ["--dataset", "Synapse", "--checkpoint", str(checkpoint),
                     "--list-dir", tmp, "--train-root", tmp, "--volume-path", str(root / "test"),
                     "--calibration-size", "2", "--calibration-seed", "7", "--img-size", "32"]
             mocks.enter_context(patch.object(compare_se_proxy, "ROOT", root))
@@ -244,22 +286,55 @@ class CompareSEProxyTest(unittest.TestCase):
             mocks.enter_context(patch.object(compare_se_proxy, "make_quantizer", side_effect=make_quantizer))
             mocks.enter_context(patch.object(evaluator, "inference", side_effect=inference))
             stdout = mocks.enter_context(contextlib.redirect_stdout(io.StringIO()))
-            compare_se_proxy.main(argv)
-            report = (root / "benchmark/Synapse/compare_se_proxy/case_by_case/results.md").read_text()
-            self.assertTrue(stdout.getvalue().endswith(report))
 
-        self.assertEqual([source for source, _ in scored_models], ["se", "direct_proxy"])
-        all_models = packed_models + [model for _, model in scored_models]
-        self.assertEqual(len({id(model) for model in all_models}), 6)
-        self.assertTrue(all(inputs is collections[0] for inputs in collections))
-        ordered_ids = random.Random(7).sample(ids, 2)
-        codes = [ids.index(name) + 1 for name in ordered_ids]
-        self.assertEqual(evaluated, codes + [code + 2 for code in codes])
-        rows = [line for line in report.splitlines() if line.startswith("| `")]
-        self.assertEqual(len(rows), len(ordered_ids))
-        for row, name, code in zip(rows, ordered_ids, codes):
-            self.assertTrue(row.startswith(f"| `{name}` | {code / 100} | {(code + 2) / 100} | "
-                                           f"{10 * code:.4f} | {10 * (code + 2):.4f} | -20.0000 |"))
+            compare_se_proxy.main(argv + ["--output-dir", str(root / "selected")])
+            baseline = (root / "selected/results.md").read_text()
+            self.assertEqual(len(evaluated), 2)
+            for seeds in ([7], [7, 3]):
+                with self.subTest(seeds=seeds):
+                    scored.clear()
+                    packed.clear()
+                    evaluated.clear()
+                    stdout.seek(0)
+                    stdout.truncate()
+                    output = root / ("single" if len(seeds) == 1 else "multi")
+                    flags = ["--case_by_case", "--output-dir", str(output)]
+                    if len(seeds) > 1:
+                        flags += ["--multiple_seeds", "--calibration-seeds", *map(str, seeds)]
+                    compare_se_proxy.main(argv + flags)
+                    self.assertEqual([(seed, method) for seed, method, _ in scored],
+                                     [(seed, method) for seed in seeds for method in ("se", "direct_proxy")])
+                    expected_packs = []
+                    for i, seed in enumerate(seeds):
+                        self.assertIs(scored[2 * i][2], scored[2 * i + 1][2])
+                        ordered_ids = random.Random(seed).sample(ids, 2)
+                        draw_dir = output if len(seeds) == 1 else output / f"seed_{seed}"
+                        primary = (draw_dir / "results.md").read_text()
+                        self.assertIn(primary, stdout.getvalue())
+                        if seed == 7:
+                            self.assertEqual(primary, baseline)
+                        rows = markdown_rows(primary)
+                        self.assertEqual(rows["SE-AUX"][0], f"`{min(ordered_ids)}`")
+                        self.assertEqual(rows["Direct proxy"][0], f"`{max(ordered_ids)}`")
+                        matched = (draw_dir / "case_by_case_results.md").read_text()
+                        self.assertIn(matched, stdout.getvalue())
+                        rows = markdown_rows(matched)
+                        self.assertEqual([key for key in rows if key.startswith("`")], [f"`{s}`" for s in ordered_ids])
+                        codes = [ids.index(name) + 1 for name in ordered_ids]
+                        for name, code in zip(ordered_ids, codes):
+                            proxy = 9 - code
+                            delta = code - proxy
+                            expected = [code / 100, proxy / 100, delta / 100,
+                                        10 * code, 10 * proxy, 10 * delta, 5 * code, 5 * proxy, 5 * delta,
+                                        code, proxy, delta]
+                            np.testing.assert_allclose([float(cell) for cell in rows[f"`{name}`"]], expected)
+                        expected_packs.extend((seed, "se", code) for code in codes)
+                        expected_packs.extend((seed, "direct_proxy", 9 - code) for code in codes)
+                    self.assertCountEqual(packed, expected_packs)
+                    self.assertCountEqual(evaluated, [(seed, code) for seed, _, code in expected_packs])
+                    if len(seeds) > 1:
+                        for filename in ("summary.md", "case_by_case_summary.md"):
+                            self.assertIn((output / filename).read_text(), stdout.getvalue())
 
 
 if __name__ == "__main__":
